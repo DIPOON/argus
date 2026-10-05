@@ -1,0 +1,13 @@
+.git
+.codex
+.agents
+.aws
+**/node_modules
+**/bin
+**/obj
+**/wwwroot
+**/test-results
+**/playwright-report
+.env*
+docs
+tests

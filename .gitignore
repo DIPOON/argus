@@ -1,0 +1,13 @@
+**/bin/
+**/obj/
+node_modules/
+client/dist/
+server/Argus.Server/wwwroot/
+.tools/
+.env
+.env.*
+!.env.example
+test-results/
+playwright-report/
+*.log
+.DS_Store

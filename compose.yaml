@@ -1,0 +1,6 @@
+services:
+  argus:
+    build: .
+    ports:
+      - "127.0.0.1:5077:8080"
+    restart: unless-stopped
