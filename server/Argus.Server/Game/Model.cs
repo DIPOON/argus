@@ -7,6 +7,8 @@ public sealed class Player(string id, string name)
     public string Id { get; } = id;
     public string Name { get; set; } = name;
     public string Passive { get; set; } = "vitality";
+    public string Weapon { get; set; } = "rifle";
+    public string Secondary { get; set; } = "grenade";
     public Vector2 Position;
     public Vector2 Impulse;
     public double Aim;
@@ -21,12 +23,13 @@ public sealed class Player(string id, string name)
     public double ReloadUntil;
     public double NextShot;
     public double NextGrenade;
+    public double NextTurret;
     public double LastInputAt = -100;
     public long LastSequence = -1;
     public Vector2 Move;
     public bool Firing;
     public bool ReloadRequested;
-    public bool GrenadeRequested;
+    public bool SecondaryRequested;
     public long Connection;
     public bool Connected;
     public double? DisconnectedAt;
@@ -52,6 +55,22 @@ public sealed class Bullet(int id, Vector2 position, Vector2 velocity, string? o
     public string? Owner { get; } = owner;
     public double Damage { get; } = damage;
     public double Remaining = 1.1;
+    public string Kind { get; init; } = "rifle";
+    public int EnemyHitsLeft = 1;
+    public HashSet<int> HitEnemies { get; } = [];
+    public int? SourceTurret { get; init; }
+}
+
+public sealed class Turret(int id, Vector2 position, string owner, double health, double expiresAt)
+{
+    public int Id { get; } = id;
+    public Vector2 Position { get; } = position;
+    public string Owner { get; } = owner;
+    public double Hp = health;
+    public double MaxHp { get; } = health;
+    public double ExpiresAt { get; } = expiresAt;
+    public double Aim;
+    public double NextShot;
 }
 
 public sealed class Grenade(int id, Vector2 position, Vector2 velocity, string owner)

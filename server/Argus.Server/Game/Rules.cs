@@ -21,4 +21,25 @@ public sealed record Rules
     public double RifleDamage { get; init; } = 24;
     public double GrenadeDamage { get; init; } = 150;
     public double GrenadeRadius { get; init; } = 155;
+    public double TurretCooldown { get; init; } = 20;
+    public double TurretLifetime { get; init; } = 45;
+    public double TurretHealth { get; init; } = 100;
+    public double TurretRange { get; init; } = 360;
+    public double TurretDamage { get; init; } = 16;
+    public double TurretShotInterval { get; init; } = .25;
+    public const float TurretPlacementDistance = 44;
+
+    private static readonly WeaponDefinition Shotgun = new(6, 2.6, .75, 850, 12, 300, Pellets: 7, Spread: .42);
+    private static readonly WeaponDefinition Piercer = new(8, 2.8, .7, 1400, 60, 1155, EnemyHits: 3);
+
+    public static bool ValidWeapon(string weapon) => weapon is "rifle" or "shotgun" or "piercer";
+    public static bool ValidSecondary(string secondary) => secondary is "grenade" or "turret";
+
+    public WeaponDefinition Weapon(string weapon) => weapon switch
+    {
+        "rifle" => new(Magazine, ReloadSeconds, ShotInterval, BulletSpeed, RifleDamage, BulletSpeed * 1.1),
+        "shotgun" => Shotgun,
+        "piercer" => Piercer,
+        _ => throw new ArgumentOutOfRangeException(nameof(weapon))
+    };
 }

@@ -20,8 +20,10 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 app.MapGet("/health", () => Results.Ok(new { status = "ok", protocol = 1 }));
 app.MapPost("/api/rooms", (EntryRequest request, RoomHost host) =>
+    !request.Valid ? Results.Json(new { error = "선택할 수 없는 장비입니다." }, statusCode: 400) :
     host.Create(request) is { } guest ? Results.Json(guest) : Results.Json(new { error = "서버의 작전 공간이 가득 찼습니다." }, statusCode: 503)).RequireRateLimiting("entry");
 app.MapPost("/api/rooms/{code}/join", (string code, EntryRequest request, RoomHost host) =>
+    !request.Valid ? Results.Json(new { error = "선택할 수 없는 장비입니다." }, statusCode: 400) :
     code.Length == 6 && host.Join(code, request) is { } guest ? Results.Json(guest) : Results.Json(new { error = "방이 없거나, 가득 찼거나, 종료된 작전입니다." }, statusCode: 409)).RequireRateLimiting("entry");
 
 app.Map("/ws", async (HttpContext context, RoomHost host) =>
@@ -111,13 +113,18 @@ static async Task Receive(WebSocket socket, Room room, Argus.Server.Game.Player 
             {
                 case "input":
                     if (root.TryGetProperty("seq", out var sequence) && sequence.TryGetInt64(out var seq))
-                        room.Match.Input(player, seq, Number(root, "moveX"), Number(root, "moveY"), Number(root, "aim"), Flag(root, "fire"), Flag(root, "reload"), Flag(root, "grenade"));
+                        room.Match.Input(player, seq, Number(root, "moveX"), Number(root, "moveY"), Number(root, "aim"), Flag(root, "fire"), Flag(root, "reload"), Flag(root, "secondary") || Flag(root, "grenade"));
                     break;
                 case "deploy":
                     if (!room.Match.Deploy(player, Number(root, "x", double.NaN), Number(root, "y", double.NaN)))
                         peer.Outgoing.Writer.TryWrite(JsonSerializer.SerializeToUtf8Bytes(new { type = "error", message = "해당 위치에는 투입할 수 없습니다. 빈 지면을 선택하세요." }, RoomHost.Json));
                     break;
-                case "loadout": room.Match.SetLoadout(player, Text(root, "passive")); break;
+                case "loadout":
+                    room.Match.SetLoadout(player,
+                        root.TryGetProperty("passive", out _) ? Text(root, "passive") : player.Passive,
+                        root.TryGetProperty("weapon", out _) ? Text(root, "weapon") : player.Weapon,
+                        root.TryGetProperty("secondary", out _) ? Text(root, "secondary") : player.Secondary);
+                    break;
                 case "ping":
                     peer.Outgoing.Writer.TryWrite(JsonSerializer.SerializeToUtf8Bytes(new { type = "pong", sent = Number(root, "sent") }, RoomHost.Json));
                     break;

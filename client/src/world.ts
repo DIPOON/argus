@@ -178,6 +178,30 @@ export class World {
       g.moveTo(supply.x - 6, supply.y).lineTo(supply.x + 6, supply.y).moveTo(supply.x, supply.y - 6).lineTo(supply.x, supply.y + 6).stroke({ color, width: 2 });
       this.label(`supply-${supply.id}`, supply.objective ? '보급품 회수' : '보급', supply.x, supply.y + 30, color, 12);
     }
+    for (const turret of s.turrets) {
+      const owner = s.players.findIndex(p => p.id === turret.owner);
+      const color = team[Math.max(0, owner) % team.length];
+      const dx = Math.cos(turret.aim), dy = Math.sin(turret.aim);
+      g.poly([
+        turret.x + dx * 6 - dy * 4, turret.y + dy * 6 + dx * 4,
+        turret.x + dx * 24 - dy * 4, turret.y + dy * 24 + dx * 4,
+        turret.x + dx * 24 + dy * 4, turret.y + dy * 24 - dx * 4,
+        turret.x + dx * 6 + dy * 4, turret.y + dy * 6 - dx * 4,
+      ]).fill(color).stroke(unitOutline);
+      g.poly([turret.x - 14, turret.y - 7, turret.x, turret.y - 15, turret.x + 14, turret.y - 7,
+        turret.x + 14, turret.y + 7, turret.x, turret.y + 15, turret.x - 14, turret.y + 7]).fill(color).stroke(unitOutline);
+      g.rect(turret.x - 16, turret.y - 26, 32, 3).fill(0x172222)
+        .rect(turret.x - 16, turret.y - 26, 32 * turret.hp / turret.maxHp, 3).fill(color);
+      this.label(`turret-${turret.id}`, `T${owner + 1} · ${Math.ceil(turret.remaining)}s`, turret.x, turret.y + 30, color, 11);
+    }
+    if (me?.state === 'alive' && me.secondary === 'turret' && me.turretCooldown <= 0 && this.predicted && s.phase === 'active') {
+      const at = { x: this.predicted.x + Math.cos(this.control.aim) * s.rules.turretPlacement,
+        y: this.predicted.y + Math.sin(this.control.aim) * s.rules.turretPlacement };
+      const allowed = this.canStand(at, 14) && !s.turrets.some(t => t.owner !== me.id && Math.hypot(t.x - at.x, t.y - at.y) < 28);
+      const color = allowed ? colors.teal : colors.red;
+      g.rect(at.x - 14, at.y - 14, 28, 28).stroke({ color, width: 1.5, alpha: .7 });
+      this.label('turret-placement', allowed ? 'G' : '설치 불가', at.x, at.y + 28, color, 10);
+    }
     const landing = me?.state === 'deploying' ? { x: me.landingX, y: me.landingY } : me?.state === 'waiting' ? this.landing : undefined;
     if (landing && s.phase !== 'ended') {
       g.circle(landing.x, landing.y, 30 + Math.sin(performance.now() / 240) * 3).stroke({ color: colors.lime, width: 2 });
@@ -210,12 +234,14 @@ export class World {
       const color = team[index % team.length];
       const aim = isMe ? this.control.aim : player.aim;
       const forward = { x: Math.cos(aim), y: Math.sin(aim) };
-      const side = { x: -forward.y * 4, y: forward.x * 4 };
+      const barrelWidth = player.weapon === 'shotgun' ? 6 : player.weapon === 'piercer' ? 3 : 4;
+      const barrelLength = player.weapon === 'piercer' ? 30 : player.weapon === 'shotgun' ? 21 : 24;
+      const side = { x: -forward.y * barrelWidth, y: forward.x * barrelWidth };
       // A flat disk and a short rectangular barrel keep direction readable with two simple shapes.
       u.poly([
         p.x + forward.x * 8 + side.x, p.y + forward.y * 8 + side.y,
-        p.x + forward.x * 24 + side.x, p.y + forward.y * 24 + side.y,
-        p.x + forward.x * 24 - side.x, p.y + forward.y * 24 - side.y,
+        p.x + forward.x * barrelLength + side.x, p.y + forward.y * barrelLength + side.y,
+        p.x + forward.x * barrelLength - side.x, p.y + forward.y * barrelLength - side.y,
         p.x + forward.x * 8 - side.x, p.y + forward.y * 8 - side.y,
       ]).fill(color).stroke(unitOutline);
       u.circle(p.x, p.y, 13).fill(color).stroke(unitOutline);
@@ -225,7 +251,10 @@ export class World {
     for (const b of s.bullets) {
       const p = interpolate(b, this.previous?.bullets.find(old => old.id === b.id));
       const length = Math.hypot(b.vx, b.vy) || 1;
-      u.moveTo(p.x - b.vx / length * 15, p.y - b.vy / length * 15).lineTo(p.x, p.y).stroke({ color: b.hostile ? colors.red : colors.lime, width: 3, cap: 'round' });
+      const trail = b.kind === 'piercer' ? 28 : b.kind === 'shotgun' ? 9 : 15;
+      const color = b.hostile ? colors.red : b.kind === 'piercer' ? 0xaeb5fa : b.kind === 'shotgun' ? colors.gold : b.kind === 'turret' ? colors.teal : colors.lime;
+      u.moveTo(p.x - b.vx / length * trail, p.y - b.vy / length * trail).lineTo(p.x, p.y)
+        .stroke({ color, width: b.kind === 'piercer' ? 4 : b.kind === 'shotgun' ? 2 : 3, cap: 'round' });
     }
     for (const g of s.grenades) u.circle(g.x, g.y, 6).fill(colors.gold).stroke({ color: 0xffffff, width: 1 });
     for (const effect of s.effects) {

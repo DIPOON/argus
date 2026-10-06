@@ -122,6 +122,77 @@ test('wire protocol rejects invented position/resources, invalid motion and stol
   replacement.close();
 });
 
+test('loadout choices drive weapon HUD, turret placement and recovery in the browser', async ({ page, request }) => {
+  const invalid = await request.post('/api/rooms', { data: { weapon: 'invented', secondary: 'turret' } });
+  expect(invalid.status()).toBe(400);
+  let snapshot: Snapshot | undefined;
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('websocket', ws => ws.on('framereceived', frame => {
+    try { const data = JSON.parse(frame.payload.toString()); if (data.type === 'snapshot') snapshot = data; } catch { }
+  }));
+  const self = () => snapshot?.players.find(p => p.id === snapshot?.you);
+  await page.goto('/');
+  await page.getByText('산탄총', { exact: true }).click();
+  await page.getByText('자동 터렛', { exact: true }).click();
+  await expect(page.locator('input[value="shotgun"]')).toBeChecked();
+  await expect(page.locator('input[value="turret"]')).toBeChecked();
+  await page.screenshot({ path: 'test-results/argus-equipment-lobby.png', fullPage: true });
+  await page.getByRole('button', { name: '새 작전 시작' }).click();
+  await expect.poll(() => self()?.weapon).toBe('shotgun');
+  expect(self()!.secondary).toBe('turret');
+  await page.getByRole('button', { name: '캠프 선택' }).click();
+  await page.locator('#deploy').click();
+  await expect.poll(() => self()?.state, { timeout: 8000 }).toBe('alive');
+  await expect(page.locator('#weapon-state')).toHaveText('산탄총');
+  await expect(page.locator('#magazine')).toHaveText('/ 6');
+  await expect(page.locator('#secondary-label')).toHaveText('자동 터렛');
+  const canvas = (await page.locator('canvas').boundingBox())!;
+  await page.mouse.move(canvas.x + canvas.width * .75, canvas.y + canvas.height / 2);
+  await page.keyboard.press('KeyG');
+  await expect.poll(() => snapshot?.turrets.length).toBe(1);
+  const turretId = snapshot!.turrets[0].id;
+  expect(snapshot!.turrets[0].owner).toBe(self()!.id);
+  expect(self()!.turretCooldown).toBeGreaterThan(0);
+  await expect(page.locator('#secondary-note')).toContainText('가동');
+  // Aim away from the placed turret: allied projectiles also damage it.
+  await page.mouse.move(canvas.x + canvas.width * .08, canvas.y + canvas.height / 2);
+  await page.mouse.down();
+  await expect.poll(() => self()?.ammo).toBeLessThan(6);
+  await page.mouse.up();
+  await page.keyboard.press('KeyG');
+  await page.keyboard.press('KeyR');
+  await expect.poll(() => self()?.reload).toBeGreaterThan(0);
+  await expect.poll(() => self()?.ammo, { timeout: 4000 }).toBe(6);
+  expect(snapshot!.turrets.map(t => t.id)).toEqual([turretId]);
+  await page.screenshot({ path: 'test-results/argus-equipment-operation.png' });
+  const before = self()!;
+  await page.reload();
+  await expect(page.locator('#weapon-state')).toHaveText('산탄총');
+  await expect.poll(() => self()?.id).toBe(before.id);
+  expect(self()!.secondary).toBe('turret');
+  expect(self()!.ammo).toBe(before.ammo);
+  expect(self()!.turretCooldown).toBeLessThanOrEqual(before.turretCooldown);
+  expect(self()!.turretCooldown).toBeGreaterThan(0);
+  expect(snapshot!.turrets.map(t => t.id)).toEqual([turretId]);
+
+  await page.getByRole('button', { name: '작전에서 나가기' }).click();
+  await page.getByText('관통총', { exact: true }).click();
+  await page.getByText('파편 수류탄', { exact: true }).click();
+  await page.getByRole('button', { name: '새 작전 시작' }).click();
+  await expect.poll(() => self()?.weapon).toBe('piercer');
+  expect(self()!.secondary).toBe('grenade');
+  await page.getByRole('button', { name: '캠프 선택' }).click();
+  await page.locator('#deploy').click();
+  await expect.poll(() => self()?.state, { timeout: 8000 }).toBe('alive');
+  await expect(page.locator('#magazine')).toHaveText('/ 8');
+  await expect(page.locator('#weapon-state')).toHaveText('관통총');
+  await expect(page.locator('#secondary-label')).toHaveText('수류탄');
+  expect(self()!.grenades).toBe(3);
+  expect(errors).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+});
+
 test('a squad completes the real mission using only public gameplay commands', async ({ request }) => {
   const first = await request.post('/api/rooms', { data: { name: 'Objective 1' } });
   expect(first.ok()).toBeTruthy();

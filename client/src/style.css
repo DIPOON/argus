@@ -278,50 +278,75 @@ input::placeholder {
   color:#7e8e83
 }
 
-.loadout-title {
-  margin-top:24px
+.equipment-options {
+  border:0;
+  padding:0;
+  margin:22px 0 0;
+  display:grid;
+  gap:8px;
+  min-width:0
 }
 
-.equipment {
-  border:1px solid var(--line)
+.equipment-options legend {
+  width:100%;
+  padding:0
 }
 
-.equipment>div {
-  display:flex;
-  gap:15px;
-  align-items:center;
-  padding:12px
+.primary-weapons {
+  grid-template-columns:repeat(3,minmax(0,1fr))
 }
 
-.equipment>div+div {
-  border-top:1px solid var(--line)
+.secondary-equipment {
+  grid-template-columns:repeat(2,minmax(0,1fr))
 }
 
-.weapon-icon {
-  font-size:26px;
-  width:30px;
-  text-align:center;
-  color:#cfdbb8
+.equipment-options label {
+  cursor:pointer
 }
 
-.equipment b {
+.equipment-options input {
+  position:absolute;
+  opacity:0;
+  width:1px;
+  height:1px
+}
+
+.equipment-options label>span {
+  display:block;
+  height:100%;
+  padding:13px 9px;
+  border:1px solid #36463b;
+  background:#16211d
+}
+
+.equipment-options input:checked+span {
+  border-color:#a2bc70;
+  background:#273323
+}
+
+.equipment-options input:focus-visible+span {
+  outline:2px solid var(--lime);
+  outline-offset:2px
+}
+
+.equipment-options b {
   display:block;
   font-size:12px;
   font-weight:500
 }
 
-.equipment small {
+.equipment-options small,.equipment-options em {
   display:block;
   font-size:10px;
   color:var(--muted);
-  margin-top:5px
+  margin-top:7px;
+  line-height:1.5;
+  font-style:normal;
+  word-break:keep-all
 }
 
-.slot {
-  font-size:10px;
-  font-family:monospace;
-  color:#6f8073;
-  margin-left:auto
+.equipment-options em {
+  color:#c0ceb0
 }
 
 .passives {
@@ -932,6 +957,22 @@ input::placeholder {
   display:block;
   margin-top:12px;
   letter-spacing:3px
+}
+
+.combat-hud #secondary-label {
+  display:inline
+}
+
+.combat-hud #secondary-note {
+  display:block;
+  margin:4px 0 0;
+  font-family:inherit;
+  font-size:9px
+}
+
+.member .roster-loadout {
+  color:#a7b796;
+  font-size:10px
 }
 
 kbd {

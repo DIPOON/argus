@@ -160,6 +160,7 @@ var tests = new (string Name, Action Run)[]
     }),
 };
 
+tests = [.. tests, .. EquipmentTests.All];
 var failed = 0;
 foreach (var (name, run) in tests)
 {

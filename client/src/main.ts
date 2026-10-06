@@ -1,10 +1,11 @@
 import './style.css';
 import { World } from './world';
-import type { Guest, Player, Snapshot } from './types';
+import type { Guest, Player, Snapshot, Weapon } from './types';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const escape = (value: string) => value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const time = (seconds: number) => `${Math.floor(Math.max(0, seconds) / 60).toString().padStart(2, '0')}:${Math.floor(Math.max(0, seconds) % 60).toString().padStart(2, '0')}`;
+const weaponNames: Record<Weapon, string> = { rifle: '돌격 소총', shotgun: '산탄총', piercer: '관통총' };
 
 $('app').innerHTML = `
   <header class="topbar">
@@ -32,8 +33,15 @@ $('app').innerHTML = `
       <div class="eyebrow">DEPLOYMENT PREP</div><h2>분대에 합류하세요</h2><p class="muted">혼자 시작해도, 작전 중 함께해도 됩니다.</p>
       <label class="field-label" for="callsign">호출명 <span>가입 없이 게스트로 참가</span></label>
       <input id="callsign" maxlength="16" autocomplete="nickname" placeholder="대원 이름" value="대원" />
-      <div class="field-label loadout-title">장비 구성 <span>기본 장비</span></div>
-      <div class="equipment"><div><span class="weapon-icon">⌁</span><div><b>돌격 소총</b><small>30발 · 예비탄 ∞ · 재장전 2초</small></div><span class="slot">01</span></div><div><span class="weapon-icon">◉</span><div><b>파편 수류탄</b><small>3개 · 폭발 피해 · 벽 파괴</small></div><span class="slot">02</span></div></div>
+      <fieldset class="equipment-options primary-weapons"><legend class="field-label">주무기 선택 <span>예비탄 무한</span></legend>
+        <label><input type="radio" name="weapon" value="rifle" checked/><span><b>돌격 소총</b><small>안정적인 연속 사격</small><em>30발 · 재장전 2초</em></span></label>
+        <label><input type="radio" name="weapon" value="shotgun"/><span><b>산탄총</b><small>근거리 부채꼴 사격</small><em>6발 · 재장전 2.6초</em></span></label>
+        <label><input type="radio" name="weapon" value="piercer"/><span><b>관통총</b><small>일직선 적 3마리 관통</small><em>8발 · 재장전 2.8초</em></span></label>
+      </fieldset>
+      <fieldset class="equipment-options secondary-equipment"><legend class="field-label">보조 장비 선택 <span>G로 사용</span></legend>
+        <label><input type="radio" name="secondary" value="grenade" checked/><span><b>파편 수류탄</b><small>폭발 피해 · 벽 파괴</small><em>3개 · 보급으로 보충</em></span></label>
+        <label><input type="radio" name="secondary" value="turret"/><span><b>자동 터렛</b><small>분대 시야 안의 적 자동 공격</small><em>1기 · 가동 45초 · 재설치 20초</em></span></label>
+      </fieldset>
       <fieldset class="passives"><legend class="field-label">패시브 선택</legend><label><input type="radio" name="passive" value="vitality" checked/><span><b>＋ 강화 체력</b><small>체력 100 → 130</small></span></label><label><input type="radio" name="passive" value="mobility"/><span><b>↗ 기동력</b><small>이동속도 +22%</small></span></label></fieldset>
       <button id="create" class="primary">새 작전 시작 <span>↗</span></button>
       <div class="or"><span></span> 초대받았다면 <span></span></div>
@@ -62,7 +70,7 @@ $('app').innerHTML = `
       <div class="map-top"><span class="map-title"><i></i><span id="view-label">전술 지도 / 투입 위치 선택</span></span><div class="timers"><span>경과 <b id="elapsed">00:00</b></span><span id="pulse-label">전역 충격 <b id="pulse">10:00</b></span></div></div>
       <div id="toast" class="toast" role="status" hidden></div>
       <div id="deploy-panel" class="deploy-panel"><div><span class="eyebrow" id="deploy-kicker">READY TO DEPLOY</span><h3 id="deploy-title">투입할 위치를 선택하세요</h3><p id="deploy-description">지도의 빈 지면을 클릭하세요. 선택 전에는 계속 대기합니다.</p></div><div class="deploy-actions"><button id="camp" class="secondary">캠프 선택</button><button id="deploy" class="primary" disabled>위치 선택 필요</button></div></div>
-      <div id="combat-hud" class="combat-hud" hidden><div class="health-block"><span id="my-name">대원</span><div><b id="hp">130</b><small id="max-hp">/ 130 HP</small></div><div class="health-bar"><i id="health-fill"></i></div></div><div class="ammo-block"><span id="weapon-state">돌격 소총</span><div><b id="ammo">30</b><small>/ 30</small><em>∞</em></div><div class="reload-bar"><i id="reload-fill"></i></div></div><div class="grenade-block"><span>수류탄 <kbd>G</kbd></span><b id="grenades">● ● ●</b></div></div>
+      <div id="combat-hud" class="combat-hud" hidden><div class="health-block"><span id="my-name">대원</span><div><b id="hp">130</b><small id="max-hp">/ 130 HP</small></div><div class="health-bar"><i id="health-fill"></i></div></div><div class="ammo-block"><span id="weapon-state">돌격 소총</span><div><b id="ammo">30</b><small id="magazine">/ 30</small><em>∞</em></div><div class="reload-bar"><i id="reload-fill"></i></div></div><div class="grenade-block"><span><span id="secondary-label">수류탄</span> <kbd>G</kbd></span><b id="grenades">● ● ●</b><small id="secondary-note"></small></div></div>
       <div class="map-bottom"><span id="controls">클릭 위치 선택 · 캠프는 권장 투입 지점</span><span id="performance">공유 시야</span></div>
       <div id="result" class="result-overlay" hidden><div class="result-card"><span class="eyebrow">OPERATION COMPLETE</span><h2 id="result-title">작전 종료</h2><p id="result-description"></p><div id="result-stats"></div><button id="again" class="primary">다음 작전 준비 <span>↗</span></button></div></div>
     </section>
@@ -78,7 +86,7 @@ let sequence = 0;
 let ping = 0;
 let fire = false;
 let reload = false;
-let grenade = false;
+let secondary = false;
 let lastNotice = '';
 let toastTimer = 0;
 const keys = new Set<string>();
@@ -92,7 +100,7 @@ function toast(text: string) {
   window.clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => { $('toast').hidden = true; }, 3500);
 }
-function clearInput() { keys.clear(); fire = reload = grenade = false; if (world) world.control = { x: 0, y: 0, aim: world.control.aim, fire: false }; }
+function clearInput() { keys.clear(); fire = reload = secondary = false; if (world) world.control = { x: 0, y: 0, aim: world.control.aim, fire: false }; }
 
 async function enter(code?: string) {
   if (connecting) return;
@@ -104,7 +112,12 @@ async function enter(code?: string) {
   try {
     const response = await fetch(inputCode ? `/api/rooms/${inputCode}/join` : '/api/rooms', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: $<HTMLInputElement>('callsign').value || '대원', passive: document.querySelector<HTMLInputElement>('input[name="passive"]:checked')!.value }),
+      body: JSON.stringify({
+        name: $<HTMLInputElement>('callsign').value || '대원',
+        passive: document.querySelector<HTMLInputElement>('input[name="passive"]:checked')!.value,
+        weapon: document.querySelector<HTMLInputElement>('input[name="weapon"]:checked')!.value,
+        secondary: document.querySelector<HTMLInputElement>('input[name="secondary"]:checked')!.value,
+      }),
     });
     if (!response.ok) {
       const message = await response.json().catch(() => null);
@@ -198,11 +211,11 @@ function updateUi() {
   $('extract-note').textContent = s.extraction.unlocked ? `구역 안에서 ${s.extraction.duration}초 확보 · ${s.extraction.progress.toFixed(1)}초` : '주목표 완료 후 활성화';
   $('extract-progress').style.width = `${Math.min(100, 100 * s.extraction.progress / s.extraction.duration)}%`;
   $('team-count').textContent = `${s.players.length} / 4`;
-  $('roster').innerHTML = s.players.map((member, index) => `<div class="member ${member.id === s.you ? 'self' : ''}"><span class="member-number color-${index}">0${index + 1}</span><div><b>${escape(member.name)}${member.id === s.you ? ' <small>나</small>' : ''}</b><span>${!member.connected ? '연결 끊김' : member.state === 'alive' ? `${Math.ceil(member.hp)} HP` : member.state === 'deploying' ? `투입까지 ${member.deploy.toFixed(1)}초` : member.hasDeployed ? '증원 대기' : '투입 대기'}</span></div><i class="${member.state === 'alive' ? 'alive-dot' : ''}"></i></div>`).join('');
+  $('roster').innerHTML = s.players.map((member, index) => `<div class="member ${member.id === s.you ? 'self' : ''}"><span class="member-number color-${index}">0${index + 1}</span><div><b>${escape(member.name)}${member.id === s.you ? ' <small>나</small>' : ''}</b><span>${!member.connected ? '연결 끊김' : member.state === 'alive' ? `${Math.ceil(member.hp)} HP` : member.state === 'deploying' ? `투입까지 ${member.deploy.toFixed(1)}초` : member.hasDeployed ? '증원 대기' : '투입 대기'}</span><span class="roster-loadout">${weaponNames[member.weapon]} · ${member.secondary === 'turret' ? '터렛' : '수류탄'}</span></div><i class="${member.state === 'alive' ? 'alive-dot' : ''}"></i></div>`).join('');
   $('deploy-panel').hidden = alive || ended;
   $('combat-hud').hidden = !alive || ended;
   $('view-label').textContent = alive ? '분대 공유 시야 / SECTOR 07' : '전술 지도 / 투입 위치 선택';
-  $('controls').textContent = alive ? 'WASD 이동 · 마우스 사격 · R 재장전 · G 수류탄 · M 전체 지도' : '클릭 위치 선택 · 캠프는 권장 투입 지점';
+  $('controls').textContent = alive ? `WASD 이동 · 마우스 사격 · R 재장전 · G ${p.secondary === 'turret' ? '조준 방향에 터렛 설치' : '수류탄'} · M 전체 지도` : '클릭 위치 선택 · 캠프는 권장 투입 지점';
   if (!alive && !ended) {
     const preparing = p.state === 'deploying';
     $('deploy-kicker').textContent = preparing ? 'DEPLOYMENT IN PROGRESS' : p.hasDeployed ? 'REINFORCEMENT' : 'READY TO DEPLOY';
@@ -218,9 +231,17 @@ function updateUi() {
     $('health-fill').style.width = `${100 * p.hp / p.maxHp}%`;
     $('health-fill').classList.toggle('low', p.hp < p.maxHp * .3);
     $('ammo').textContent = p.ammo.toString().padStart(2, '0');
-    $('weapon-state').textContent = p.reload > 0 ? `재장전 · ${p.reload.toFixed(1)}초` : '돌격 소총';
-    $('reload-fill').style.width = p.reload > 0 ? `${100 * (1 - p.reload / s.rules.reload)}%` : '0%';
-    $('grenades').textContent = Array.from({ length: s.rules.grenades }, (_, i) => i < p.grenades ? '●' : '○').join(' ');
+    $('magazine').textContent = `/ ${p.magazine}`;
+    $('weapon-state').textContent = p.reload > 0 ? `${weaponNames[p.weapon]} · ${p.reload.toFixed(1)}초` : weaponNames[p.weapon];
+    $('reload-fill').style.width = p.reload > 0 ? `${100 * (1 - p.reload / p.reloadSeconds)}%` : '0%';
+    const turret = s.turrets.find(t => t.owner === p.id);
+    $('secondary-label').textContent = p.secondary === 'turret' ? '자동 터렛' : '수류탄';
+    $('grenades').textContent = p.secondary === 'turret'
+      ? p.turretCooldown > 0 ? `${p.turretCooldown.toFixed(1)}s` : turret ? '교체 가능' : '설치 준비'
+      : Array.from({ length: s.rules.grenades }, (_, i) => i < p.grenades ? '●' : '○').join(' ');
+    $('secondary-note').textContent = p.secondary === 'turret'
+      ? turret ? `가동 ${Math.ceil(turret.remaining)}초 · ${Math.ceil(turret.hp)} HP` : '조준 방향의 빈 지면에 설치'
+      : '폭발에 아군도 피해를 받습니다';
   }
   $('performance').textContent = `${ping} ms · ${world?.fps ?? 60} FPS · 적 ${world?.shownEnemies ?? 0}/${s.enemies.length}`;
   $('result').hidden = !ended;
@@ -261,7 +282,7 @@ window.addEventListener('keydown', event => {
   keys.add(event.code);
   if (event.repeat) return;
   if (event.code === 'KeyR') reload = true;
-  if (event.code === 'KeyG') grenade = true;
+  if (event.code === 'KeyG') secondary = true;
   if (event.code === 'KeyM' && world) world.overview = !world.overview;
 });
 window.addEventListener('keyup', event => keys.delete(event.code));
@@ -274,8 +295,8 @@ window.setInterval(() => {
   const aimAt = mouse.known ? world.screenToWorld(mouse.x, mouse.y) : { x: p.x + 1, y: p.y };
   const aim = Math.atan2(aimAt.y - p.y, aimAt.x - p.x);
   world.control = { x, y, aim, fire };
-  send({ type: 'input', seq: sequence++, moveX: x, moveY: y, aim, fire, reload, grenade });
-  reload = grenade = false;
+  send({ type: 'input', seq: sequence++, moveX: x, moveY: y, aim, fire, reload, secondary });
+  reload = secondary = false;
 }, 1000 / 30);
 window.setInterval(() => send({ type: 'ping', sent: performance.now() }), 2000);
 

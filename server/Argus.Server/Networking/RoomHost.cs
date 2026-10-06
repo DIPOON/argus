@@ -24,7 +24,11 @@ public sealed class Room(string code)
 }
 
 public sealed record Guest(string Room, string Id, string Token);
-public sealed record EntryRequest(string? Name, string? Passive);
+public sealed record EntryRequest(string? Name, string? Passive, string? Weapon = null, string? Secondary = null)
+{
+    public bool Valid => (Passive is null or "vitality" or "mobility") &&
+        Rules.ValidWeapon(Weapon ?? "rifle") && Rules.ValidSecondary(Secondary ?? "grenade");
+}
 
 public sealed class RoomHost(ILogger<RoomHost> logger) : BackgroundService
 {
@@ -34,7 +38,7 @@ public sealed class RoomHost(ILogger<RoomHost> logger) : BackgroundService
 
     public Guest? Create(EntryRequest request)
     {
-        if (_rooms.Count >= 32) return null;
+        if (!request.Valid || _rooms.Count >= 32) return null;
         Room room;
         do
         {
@@ -48,14 +52,14 @@ public sealed class RoomHost(ILogger<RoomHost> logger) : BackgroundService
 
     public Guest? Join(string code, EntryRequest request)
     {
-        if (!_rooms.TryGetValue(code.ToUpperInvariant(), out var room)) return null;
+        if (!request.Valid || !_rooms.TryGetValue(code.ToUpperInvariant(), out var room)) return null;
         lock (room.Gate)
         {
             var name = new string((request.Name ?? "대원").Trim().Where(c => !char.IsControl(c)).Take(16).ToArray());
             if (name.Length == 0) name = "대원";
             var player = room.Match.Join(Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant(), name);
             if (player is null) return null;
-            if (request.Passive is "vitality" or "mobility") room.Match.SetLoadout(player, request.Passive);
+            room.Match.SetLoadout(player, request.Passive ?? "vitality", request.Weapon ?? "rifle", request.Secondary ?? "grenade");
             var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
             room.Tokens[token] = player;
             // Abandoned HTTP joins reserve a slot only for the reconnect grace period.
