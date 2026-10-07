@@ -1,7 +1,7 @@
 namespace Argus.Server.Game;
 
-// Prototype balance lives here. Authority and lifecycle rules do not depend on clients.
-public sealed record Rules
+// 밸런스 조정용 수치다. 게임 판정과 진행 규칙은 서버가 결정한다.
+public sealed class Rules
 {
     public const double Step = 1.0 / 30;
     public const int MaxPlayers = 4;
@@ -16,7 +16,7 @@ public sealed record Rules
     public int Grenades { get; init; } = 3;
     public double PlayerSpeed { get; init; } = 180;
     public double Vision { get; init; } = 410;
-    public double ShotInterval { get; init; } = .14;
+    public double ShotInterval { get; init; } = 0.14;
     public double BulletSpeed { get; init; } = 1050;
     public double RifleDamage { get; init; } = 24;
     public double GrenadeDamage { get; init; } = 150;
@@ -26,20 +26,39 @@ public sealed record Rules
     public double TurretHealth { get; init; } = 100;
     public double TurretRange { get; init; } = 360;
     public double TurretDamage { get; init; } = 16;
-    public double TurretShotInterval { get; init; } = .25;
+    public double TurretShotInterval { get; init; } = 0.25;
     public const float TurretPlacementDistance = 44;
 
-    private static readonly WeaponDefinition Shotgun = new(6, 2.6, .75, 850, 12, 300, Pellets: 7, Spread: .42);
-    private static readonly WeaponDefinition Piercer = new(8, 2.8, .7, 1400, 60, 1155, EnemyHits: 3);
+    private static readonly WeaponDefinition Shotgun =
+        new WeaponDefinition(6, 2.6, 0.75, 850, 12, 300, pellets: 7, spread: 0.42);
+    private static readonly WeaponDefinition Piercer =
+        new WeaponDefinition(8, 2.8, 0.7, 1400, 60, 1155, enemyHits: 3);
 
-    public static bool ValidWeapon(string weapon) => weapon is "rifle" or "shotgun" or "piercer";
-    public static bool ValidSecondary(string secondary) => secondary is "grenade" or "turret";
-
-    public WeaponDefinition Weapon(string weapon) => weapon switch
+    public static bool ValidWeapon(string weapon)
     {
-        "rifle" => new(Magazine, ReloadSeconds, ShotInterval, BulletSpeed, RifleDamage, BulletSpeed * 1.1),
-        "shotgun" => Shotgun,
-        "piercer" => Piercer,
-        _ => throw new ArgumentOutOfRangeException(nameof(weapon))
-    };
+        return weapon == "rifle" || weapon == "shotgun" || weapon == "piercer";
+    }
+
+    public static bool ValidSecondary(string secondary)
+    {
+        return secondary == "grenade" || secondary == "turret";
+    }
+
+    public WeaponDefinition Weapon(string weapon)
+    {
+        if (weapon == "rifle")
+        {
+            return new WeaponDefinition(Magazine, ReloadSeconds, ShotInterval,
+                BulletSpeed, RifleDamage, BulletSpeed * 1.1);
+        }
+        if (weapon == "shotgun")
+        {
+            return Shotgun;
+        }
+        if (weapon == "piercer")
+        {
+            return Piercer;
+        }
+        throw new ArgumentOutOfRangeException(nameof(weapon));
+    }
 }

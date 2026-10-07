@@ -81,12 +81,15 @@ sudo apt install -y dotnet-sdk-10.0
 | `server/Argus.Server/Game/Match.cs` | 전투, AI, 증원, 전멸, 임무 진행 |
 | `server/Argus.Server/Game/BattleMap.cs` | 맵, 충돌, 벽 파괴, 시야 차폐 |
 | `server/Argus.Server/Game/Snapshot.cs` | 클라이언트에 공개할 상태와 시야 필터 |
+| `server/Argus.Server/Game/SnapshotMessage.cs` | 클라이언트에 전송하는 JSON 데이터의 구조 |
 | `server/Argus.Server/Networking/RoomHost.cs` | 방, 복구 토큰, 시뮬레이션 실행과 상태 전송 |
 | `server/Argus.Server/Program.cs` | HTTP/WebSocket 접속과 입력 검증 경로 |
 | `client/src/main.ts` | 참가·조작·HUD·재접속 |
 | `client/src/world.ts` | 게임 렌더링, 보간과 이동 예측 |
 
 세부 요구와 사용자의 결정을 [요구사항 기록](docs/requirements.md)에 보관한다. 임시 수치는 요구사항과 구분한다.
+
+C# 코드는 명시적인 타입과 일반 생성자, 중괄호가 있는 `for`·`foreach`·`if`를 중심으로 작성한다. 작성 기준은 [AGENTS.md](AGENTS.md)에 기록했다. 서버 코드는 `Program.Main`에서 접속 경로를 확인한 뒤, `RoomHost.ExecuteAsync` → `Match.Step` → `Snapshot.Create` 순서로 읽으면 게임 진행과 상태 전송 흐름을 따라갈 수 있다. 비동기 대기를 위한 `async`·`await`, 동시 상태 변경을 막는 `lock`, 자원 정리를 위한 `using`은 해당 위치의 주석과 함께 읽는다.
 
 ## 검증
 
