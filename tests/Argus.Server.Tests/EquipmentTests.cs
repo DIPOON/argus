@@ -119,6 +119,7 @@ internal static class EquipmentTests
             Near(m.Turrets[0].Position.X, 734);
             Advance(m, 45.05); Check(m.Turrets.Count == 0);
         }),
+        ("Turret placement rejects a wall between clear endpoints and succeeds after destruction", TurretPlacementAcrossCorner),
         ("Turrets neither reveal nor target hidden enemies, and shared sight enables fire", () =>
         {
             var (m, p) = Active(secondary: "turret");
@@ -165,6 +166,34 @@ internal static class EquipmentTests
             Check(m.Turrets.Count == 0);
         })
     ];
+
+    private static void TurretPlacementAcrossCorner()
+    {
+        (Match Match, Player Player) active = Active(secondary: "turret");
+        Match match = active.Match;
+        Player player = active.Player;
+        player.Position = new Vector2(464, 498);
+        double aim = 313 * Math.PI / 180;
+        Vector2 facing = new Vector2((float)Math.Cos(aim), (float)Math.Sin(aim));
+        Vector2 placement = player.Position + facing * Rules.TurretPlacementDistance;
+
+        // 양 끝점은 비어 있지만, 두 점을 연결한 선은 벽 모서리를 지난다.
+        Check(match.Map.CanStand(player.Position));
+        Check(match.Map.CanStand(placement, 14));
+        Check(!match.Map.LineOfSight(player.Position, placement));
+        Check(match.Input(player, 0, 0, 0, aim, false, false, true));
+        match.Step(Rules.Step);
+        Check(match.Turrets.Count == 0);
+        Check(player.NextTurret <= match.Now);
+
+        Check(match.Map.Damage(10 * BattleMap.Columns + 10, 100));
+        Check(match.Map.LineOfSight(player.Position, placement));
+        Check(match.Input(player, 1, 0, 0, aim, false, false, true));
+        match.Step(Rules.Step);
+        Check(match.Turrets.Count == 1);
+        Near(match.Turrets[0].Position.X, placement.X);
+        Near(match.Turrets[0].Position.Y, placement.Y);
+    }
 
     private static (Match, Player) Active(string weapon = "rifle", string secondary = "grenade")
     {

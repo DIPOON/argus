@@ -84,6 +84,23 @@ export class World {
     return true;
   }
 
+  private lineOfSight(from: Position, to: Position) {
+    const map = this.snapshot?.map;
+    if (!map) return false;
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    // 서버의 BattleMap.RayWall과 같은 간격으로 양 끝점을 포함해 벽을 검사한다.
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / 5));
+    for (let i = 0; i <= steps; i++) {
+      const fraction = i / steps;
+      const x = Math.floor((from.x + dx * fraction) / map.cell);
+      const y = Math.floor((from.y + dy * fraction) / map.cell);
+      if (x < 0 || y < 0 || x >= map.columns || y >= map.rows) return false;
+      if (this.tiles[y * map.columns + x] !== 0) return false;
+    }
+    return true;
+  }
+
   private move(p: Position, dx: number, dy: number): Position {
     const next = { ...p };
     if (this.canStand({ x: p.x + dx, y: p.y }, 13)) next.x += dx;
@@ -117,8 +134,20 @@ export class World {
       this.labels.addChild(label);
     }
     label.text = text;
+    label.style.fill = color;
     label.position.set(x, y);
     label.visible = true;
+  }
+
+  private removeUnusedLabels() {
+    // 이번 프레임에 사용하지 않은 라벨은 맵과 Pixi 양쪽에서 제거한다.
+    // 포탑 교체·파괴와 방 전환으로 사라진 대원의 라벨도 함께 정리된다.
+    for (const [key, label] of this.labelsById) {
+      if (label.visible) continue;
+      this.labels.removeChild(label);
+      label.destroy({ style: true });
+      this.labelsById.delete(key);
+    }
   }
 
   private draw(dt: number) {
@@ -197,7 +226,8 @@ export class World {
     if (me?.state === 'alive' && me.secondary === 'turret' && me.turretCooldown <= 0 && this.predicted && s.phase === 'active') {
       const at = { x: this.predicted.x + Math.cos(this.control.aim) * s.rules.turretPlacement,
         y: this.predicted.y + Math.sin(this.control.aim) * s.rules.turretPlacement };
-      const allowed = this.canStand(at, 14) && !s.turrets.some(t => t.owner !== me.id && Math.hypot(t.x - at.x, t.y - at.y) < 28);
+      const allowed = this.canStand(at, 14) && this.lineOfSight(this.predicted, at) &&
+        !s.turrets.some(t => t.owner !== me.id && Math.hypot(t.x - at.x, t.y - at.y) < 28);
       const color = allowed ? colors.teal : colors.red;
       g.rect(at.x - 14, at.y - 14, 28, 28).stroke({ color, width: 1.5, alpha: .7 });
       this.label('turret-placement', allowed ? 'G' : '설치 불가', at.x, at.y + 28, color, 10);
@@ -265,5 +295,6 @@ export class World {
       const color = effect.kind === 'heal' || effect.kind === 'deploy' ? colors.teal : colors.gold;
       u.circle(effect.x, effect.y, Math.max(2, radius)).fill({ color, alpha: remain * .15 }).stroke({ color, alpha: Math.min(1, remain * 2), width: big ? 3 : 2 });
     }
+    this.removeUnusedLabels();
   }
 }
