@@ -3,158 +3,415 @@ using System.Security.Cryptography;
 
 namespace Argus.Server.Game;
 
-// One room is one authoritative simulation. Access is serialized by the host's room lock.
-public sealed class Match(string code, Rules? rules = null, int? seed = null)
+// 방 하나의 상태와 진행 순서다. 전투 판정과 몸 충돌은 같은 partial class의 별도 파일에 있다.
+public sealed partial class Match
 {
-    public string Code { get; } = code;
-    public Rules Rules { get; } = rules ?? new();
-    public BattleMap Map { get; } = new();
-    public List<Player> Players { get; } = [];
-    public List<Enemy> Enemies { get; } = [];
-    public List<Bullet> Bullets { get; } = [];
-    public List<Grenade> Grenades { get; } = [];
-    public List<Facility> Facilities { get; } = [new(1, new(960, 485)), new(2, new(1210, 695)), new(3, new(990, 920))];
-    public List<Supply> Supplies { get; } = [new(1, BattleMap.Camp + new Vector2(70, 40), false), new(2, new(845, 640), true), new(3, new(1150, 835), true), new(4, new(815, 985), false)];
-    public List<Effect> Effects { get; } = [];
-    public List<Notice> Notices { get; } = [];
+    public string Code { get; }
+    public Rules Rules { get; }
+    public BattleMap Map { get; } = new BattleMap();
+    public List<Player> Players { get; } = new List<Player>();
+    public List<Enemy> Enemies { get; } = new List<Enemy>();
+    public List<Facility> Facilities { get; } = new List<Facility>();
+    public List<Supply> Supplies { get; } = new List<Supply>();
+    public List<Effect> Effects { get; } = new List<Effect>();
+    public List<Notice> Notices { get; } = new List<Notice>();
     public double Now { get; private set; }
     public double StartedAt { get; private set; } = -1;
     public double? EndedAt { get; private set; }
-    public double Elapsed => StartedAt < 0 ? 0 : (EndedAt ?? Now) - StartedAt;
     public string Phase { get; private set; } = "staging";
     public string? Result { get; private set; }
     public double ExtractionProgress { get; private set; }
     public int Pulse { get; private set; }
-    public bool ObjectivesComplete => Facilities.All(f => f.Hp <= 0);
-    // Only deterministic tests supply a seed. Public clients cannot replay a fixed production spawn sequence.
-    private readonly Random? _random = seed is { } value ? new(value) : null;
-    private double NextRandom() => _random?.NextDouble() ?? RandomNumberGenerator.GetInt32(int.MaxValue) / (double)int.MaxValue;
-    private double _nextSpawn = 1;
+    private readonly Random? _random;
+    private double _nextSpawn = 10;
     private int _nextId = 100;
-    private int[] _flow = new int[BattleMap.Columns * BattleMap.Rows];
+    private readonly int[] _flow = new int[BattleMap.Columns * BattleMap.Rows];
     private double _nextFlow;
+    private static readonly int[] NeighborX = new int[] { 1, -1, 0, 0 };
+    private static readonly int[] NeighborY = new int[] { 0, 0, 1, -1 };
+
+    public Match(string code, Rules? rules = null, int? seed = null)
+    {
+        Code = code;
+        Rules = new Rules();
+        if (rules != null)
+        {
+            Rules = rules;
+        }
+        if (seed.HasValue)
+        {
+            _random = new Random(seed.Value);
+        }
+        Facilities.Add(new Facility(1, new Vector2(960, 485)));
+        Facilities.Add(new Facility(2, new Vector2(1210, 695)));
+        Facilities.Add(new Facility(3, new Vector2(990, 920)));
+        Supplies.Add(new Supply(1, BattleMap.Camp + new Vector2(70, 40), false));
+        Supplies.Add(new Supply(2, new Vector2(845, 640), true));
+        Supplies.Add(new Supply(3, new Vector2(1150, 835), true));
+        Supplies.Add(new Supply(4, new Vector2(815, 985), false));
+        Supplies.Add(new Supply(5, new Vector2(1080, 740), false));
+        AddEnemy(new Vector2(610, 730), EnemyDefinition.Grunt);
+        if (Rules.AllowEliteEnemies)
+        {
+            AddEnemy(new Vector2(970, 570), EnemyDefinition.Breaker);
+            AddEnemy(new Vector2(1260, 770), EnemyDefinition.Warden);
+        }
+        else
+        {
+            AddEnemy(new Vector2(970, 570), EnemyDefinition.Grunt);
+            AddEnemy(new Vector2(1260, 770), EnemyDefinition.Grunt);
+        }
+    }
+
+    public double Elapsed
+    {
+        get
+        {
+            if (StartedAt < 0)
+            {
+                return 0;
+            }
+            double end = Now;
+            if (EndedAt.HasValue)
+            {
+                end = EndedAt.Value;
+            }
+            return end - StartedAt;
+        }
+    }
+
+    public bool ObjectivesComplete
+    {
+        get
+        {
+            for (int i = 0; i < Facilities.Count; i++)
+            {
+                if (Facilities[i].Hp > 0)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
+    private double NextRandom()
+    {
+        if (_random != null)
+        {
+            return _random.NextDouble();
+        }
+        return RandomNumberGenerator.GetInt32(int.MaxValue) / (double)int.MaxValue;
+    }
 
     public Player? Join(string id, string name)
     {
-        if (Players.Count >= Rules.MaxPlayers || Phase == "ended") return null;
-        var player = new Player(id, name) { Position = BattleMap.Camp, Hp = 130, Ammo = Rules.Magazine, Grenades = Rules.Grenades };
+        if (Players.Count >= Rules.MaxPlayers || Phase == "ended")
+        {
+            return null;
+        }
+        Player player = new Player(id, name);
+        player.Position = BattleMap.Camp;
+        player.MaxHp = Rules.PlayerHealth;
+        player.Hp = player.MaxHp;
+        player.MaxMana = Rules.MaxMana;
         Players.Add(player);
         Note($"{name} 합류");
         return player;
     }
 
-    public bool SetLoadout(Player p, string passive)
+    public bool SetLoadout(Player player, string[] slots)
     {
-        if (p.HasDeployed || p.State != "waiting" || passive is not ("vitality" or "mobility")) return false;
-        p.Passive = passive;
-        p.Hp = p.MaxHp;
+        if (Phase == "ended" || player.HasDeployed || player.State != "waiting" || !Rules.ValidSlots(slots))
+        {
+            return false;
+        }
+        // 호출자가 원본 배열을 나중에 바꾸더라도 서버의 장비는 바뀌지 않는다.
+        player.Slots = (string[])slots.Clone();
         return true;
     }
 
-    public bool Deploy(Player p, double x, double y)
+    public bool Deploy(Player player, double x, double y)
     {
-        if (Phase == "ended" || p.State != "waiting" || !double.IsFinite(x) || !double.IsFinite(y)) return false;
-        var target = new Vector2((float)x, (float)y);
-        if (!Map.CanStand(target, 15)) return false;
-        // Committing a landing point grants no vision; only an alive deployed body is an observer.
-        p.Landing = target;
-        p.DeployAt = Now + Rules.DeploySeconds;
-        p.State = "deploying";
+        if (Phase == "ended" || player.State != "waiting" || !double.IsFinite(x) || !double.IsFinite(y))
+        {
+            return false;
+        }
+        Vector2 target = new Vector2((float)x, (float)y);
+        // 위치 선택의 즉시 응답으로 시야 밖 적을 탐색할 수 없도록 공개된 벽만 검사한다.
+        // 적과 겹치는지는 5초 뒤 실제 투입 직전에 검사한다.
+        if (!Map.CanStand(target, Rules.PlayerRadius))
+        {
+            return false;
+        }
+        player.Landing = target;
+        player.DeployAt = Now + Rules.DeploySeconds;
+        player.State = "deploying";
         return true;
     }
 
-    public bool Input(Player p, long sequence, double moveX, double moveY, double aim, bool fire, bool reload, bool grenade)
+    public bool Input(Player player, long sequence, double moveX, double moveY, double aim, int slot)
     {
-        if (Phase == "ended" || p.State != "alive" || sequence <= p.LastSequence || sequence < 0 || sequence > 9_000_000_000_000 ||
-            !double.IsFinite(moveX) || !double.IsFinite(moveY) || !double.IsFinite(aim) || Math.Abs(moveX) > 1.01 || Math.Abs(moveY) > 1.01) return false;
-        p.LastSequence = sequence;
-        p.LastInputAt = Now;
-        p.Move = new((float)moveX, (float)moveY);
-        if (p.Move.LengthSquared() > 1) p.Move = Vector2.Normalize(p.Move);
-        p.Aim = Math.IEEERemainder(aim, Math.Tau);
-        p.Firing = fire;
-        p.ReloadRequested |= reload;
-        p.GrenadeRequested |= grenade;
+        if (Phase == "ended" || player.State != "alive" || slot < 0 || slot > 4)
+        {
+            return false;
+        }
+        if (sequence <= player.LastSequence || sequence < 0 || sequence > 9_000_000_000_000)
+        {
+            return false;
+        }
+        if (!double.IsFinite(moveX) || !double.IsFinite(moveY) || !double.IsFinite(aim) ||
+            Math.Abs(moveX) > 1.01 || Math.Abs(moveY) > 1.01)
+        {
+            return false;
+        }
+        player.LastSequence = sequence;
+        player.LastInputAt = Now;
+        player.Move = new Vector2((float)moveX, (float)moveY);
+        if (player.Move.LengthSquared() > 1)
+        {
+            player.Move = Vector2.Normalize(player.Move);
+        }
+        player.Aim = Math.IEEERemainder(aim, Math.Tau);
+        player.RequestedSlot = slot;
         return true;
     }
 
-    public void Disconnect(Player p)
+    public void Disconnect(Player player)
     {
-        p.Connected = false;
-        p.DisconnectedAt = Now;
-        p.Move = Vector2.Zero;
-        p.Firing = false;
-        p.GrenadeRequested = false;
+        player.Connected = false;
+        player.DisconnectedAt = Now;
+        player.Move = Vector2.Zero;
+        player.RequestedSlot = 0;
     }
 
     public void Step(double dt)
     {
+        if (!double.IsFinite(dt) || dt <= 0)
+        {
+            return;
+        }
+        // 일시적으로 서버 틱이 늦어져도 짧은 방어 창이나 몸 충돌을 건너뛰지 않는다.
+        while (dt > 0.0000001)
+        {
+            double step = Math.Min(dt, Rules.Step);
+            StepOnce(step);
+            dt -= step;
+        }
+    }
+
+    private void StepOnce(double dt)
+    {
         Now += dt;
-        Effects.RemoveAll(e => e.Until < Now);
-        foreach (var p in Players.Where(p => p.DisconnectedAt is not null && Now - p.DisconnectedAt.Value > Rules.ReconnectSeconds).ToArray())
+        RemoveExpiredObjects();
+        if (Phase == "ended" || CheckWipe())
         {
-            Note($"{p.Name} 연결 복구 시간 만료");
-            Players.Remove(p);
+            return;
         }
-        if (Phase == "ended") return;
-
-        // Death/expiry wins over queued respawns and late joins. A waiting guest cannot hold a lost room open.
-        if (CheckWipe()) return;
-        foreach (var p in Players.Where(p => p.State == "deploying" && p.DeployAt <= Now))
+        CompleteDeployments();
+        if (Phase != "active")
         {
-            if (!Map.CanStand(p.Landing, 15)) { p.State = "waiting"; continue; }
-            p.Position = p.Landing;
-            p.Impulse = Vector2.Zero;
-            p.Hp = p.MaxHp;
-            p.Ammo = Rules.Magazine;
-            p.Grenades = Rules.Grenades;
-            p.ReloadUntil = 0;
-            p.NextShot = Now;
-            p.NextGrenade = Now;
-            p.State = "alive";
-            p.HasDeployed = true;
-            p.Move = Vector2.Zero;
-            p.Firing = false;
-            p.LastInputAt = -100;
-            Effect(p.Position, "deploy", .6);
-            if (Phase == "staging") { Phase = "active"; StartedAt = Now; Note("작전 시작 · 시설 3곳을 파괴하세요"); }
+            return;
         }
-        if (Phase != "active") return;
-
         while (Elapsed >= (Pulse + 1) * Rules.PulseSeconds)
         {
             Pulse++;
-            var damage = 60 * Math.Pow(2, Pulse - 1);
-            foreach (var p in Players.Where(p => p.State == "alive")) Hurt(p, damage);
+            double damage = Rules.PulseDamage * Math.Pow(2, Pulse - 1);
+            for (int i = 0; i < Players.Count; i++)
+            {
+                Hurt(Players[i], damage);
+            }
             Note($"전역 충격 {Pulse}회 · {damage:0} 피해");
-            if (CheckWipe()) return;
+            if (CheckWipe())
+            {
+                return;
+            }
         }
-
-        foreach (var p in Players.Where(p => p.State == "alive")) UpdatePlayer(p, dt);
+        for (int i = 0; i < Players.Count; i++)
+        {
+            if (Players[i].State == "alive")
+            {
+                UpdatePlayer(Players[i], dt);
+            }
+        }
         if (Elapsed >= _nextSpawn && Enemies.Count < Rules.MaxEnemies)
         {
-            _nextSpawn = Elapsed + Math.Max(.6, Rules.SpawnInterval - Elapsed / 150);
-            for (var i = 0; i < Math.Min(2 + (int)(Elapsed / 90), 7) && Enemies.Count < Rules.MaxEnemies; i++) SpawnEnemy();
+            _nextSpawn = Elapsed + Math.Max(2.5, Rules.SpawnInterval - Elapsed / 240);
+            SpawnEnemy();
         }
-        if (Now >= _nextFlow) { _nextFlow = Now + .5; BuildFlow(); }
+        if (Now >= _nextFlow)
+        {
+            _nextFlow = Now + 0.5;
+            BuildFlow();
+        }
         UpdateEnemies(dt);
-        UpdateBullets(dt);
-        UpdateGrenades(dt);
-        Enemies.RemoveAll(e => e.Hp <= 0);
-        if (CheckWipe()) return;
-
-        if (ObjectivesComplete && Players.Any(p => p.State == "alive" && Vector2.Distance(p.Position, BattleMap.Extraction) < 80))
+        ResolveCombat();
+        for (int i = Enemies.Count - 1; i >= 0; i--)
+        {
+            if (Enemies[i].Hp <= 0)
+            {
+                Enemies.RemoveAt(i);
+            }
+        }
+        if (CheckWipe())
+        {
+            return;
+        }
+        if (ObjectivesComplete && HasPlayerAtExtraction())
+        {
             ExtractionProgress += dt;
-        else ExtractionProgress = Math.Max(0, ExtractionProgress - dt * .5);
-        if (ExtractionProgress >= Rules.ExtractionSeconds) Finish("success");
+        }
+        else
+        {
+            ExtractionProgress = Math.Max(0, ExtractionProgress - dt * 0.5);
+        }
+        if (ExtractionProgress >= Rules.ExtractionSeconds)
+        {
+            Finish("success");
+        }
+    }
+
+    private void RemoveExpiredObjects()
+    {
+        for (int i = Effects.Count - 1; i >= 0; i--)
+        {
+            if (Effects[i].Until < Now)
+            {
+                Effects.RemoveAt(i);
+            }
+        }
+        for (int i = Players.Count - 1; i >= 0; i--)
+        {
+            Player player = Players[i];
+            if (player.DisconnectedAt.HasValue && Now - player.DisconnectedAt.Value > Rules.ReconnectSeconds)
+            {
+                Note($"{player.Name} 연결 복구 시간 만료");
+                Players.RemoveAt(i);
+                for (int j = 0; j < Supplies.Count; j++)
+                {
+                    Supplies[j].ReadyAt.Remove(player.Id);
+                }
+            }
+        }
+    }
+
+    private void CompleteDeployments()
+    {
+        for (int i = 0; i < Players.Count; i++)
+        {
+            Player player = Players[i];
+            if (player.State != "deploying" || player.DeployAt > Now)
+            {
+                continue;
+            }
+            if (!CanOccupy(player.Landing, Rules.PlayerRadius, null))
+            {
+                player.State = "waiting";
+                Note($"{player.Name} 투입 지점이 막혔습니다. 다른 위치를 선택하세요.");
+                continue;
+            }
+            player.Position = player.Landing;
+            player.Hp = player.MaxHp;
+            player.Mana = 0;
+            player.Actions.Clear();
+            player.BusyUntil = Now;
+            player.RequestedSlot = 0;
+            player.State = "alive";
+            player.HasDeployed = true;
+            player.Move = Vector2.Zero;
+            player.LastInputAt = -100;
+            Effect(player.Position, "deploy", 0.6);
+            if (Phase == "staging")
+            {
+                Phase = "active";
+                StartedAt = Now;
+                Note("작전 시작 · 보급 상자에서 마나를 채우고 시설 3곳을 파괴하세요");
+            }
+        }
+    }
+
+    private void UpdatePlayer(Player player, double dt)
+    {
+        if (Now - player.LastInputAt > 0.35)
+        {
+            player.Move = Vector2.Zero;
+            player.RequestedSlot = 0;
+        }
+        player.Position = MoveBody(player.Position, player.Move * (float)(Rules.PlayerSpeed * dt), Rules.PlayerRadius, null);
+        for (int i = player.Actions.Count - 1; i >= 0; i--)
+        {
+            if (player.Actions[i].EndsAt <= Now)
+            {
+                player.Actions.RemoveAt(i);
+            }
+        }
+        if (player.RequestedSlot > 0 && Now >= player.BusyUntil)
+        {
+            SkillDefinition skill = Rules.Skill(player.Slots[player.RequestedSlot - 1]);
+            if (player.Mana >= skill.Mana)
+            {
+                player.Mana -= skill.Mana;
+                _nextId++;
+                PlayerAction action = new PlayerAction(_nextId, skill, player.RequestedSlot, Now);
+                player.Actions.Add(action);
+                player.BusyUntil = action.EndsAt;
+            }
+        }
+        UpdateSupplies(player);
+    }
+
+    private void UpdateSupplies(Player player)
+    {
+        for (int i = 0; i < Supplies.Count; i++)
+        {
+            Supply supply = Supplies[i];
+            if (supply.Collected || supply.AvailableAt(player) > Now ||
+                Vector2.Distance(player.Position, supply.Position) > 35 || !Map.LineOfSight(player.Position, supply.Position))
+            {
+                continue;
+            }
+            if (supply.Objective)
+            {
+                supply.Collected = true;
+                Note("부목표 보급품 회수");
+            }
+            else if (player.Hp >= player.MaxHp && player.Mana >= player.MaxMana)
+            {
+                continue;
+            }
+            player.Hp = player.MaxHp;
+            player.Mana = player.MaxMana;
+            // 난입자와 겹쳐 선 동료가 다른 사람의 보급 사용 때문에 기다리지 않게 한다.
+            supply.ReadyAt[player.Id] = Now + Rules.SupplyCooldown;
+            Effect(player.Position, "heal", 0.5);
+        }
     }
 
     private bool CheckWipe()
     {
-        if (Phase == "active" && !Players.Any(p => p.State == "alive"))
+        if (Phase != "active")
         {
-            Finish("failure");
-            return true;
+            return false;
+        }
+        for (int i = 0; i < Players.Count; i++)
+        {
+            if (Players[i].State == "alive")
+            {
+                return false;
+            }
+        }
+        Finish("failure");
+        return true;
+    }
+
+    private bool HasPlayerAtExtraction()
+    {
+        for (int i = 0; i < Players.Count; i++)
+        {
+            if (Players[i].State == "alive" && Vector2.Distance(Players[i].Position, BattleMap.Extraction) < 80)
+            {
+                return true;
+            }
         }
         return false;
     }
@@ -164,262 +421,94 @@ public sealed class Match(string code, Rules? rules = null, int? seed = null)
         Phase = "ended";
         EndedAt = Now;
         Result = result;
-        Note(result == "success" ? "탈출 성공 · 작전 종료" : "전원 사망 · 작전 실패");
+        if (result == "success")
+        {
+            Note("탈출 성공 · 작전 종료");
+        }
+        else
+        {
+            Note("전원 사망 · 작전 실패");
+        }
     }
 
-    private void UpdatePlayer(Player p, double dt)
+    public void Hurt(Player player, double damage)
     {
-        if (Now - p.LastInputAt > .35) { p.Move = Vector2.Zero; p.Firing = false; }
-        var speed = Rules.PlayerSpeed * (p.Passive == "mobility" ? 1.22 : 1);
-        p.Position = Map.Move(p.Position, (p.Move * (float)speed + p.Impulse) * (float)dt);
-        p.Impulse *= (float)Math.Exp(-9 * dt);
-        if (p.ReloadUntil > 0 && Now >= p.ReloadUntil) { p.Ammo = Rules.Magazine; p.ReloadUntil = 0; }
-        if ((p.ReloadRequested || p.Ammo == 0) && p.ReloadUntil == 0 && p.Ammo < Rules.Magazine)
-            p.ReloadUntil = Now + Rules.ReloadSeconds;
-        p.ReloadRequested = false;
-        var facing = new Vector2((float)Math.Cos(p.Aim), (float)Math.Sin(p.Aim));
-        if (p.Firing && p.ReloadUntil == 0 && p.Ammo > 0 && Now >= p.NextShot)
+        if (player.State != "alive" || damage <= 0)
         {
-            p.Ammo--;
-            p.NextShot = Now + Rules.ShotInterval;
-            // Start at the authoritative body so the muzzle cannot create bullets beyond an intervening wall.
-            Bullets.Add(new(++_nextId, p.Position, facing * (float)Rules.BulletSpeed, p.Id, Rules.RifleDamage));
+            return;
         }
-        if (p.GrenadeRequested && p.Grenades > 0 && Now >= p.NextGrenade)
+        player.Hp = Math.Max(0, player.Hp - damage);
+        Effect(player.Position, "hurt", 0.4);
+        if (player.Hp > 0)
         {
-            p.Grenades--;
-            p.NextGrenade = Now + .65;
-            Grenades.Add(new(++_nextId, p.Position, facing * 360, p.Id));
+            return;
         }
-        p.GrenadeRequested = false;
-        foreach (var supply in Supplies)
+        player.State = "waiting";
+        player.Deaths++;
+        player.RequestedSlot = 0;
+        player.Actions.Clear();
+        player.Move = Vector2.Zero;
+        Note($"{player.Name} 사망 · 증원 위치를 선택하세요");
+    }
+
+    private void DamageEnemy(Enemy enemy, double damage, Player owner, string effect = "hit")
+    {
+        if (enemy.Hp <= 0)
         {
-            if (supply.Collected || supply.AvailableAt > Now || Vector2.Distance(p.Position, supply.Position) > 35) continue;
-            if (supply.Objective)
+            return;
+        }
+        enemy.Hp = Math.Max(0, enemy.Hp - damage);
+        if (enemy.Hp == 0)
+        {
+            owner.Kills++;
+        }
+        Effect(enemy.Position, effect, 0.65);
+    }
+
+    private void DamageFacility(Facility facility)
+    {
+        facility.Hp = Math.Max(0, facility.Hp - 1);
+        Effect(facility.Position, "hit", 0.4);
+        if (facility.Hp == 0)
+        {
+            Note("적 시설 파괴");
+            if (ObjectivesComplete)
             {
-                supply.Collected = true;
-                Note($"부목표 보급품 회수 {Supplies.Count(s => s.Objective && s.Collected)}/2");
-            }
-            else if (p.Hp >= p.MaxHp && p.Grenades >= Rules.Grenades) continue;
-            p.Hp = p.MaxHp;
-            p.Grenades = Rules.Grenades;
-            supply.AvailableAt = Now + 18;
-            Effect(p.Position, "heal", .5);
-        }
-    }
-
-    private void SpawnEnemy()
-    {
-        var angle = NextRandom() * Math.Tau;
-        var position = new Vector2(1080 + (float)Math.Cos(angle) * 680, 710 + (float)Math.Sin(angle) * 580);
-        if (!Map.CanStand(position, 12)) return;
-        Enemies.Add(new(++_nextId, position, NextRandom() < .22 ? "ranged" : "melee") { NextAttack = Now + 1.5 });
-    }
-
-    private void BuildFlow()
-    {
-        Array.Fill(_flow, int.MaxValue);
-        var queue = new Queue<int>();
-        foreach (var p in Players.Where(p => p.State == "alive"))
-        {
-            var index = (int)(p.Position.Y / BattleMap.Cell) * BattleMap.Columns + (int)(p.Position.X / BattleMap.Cell);
-            if (index < 0 || index >= _flow.Length || _flow[index] == 0) continue;
-            _flow[index] = 0;
-            queue.Enqueue(index);
-        }
-        while (queue.TryDequeue(out var index))
-        {
-            var x = index % BattleMap.Columns;
-            var y = index / BattleMap.Columns;
-            foreach (var (nx, ny) in new[] { (x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1) })
-            {
-                if (Map.Solid(nx, ny)) continue;
-                var next = ny * BattleMap.Columns + nx;
-                if (_flow[next] <= _flow[index] + 1) continue;
-                _flow[next] = _flow[index] + 1;
-                queue.Enqueue(next);
+                Note("주목표 완료 · 탈출 지점을 확보하세요");
             }
         }
-    }
-
-    private void UpdateEnemies(double dt)
-    {
-        var alive = Players.Where(p => p.State == "alive").ToArray();
-        if (alive.Length == 0) return;
-        foreach (var e in Enemies)
-        {
-            if (e.Hp <= 0) continue;
-            var target = alive.MinBy(p => Vector2.DistanceSquared(p.Position, e.Position))!;
-            var distance = Vector2.Distance(target.Position, e.Position);
-            var los = Map.LineOfSight(e.Position, target.Position);
-            var heading = target.Position - e.Position;
-            if (!los)
-            {
-                var x = (int)(e.Position.X / BattleMap.Cell);
-                var y = (int)(e.Position.Y / BattleMap.Cell);
-                var best = int.MaxValue;
-                foreach (var (nx, ny) in new[] { (x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1) })
-                {
-                    if (Map.Solid(nx, ny)) continue;
-                    var cost = _flow[ny * BattleMap.Columns + nx];
-                    if (cost >= best) continue;
-                    best = cost;
-                    heading = new Vector2((nx + .5f) * BattleMap.Cell, (ny + .5f) * BattleMap.Cell) - e.Position;
-                }
-            }
-            if (heading.LengthSquared() > 1) heading = Vector2.Normalize(heading);
-            var desired = e.Kind == "ranged" ? 220 : 25;
-            if (distance > desired || !los)
-                e.Position = Map.Move(e.Position, heading * (float)((e.Kind == "ranged" ? 65 : 86) * dt) + e.Impulse * (float)dt, 12);
-            else e.Position = Map.Move(e.Position, e.Impulse * (float)dt, 12);
-            e.Impulse *= (float)Math.Exp(-8 * dt);
-            if (!los || Now < e.NextAttack) continue;
-            if (e.Kind == "melee" && distance < 32)
-            {
-                Hurt(target, 11);
-                e.NextAttack = Now + .85;
-            }
-            if (e.Kind == "ranged" && distance > .01 && distance < 360)
-            {
-                var direction = Vector2.Normalize(target.Position - e.Position);
-                Bullets.Add(new(++_nextId, e.Position, direction * 310, null, 16) { Remaining = 2 });
-                e.NextAttack = Now + 1.8;
-            }
-        }
-    }
-
-    private void UpdateBullets(double dt)
-    {
-        foreach (var b in Bullets)
-        {
-            b.Remaining -= dt;
-            var to = b.Position + b.Velocity * (float)dt;
-            var (fraction, tile) = Map.RayWall(b.Position, to);
-            Player? playerHit = null;
-            Enemy? enemyHit = null;
-            Facility? facilityHit = null;
-            foreach (var p in Players.Where(p => p.State == "alive" && p.Id != b.Owner))
-            {
-                var hit = BattleMap.RayCircle(b.Position, to, p.Position, 13);
-                if (hit >= fraction) continue;
-                fraction = hit; playerHit = p; enemyHit = null; facilityHit = null; tile = -1;
-            }
-            if (b.Owner is not null)
-            {
-                foreach (var e in Enemies.Where(e => e.Hp > 0))
-                {
-                    var hit = BattleMap.RayCircle(b.Position, to, e.Position, 13);
-                    if (hit >= fraction) continue;
-                    fraction = hit; playerHit = null; enemyHit = e; facilityHit = null; tile = -1;
-                }
-                foreach (var f in Facilities.Where(f => f.Hp > 0))
-                {
-                    var hit = BattleMap.RayCircle(b.Position, to, f.Position, 30);
-                    if (hit >= fraction) continue;
-                    fraction = hit; playerHit = null; enemyHit = null; facilityHit = f; tile = -1;
-                }
-            }
-            if (fraction <= 1)
-            {
-                b.Position = Vector2.Lerp(b.Position, to, (float)fraction);
-                if (tile >= 0) Map.Damage(tile, b.Damage);
-                if (playerHit is not null) Hurt(playerHit, b.Damage);
-                if (enemyHit is not null) DamageEnemy(enemyHit, b.Damage, b.Owner);
-                if (facilityHit is not null) DamageFacility(facilityHit, b.Damage);
-                Effect(b.Position, "impact", .18);
-                b.Remaining = 0;
-            }
-            else b.Position = to;
-        }
-        Bullets.RemoveAll(b => b.Remaining <= 0);
-    }
-
-    private void UpdateGrenades(double dt)
-    {
-        foreach (var g in Grenades)
-        {
-            var next = Map.Move(g.Position, g.Velocity * (float)dt, 5);
-            if (Vector2.DistanceSquared(next, g.Position) < 1) g.Velocity *= -.35f;
-            g.Position = next;
-            g.Velocity *= (float)Math.Exp(-2.1 * dt);
-            g.Remaining -= dt;
-            if (g.Remaining > 0) continue;
-            Explode(g);
-        }
-        Grenades.RemoveAll(g => g.Remaining <= 0);
-    }
-
-    private void Explode(Grenade g)
-    {
-        // Occlusion is evaluated before breaking walls, so cover protects against this blast.
-        foreach (var p in Players.Where(p => p.State == "alive"))
-        {
-            var distance = Vector2.Distance(p.Position, g.Position);
-            if (distance > Rules.GrenadeRadius || !Map.LineOfSight(g.Position, p.Position)) continue;
-            Hurt(p, Rules.GrenadeDamage * (1 - distance / Rules.GrenadeRadius));
-            p.Impulse += Push(g.Position, p.Position, distance);
-        }
-        foreach (var e in Enemies.Where(e => e.Hp > 0))
-        {
-            var distance = Vector2.Distance(e.Position, g.Position);
-            if (distance > Rules.GrenadeRadius || !Map.LineOfSight(g.Position, e.Position)) continue;
-            DamageEnemy(e, Rules.GrenadeDamage * (1 - distance / Rules.GrenadeRadius), g.Owner);
-            e.Impulse += Push(g.Position, e.Position, distance);
-        }
-        foreach (var f in Facilities.Where(f => f.Hp > 0))
-            if (Vector2.Distance(f.Position, g.Position) < Rules.GrenadeRadius && Map.LineOfSight(g.Position, f.Position)) DamageFacility(f, Rules.GrenadeDamage);
-        for (var i = 0; i < Map.Tiles.Length; i++)
-        {
-            if (Map.Tiles[i] != 1) continue;
-            var center = new Vector2((i % BattleMap.Columns + .5f) * BattleMap.Cell, (i / BattleMap.Columns + .5f) * BattleMap.Cell);
-            if (Vector2.Distance(center, g.Position) < Rules.GrenadeRadius) Map.Damage(i, Rules.GrenadeDamage);
-        }
-        Effect(g.Position, "explosion", .55);
-    }
-
-    private Vector2 Push(Vector2 from, Vector2 to, double distance) => distance < .1 ? Vector2.Zero : Vector2.Normalize(to - from) * (float)(480 * (1 - distance / Rules.GrenadeRadius));
-
-    private void DamageEnemy(Enemy enemy, double damage, string? owner)
-    {
-        var wasAlive = enemy.Hp > 0;
-        enemy.Hp -= damage;
-        if (!wasAlive || enemy.Hp > 0) return;
-        var p = Players.Find(p => p.Id == owner);
-        if (p is not null) p.Kills++;
-        Effect(enemy.Position, "kill", .35);
-    }
-
-    private void DamageFacility(Facility facility, double damage)
-    {
-        var wasAlive = facility.Hp > 0;
-        facility.Hp = Math.Max(0, facility.Hp - damage);
-        if (wasAlive && facility.Hp == 0)
-        {
-            Effect(facility.Position, "explosion", .8);
-            Note($"시설 파괴 {Facilities.Count(f => f.Hp <= 0)}/3");
-            if (ObjectivesComplete) Note("주목표 완료 · 탈출 지점을 확보하세요");
-        }
-    }
-
-    public void Hurt(Player p, double damage)
-    {
-        if (p.State != "alive" || damage <= 0) return;
-        p.Hp = Math.Max(0, p.Hp - damage);
-        if (p.Hp > 0) return;
-        p.State = "waiting";
-        p.Deaths++;
-        p.Firing = false;
-        p.Move = Vector2.Zero;
-        p.ReloadUntil = 0;
-        Note($"{p.Name} 사망 · 증원 위치를 선택하세요");
     }
 
     public bool Visible(Vector2 point)
     {
-        if (Vector2.DistanceSquared(BattleMap.Camp, point) <= BattleMap.CampVision * BattleMap.CampVision && Map.LineOfSight(BattleMap.Camp, point)) return true;
-        return Players.Any(p => p.State == "alive" && Vector2.DistanceSquared(p.Position, point) <= Rules.Vision * Rules.Vision && Map.LineOfSight(p.Position, point));
+        if (Vector2.DistanceSquared(BattleMap.Camp, point) <= BattleMap.CampVision * BattleMap.CampVision && Map.LineOfSight(BattleMap.Camp, point))
+        {
+            return true;
+        }
+        for (int i = 0; i < Players.Count; i++)
+        {
+            Player player = Players[i];
+            if (player.State == "alive" && Vector2.DistanceSquared(player.Position, point) <= Rules.Vision * Rules.Vision &&
+                Map.LineOfSight(player.Position, point))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
-    public void Note(string text) { Notices.Add(new(Now, text)); if (Notices.Count > 6) Notices.RemoveAt(0); }
-    private void Effect(Vector2 at, string kind, double duration) => Effects.Add(new(++_nextId, at.X, at.Y, kind, Now + duration));
+    public void Note(string text)
+    {
+        Notices.Add(new Notice(Now, text));
+        if (Notices.Count > 6)
+        {
+            Notices.RemoveAt(0);
+        }
+    }
+
+    private void Effect(Vector2 at, string kind, double duration)
+    {
+        _nextId++;
+        Effects.Add(new Effect(_nextId, at.X, at.Y, kind, Now + duration));
+    }
 }

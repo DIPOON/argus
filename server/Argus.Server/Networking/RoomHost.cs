@@ -7,82 +7,191 @@ using Argus.Server.Game;
 
 namespace Argus.Server.Networking;
 
-public sealed class Peer(long connection)
+public sealed class Peer
 {
-    public long Connection { get; } = connection;
+    public long Connection { get; }
     public bool Replaced { get; set; }
-    public Channel<byte[]> Outgoing { get; } = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(2) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true, SingleWriter = false });
+    public Channel<byte[]> Outgoing { get; }
+
+    public Peer(long connection)
+    {
+        Connection = connection;
+        BoundedChannelOptions options = new BoundedChannelOptions(2);
+        options.FullMode = BoundedChannelFullMode.DropOldest;
+        options.SingleReader = true;
+        options.SingleWriter = false;
+        Outgoing = Channel.CreateBounded<byte[]>(options);
+    }
 }
 
-public sealed class Room(string code)
+public sealed class Room
 {
-    public object Gate { get; } = new();
-    public Match Match { get; } = new(code);
-    public Dictionary<string, Player> Tokens { get; } = [];
-    public Dictionary<string, Peer> Peers { get; } = [];
+    public object Gate { get; } = new object();
+    public Match Match { get; }
+    public Dictionary<string, Player> Tokens { get; } = new Dictionary<string, Player>();
+    public Dictionary<string, Peer> Peers { get; } = new Dictionary<string, Peer>();
     public DateTime LastVisit { get; set; } = DateTime.UtcNow;
+
+    public Room(string code)
+    {
+        Match = new Match(code);
+    }
 }
 
-public sealed record Guest(string Room, string Id, string Token);
-public sealed record EntryRequest(string? Name, string? Passive);
-
-public sealed class RoomHost(ILogger<RoomHost> logger) : BackgroundService
+public sealed class Guest
 {
-    public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
-    private readonly ConcurrentDictionary<string, Room> _rooms = new();
+    public string Room { get; }
+    public string Id { get; }
+    public string Token { get; }
+
+    public Guest(string room, string id, string token)
+    {
+        Room = room;
+        Id = id;
+        Token = token;
+    }
+}
+
+public sealed class EntryRequest
+{
+    public string? Name { get; }
+    public string[]? Slots { get; }
+
+    public EntryRequest(string? name, string[]? slots = null)
+    {
+        Name = name;
+        Slots = slots;
+    }
+
+    public bool Valid
+    {
+        get
+        {
+            return Slots == null || Rules.ValidSlots(Slots);
+        }
+    }
+}
+
+public sealed class RoomHost : BackgroundService
+{
+    public static readonly JsonSerializerOptions Json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+    private readonly ConcurrentDictionary<string, Room> _rooms = new ConcurrentDictionary<string, Room>();
+    private readonly ILogger<RoomHost> _logger;
     private long _connection;
+
+    public RoomHost(ILogger<RoomHost> logger)
+    {
+        _logger = logger;
+    }
 
     public Guest? Create(EntryRequest request)
     {
-        if (_rooms.Count >= 32) return null;
+        if (!request.Valid || _rooms.Count >= 32)
+        {
+            return null;
+        }
+
         Room room;
         do
         {
-            var bytes = RandomNumberGenerator.GetBytes(6);
+            byte[] bytes = RandomNumberGenerator.GetBytes(6);
             const string alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-            var code = new string(bytes.Select(b => alphabet[b % alphabet.Length]).ToArray());
-            room = new(code);
+            char[] letters = new char[bytes.Length];
+            for (int i = 0; i < bytes.Length; i++)
+            {
+                letters[i] = alphabet[bytes[i] % alphabet.Length];
+            }
+            string code = new string(letters);
+            room = new Room(code);
         } while (!_rooms.TryAdd(room.Match.Code, room));
+
         return Join(room.Match.Code, request);
     }
 
     public Guest? Join(string code, EntryRequest request)
     {
-        if (!_rooms.TryGetValue(code.ToUpperInvariant(), out var room)) return null;
+        if (!request.Valid || !_rooms.TryGetValue(code.ToUpperInvariant(), out Room? room))
+        {
+            return null;
+        }
+
+        // 같은 방의 접속 처리와 게임 진행이 동시에 상태를 바꾸지 않도록 잠근다.
         lock (room.Gate)
         {
-            var name = new string((request.Name ?? "대원").Trim().Where(c => !char.IsControl(c)).Take(16).ToArray());
-            if (name.Length == 0) name = "대원";
-            var player = room.Match.Join(Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant(), name);
-            if (player is null) return null;
-            if (request.Passive is "vitality" or "mobility") room.Match.SetLoadout(player, request.Passive);
-            var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
+            string name = CleanName(request.Name);
+            string id = Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant();
+            Player? player = room.Match.Join(id, name);
+            if (player == null)
+            {
+                return null;
+            }
+
+            if (request.Slots != null)
+            {
+                room.Match.SetLoadout(player, request.Slots);
+            }
+
+            string token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
             room.Tokens[token] = player;
-            // Abandoned HTTP joins reserve a slot only for the reconnect grace period.
+            // HTTP 참가 후 WebSocket으로 접속하지 않아도 복구 유예 시간이 지나면 자리를 비운다.
             player.DisconnectedAt = room.Match.Now;
             room.LastVisit = DateTime.UtcNow;
-            return new(room.Match.Code, player.Id, token);
+            return new Guest(room.Match.Code, player.Id, token);
         }
     }
 
+    private static string CleanName(string? requestedName)
+    {
+        if (requestedName == null)
+        {
+            return "대원";
+        }
+
+        string name = requestedName.Trim();
+        char[] letters = new char[16];
+        int length = 0;
+        for (int i = 0; i < name.Length && length < letters.Length; i++)
+        {
+            if (!char.IsControl(name[i]))
+            {
+                letters[length] = name[i];
+                length++;
+            }
+        }
+        if (length == 0)
+        {
+            return "대원";
+        }
+        return new string(letters, 0, length);
+    }
+
+    // 성공하면 방, 대원, 연결 정보를 묶어 반환한다. 실패하면 null을 반환한다.
     public (Room Room, Player Player, Peer Peer)? Attach(string code, string token)
     {
-        if (!_rooms.TryGetValue(code.ToUpperInvariant(), out var room)) return null;
+        if (!_rooms.TryGetValue(code.ToUpperInvariant(), out Room? room))
+        {
+            return null;
+        }
         lock (room.Gate)
         {
-            if (!room.Tokens.TryGetValue(token, out var player) || !room.Match.Players.Contains(player)) return null;
-            if (room.Peers.TryGetValue(player.Id, out var old))
+            if (!room.Tokens.TryGetValue(token, out Player? player) || !room.Match.Players.Contains(player))
+            {
+                return null;
+            }
+            if (room.Peers.TryGetValue(player.Id, out Peer? old))
             {
                 old.Replaced = true;
                 old.Outgoing.Writer.TryComplete();
             }
-            var peer = new Peer(Interlocked.Increment(ref _connection));
+
+            Peer peer = new Peer(Interlocked.Increment(ref _connection));
             room.Peers[player.Id] = peer;
             player.Connection = peer.Connection;
             player.Connected = true;
             player.DisconnectedAt = null;
             room.LastVisit = DateTime.UtcNow;
-            peer.Outgoing.Writer.TryWrite(JsonSerializer.SerializeToUtf8Bytes(Snapshot.Create(room.Match, player), Json));
+            byte[] snapshot = JsonSerializer.SerializeToUtf8Bytes(Snapshot.Create(room.Match, player), Json);
+            peer.Outgoing.Writer.TryWrite(snapshot);
             return (room, player, peer);
         }
     }
@@ -91,7 +200,10 @@ public sealed class RoomHost(ILogger<RoomHost> logger) : BackgroundService
     {
         lock (room.Gate)
         {
-            if (player.Connection != peer.Connection) return;
+            if (player.Connection != peer.Connection)
+            {
+                return;
+            }
             room.Peers.Remove(player.Id);
             room.Match.Disconnect(player);
             peer.Outgoing.Writer.TryComplete();
@@ -100,36 +212,78 @@ public sealed class RoomHost(ILogger<RoomHost> logger) : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(Rules.Step));
-        var watch = Stopwatch.StartNew();
-        var previous = watch.Elapsed.TotalSeconds;
-        var publishAt = 0d;
+        // await로 다음 틱을 기다리는 동안 스레드는 다른 작업에 사용될 수 있다.
+        using PeriodicTimer timer = new PeriodicTimer(TimeSpan.FromSeconds(Rules.Step));
+        Stopwatch watch = Stopwatch.StartNew();
+        double previous = watch.Elapsed.TotalSeconds;
+        double publishAt = 0;
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
-            var current = watch.Elapsed.TotalSeconds;
-            var delta = current - previous;
+            double current = watch.Elapsed.TotalSeconds;
+            double delta = current - previous;
             previous = current;
-            var publish = current >= publishAt;
-            if (publish) publishAt = current + .1;
-            foreach (var (code, room) in _rooms)
+            bool publish = current >= publishAt;
+            if (publish)
             {
+                publishAt = current + 0.1;
+            }
+
+            foreach (KeyValuePair<string, Room> entry in _rooms)
+            {
+                string code = entry.Key;
+                Room room = entry.Value;
                 try
                 {
                     lock (room.Gate)
                     {
                         room.Match.Step(delta);
-                        foreach (var token in room.Tokens.Where(x => !room.Match.Players.Contains(x.Value)).Select(x => x.Key).ToArray()) room.Tokens.Remove(token);
+                        RemoveExpiredTokens(room);
                         if (publish)
-                        foreach (var p in room.Match.Players)
                         {
-                            if (!room.Peers.TryGetValue(p.Id, out var peer)) continue;
-                            peer.Outgoing.Writer.TryWrite(JsonSerializer.SerializeToUtf8Bytes(Snapshot.Create(room.Match, p), Json));
+                            PublishSnapshots(room);
                         }
-                        if (room.Peers.Count == 0 && DateTime.UtcNow - room.LastVisit > TimeSpan.FromMinutes(15)) _rooms.TryRemove(code, out _);
+                        if (room.Peers.Count == 0 && DateTime.UtcNow - room.LastVisit > TimeSpan.FromMinutes(15))
+                        {
+                            _rooms.TryRemove(code, out _);
+                        }
                     }
                 }
-                catch (Exception error) { logger.LogError(error, "Room simulation failed: {Room}", code); }
+                catch (Exception error)
+                {
+                    _logger.LogError(error, "Room simulation failed: {Room}", code);
+                }
             }
+        }
+    }
+
+    private static void RemoveExpiredTokens(Room room)
+    {
+        // Dictionary를 순회하는 중에 지우지 않도록 삭제할 키를 먼저 모은다.
+        List<string> expired = new List<string>();
+        foreach (KeyValuePair<string, Player> entry in room.Tokens)
+        {
+            if (!room.Match.Players.Contains(entry.Value))
+            {
+                expired.Add(entry.Key);
+            }
+        }
+        for (int i = 0; i < expired.Count; i++)
+        {
+            room.Tokens.Remove(expired[i]);
+        }
+    }
+
+    private static void PublishSnapshots(Room room)
+    {
+        for (int i = 0; i < room.Match.Players.Count; i++)
+        {
+            Player player = room.Match.Players[i];
+            if (!room.Peers.TryGetValue(player.Id, out Peer? peer))
+            {
+                continue;
+            }
+            byte[] snapshot = JsonSerializer.SerializeToUtf8Bytes(Snapshot.Create(room.Match, player), Json);
+            peer.Outgoing.Writer.TryWrite(snapshot);
         }
     }
 }
