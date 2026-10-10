@@ -55,35 +55,19 @@ public sealed class Guest
 public sealed class EntryRequest
 {
     public string? Name { get; }
-    public string? Passive { get; }
-    public string? Weapon { get; }
-    public string? Secondary { get; }
+    public string[]? Slots { get; }
 
-    public EntryRequest(string? name, string? passive, string? weapon = null, string? secondary = null)
+    public EntryRequest(string? name, string[]? slots = null)
     {
         Name = name;
-        Passive = passive;
-        Weapon = weapon;
-        Secondary = secondary;
+        Slots = slots;
     }
 
     public bool Valid
     {
         get
         {
-            if (Passive != null && Passive != "vitality" && Passive != "mobility")
-            {
-                return false;
-            }
-            if (Weapon != null && !Rules.ValidWeapon(Weapon))
-            {
-                return false;
-            }
-            if (Secondary != null && !Rules.ValidSecondary(Secondary))
-            {
-                return false;
-            }
-            return true;
+            return Slots == null || Rules.ValidSlots(Slots);
         }
     }
 }
@@ -142,22 +126,10 @@ public sealed class RoomHost : BackgroundService
                 return null;
             }
 
-            string passive = "vitality";
-            if (request.Passive != null)
+            if (request.Slots != null)
             {
-                passive = request.Passive;
+                room.Match.SetLoadout(player, request.Slots);
             }
-            string weapon = "rifle";
-            if (request.Weapon != null)
-            {
-                weapon = request.Weapon;
-            }
-            string secondary = "grenade";
-            if (request.Secondary != null)
-            {
-                secondary = request.Secondary;
-            }
-            room.Match.SetLoadout(player, passive, weapon, secondary);
 
             string token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
             room.Tokens[token] = player;

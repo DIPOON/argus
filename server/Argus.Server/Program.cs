@@ -71,7 +71,7 @@ internal static class Program
 
     private static IResult Health()
     {
-        return Results.Ok(new { status = "ok", protocol = 1 });
+        return Results.Ok(new { status = "ok", protocol = 2 });
     }
 
     private static IResult CreateRoom(EntryRequest request, RoomHost host)
@@ -162,6 +162,14 @@ internal static class Program
                     {
                         await socket.CloseOutputAsync((WebSocketCloseStatus)4001,
                             "다른 연결로 교체됨", closeTimeout.Token);
+                        // 수신을 바로 취소하면 소켓이 중단되어 4001 대신 비정상 종료로 보일 수 있다.
+                        // 상대의 종료 응답까지 받은 뒤 송수신 작업을 정리한다.
+                        await receive.WaitAsync(closeTimeout.Token);
+                        if (socket.State == WebSocketState.CloseSent)
+                        {
+                            await socket.CloseAsync((WebSocketCloseStatus)4001,
+                                "다른 연결로 교체됨", closeTimeout.Token);
+                        }
                     }
                 }
                 catch (OperationCanceledException)
@@ -285,9 +293,14 @@ internal static class Program
                 {
                     if (root.TryGetProperty("seq", out JsonElement sequence) && sequence.TryGetInt64(out long seq))
                     {
-                        bool secondary = Flag(root, "secondary") || Flag(root, "grenade");
+                        int slot = 0;
+                        if (root.TryGetProperty("slot", out JsonElement requestedSlot) &&
+                            (requestedSlot.ValueKind != JsonValueKind.Number || !requestedSlot.TryGetInt32(out slot)))
+                        {
+                            continue;
+                        }
                         room.Match.Input(player, seq, Number(root, "moveX"), Number(root, "moveY"),
-                            Number(root, "aim"), Flag(root, "fire"), Flag(root, "reload"), secondary);
+                            Number(root, "aim"), slot);
                     }
                 }
                 else if (type == "deploy")
@@ -323,22 +336,20 @@ internal static class Program
 
     private static void SetLoadoutFromMessage(JsonElement root, Room room, Player player)
     {
-        string passive = player.Passive;
-        string weapon = player.Weapon;
-        string secondary = player.Secondary;
-        if (root.TryGetProperty("passive", out _))
+        if (!root.TryGetProperty("slots", out JsonElement slots) || slots.ValueKind != JsonValueKind.Array || slots.GetArrayLength() != 4)
         {
-            passive = Text(root, "passive");
+            return;
         }
-        if (root.TryGetProperty("weapon", out _))
+        string[] selected = new string[4];
+        for (int i = 0; i < selected.Length; i++)
         {
-            weapon = Text(root, "weapon");
+            if (slots[i].ValueKind != JsonValueKind.String)
+            {
+                return;
+            }
+            selected[i] = slots[i].GetString() ?? "";
         }
-        if (root.TryGetProperty("secondary", out _))
-        {
-            secondary = Text(root, "secondary");
-        }
-        room.Match.SetLoadout(player, passive, weapon, secondary);
+        room.Match.SetLoadout(player, selected);
     }
 
     private static async Task Send(WebSocket socket, Peer peer, CancellationToken token)
@@ -378,8 +389,4 @@ internal static class Program
         return fallback;
     }
 
-    private static bool Flag(JsonElement element, string name)
-    {
-        return element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.True;
-    }
 }

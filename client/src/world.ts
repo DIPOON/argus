@@ -1,7 +1,8 @@
 import { Application, Container, Graphics, Text } from 'pixi.js';
-import type { Control, Position, Snapshot } from './types';
+import { affinityNames, type Affinity, type CombatAction, type Control, type Position, type Snapshot } from './types';
 
 const colors = { floor: 0x141e20, lit: 0x253335, grid: 0x304044, wall: 0x657372, edge: 0x94a29a, lime: 0xdfff80, teal: 0x77cec2, red: 0xf28068, gold: 0xeabd73 };
+const affinityColors: Record<Affinity, number> = { strike: 0xf28068, block: 0x77cec2, channel: 0xc0a1f5, none: 0xeabd73 };
 const team = [colors.lime, colors.teal, 0xaeb5fa, 0xf2c981];
 const unitOutline = { color: 0x111a1a, width: 2.5 };
 
@@ -30,7 +31,7 @@ export class World {
   landing?: Position;
   fps = 60;
   shownEnemies = 0;
-  control: Control = { x: 0, y: 0, aim: 0, fire: false };
+  control: Control = { x: 0, y: 0, aim: 0, slot: 0 };
 
   async init(host: HTMLElement) {
     await this.app.init({
@@ -84,28 +85,62 @@ export class World {
     return true;
   }
 
-  private lineOfSight(from: Position, to: Position) {
-    const map = this.snapshot?.map;
-    if (!map) return false;
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
-    // 서버의 BattleMap.RayWall과 같은 간격으로 양 끝점을 포함해 벽을 검사한다.
-    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / 5));
-    for (let i = 0; i <= steps; i++) {
-      const fraction = i / steps;
-      const x = Math.floor((from.x + dx * fraction) / map.cell);
-      const y = Math.floor((from.y + dy * fraction) / map.cell);
-      if (x < 0 || y < 0 || x >= map.columns || y >= map.rows) return false;
-      if (this.tiles[y * map.columns + x] !== 0) return false;
+  private canMove(p: Position) {
+    const radius = this.snapshot?.rules.playerRadius ?? 13;
+    if (!this.canStand(p, radius)) return false;
+    // 공개된 적만 예측에 사용한다. 숨겨진 적과의 충돌은 서버 위치로 보정된다.
+    for (const enemy of this.snapshot?.enemies ?? []) {
+      if (enemy.hp > 0 && Math.hypot(p.x - enemy.x, p.y - enemy.y) < radius + enemy.radius) return false;
     }
     return true;
   }
 
   private move(p: Position, dx: number, dy: number): Position {
     const next = { ...p };
-    if (this.canStand({ x: p.x + dx, y: p.y }, 13)) next.x += dx;
-    if (this.canStand({ x: next.x, y: p.y + dy }, 13)) next.y += dy;
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / 4));
+    dx /= steps; dy /= steps;
+    for (let i = 0; i < steps; i++) {
+      if (this.canMove({ x: next.x + dx, y: next.y })) next.x += dx;
+      if (this.canMove({ x: next.x, y: next.y + dy })) next.y += dy;
+    }
     return next;
+  }
+
+  private drawAction(g: Graphics, p: Position, action: CombatAction, now: number, player: boolean) {
+    if (now >= action.endsAt || action.phase === 'interrupted') return;
+    let activeUntil = action.activeUntil;
+    let kind = action.kind;
+    const followup = player && action.skill === 'parry' && now >= activeUntil && now < activeUntil + this.snapshot!.rules.parryFollowupSeconds;
+    if (followup) { kind = 'none'; activeUntil += this.snapshot!.rules.parryFollowupSeconds; }
+    if (now >= activeUntil) return;
+    const color = affinityColors[kind];
+    const aim = action.aim;
+    const f = { x: Math.cos(aim), y: Math.sin(aim) };
+    if (player && action.skill === 'parry' && !followup) {
+      const half = this.snapshot!.rules.guardHalfAngle;
+      g.arc(p.x, p.y, 28, aim - half, aim + half).stroke({ color, width: 5 });
+      g.moveTo(p.x, p.y).lineTo(p.x + Math.cos(aim - half) * 28, p.y + Math.sin(aim - half) * 28)
+        .moveTo(p.x, p.y).lineTo(p.x + Math.cos(aim + half) * 28, p.y + Math.sin(aim + half) * 28).stroke({ color, width: 1, alpha: .4 });
+      return;
+    }
+    const width = action.halfWidth;
+    const end = { x: p.x + f.x * action.range, y: p.y + f.y * action.range };
+    const telegraph = now < action.contactAt;
+    g.poly([
+      p.x - f.y * width, p.y + f.x * width, end.x - f.y * width, end.y + f.x * width,
+      end.x + f.y * width, end.y - f.x * width, p.x + f.y * width, p.y - f.x * width,
+    ]).fill({ color, alpha: telegraph ? .08 : .28 }).stroke({ color, width: action.tier === 2 ? 3 : 1.5, alpha: .8 });
+    if (telegraph && !player) {
+      const fraction = Math.max(0, Math.min(1, (now - action.startedAt) / (action.contactAt - action.startedAt)));
+      const radius = 32;
+      g.arc(p.x, p.y, radius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * fraction).stroke({ color, width: 3 });
+    }
+    if (kind === 'channel') {
+      for (const sign of [-1, 1]) {
+        const x = end.x - f.y * width * sign, y = end.y + f.x * width * sign;
+        g.circle(x, y, 5).fill(color).stroke(unitOutline);
+      }
+    }
   }
 
   private drawMap() {
@@ -141,7 +176,7 @@ export class World {
 
   private removeUnusedLabels() {
     // 이번 프레임에 사용하지 않은 라벨은 맵과 Pixi 양쪽에서 제거한다.
-    // 포탑 교체·파괴와 방 전환으로 사라진 대원의 라벨도 함께 정리된다.
+    // 적의 사망·시야 이탈과 방 전환으로 사라진 라벨도 함께 정리된다.
     for (const [key, label] of this.labelsById) {
       if (label.visible) continue;
       this.labels.removeChild(label);
@@ -165,7 +200,7 @@ export class World {
     const elapsed = Math.min(.2, (performance.now() - this.received) / 1000);
     if (me) {
       let next = this.predicted ?? { x: me.x, y: me.y };
-      const speed = s.rules.speed * (me.passive === 'mobility' ? 1.22 : 1);
+      const speed = s.rules.speed;
       const active = me.state === 'alive' && s.phase === 'active' && performance.now() - this.received < 500;
       const dx = active ? this.control.x * speed : 0, dy = active ? this.control.y * speed : 0;
       next = this.move(next, dx * dt, dy * dt);
@@ -201,36 +236,11 @@ export class World {
       this.label(`facility-${f.id}`, f.hp > 0 ? `0${f.id} · 적 시설` : `0${f.id} · 파괴 완료`, f.x, f.y + 47, color, 14);
     }
     for (const supply of s.supplies) {
-      if (supply.collected || supply.cooldown > 0) continue;
-      const color = supply.objective ? colors.gold : colors.teal;
+      if (supply.collected) continue;
+      const color = supply.cooldown > 0 ? 0x829388 : supply.objective ? colors.gold : colors.teal;
       g.roundRect(supply.x - 12, supply.y - 12, 24, 24, 3).fill(0x1a2325).stroke({ color, width: 2 });
       g.moveTo(supply.x - 6, supply.y).lineTo(supply.x + 6, supply.y).moveTo(supply.x, supply.y - 6).lineTo(supply.x, supply.y + 6).stroke({ color, width: 2 });
-      this.label(`supply-${supply.id}`, supply.objective ? '보급품 회수' : '보급', supply.x, supply.y + 30, color, 12);
-    }
-    for (const turret of s.turrets) {
-      const owner = s.players.findIndex(p => p.id === turret.owner);
-      const color = team[Math.max(0, owner) % team.length];
-      const dx = Math.cos(turret.aim), dy = Math.sin(turret.aim);
-      g.poly([
-        turret.x + dx * 6 - dy * 4, turret.y + dy * 6 + dx * 4,
-        turret.x + dx * 24 - dy * 4, turret.y + dy * 24 + dx * 4,
-        turret.x + dx * 24 + dy * 4, turret.y + dy * 24 - dx * 4,
-        turret.x + dx * 6 + dy * 4, turret.y + dy * 6 - dx * 4,
-      ]).fill(color).stroke(unitOutline);
-      g.poly([turret.x - 14, turret.y - 7, turret.x, turret.y - 15, turret.x + 14, turret.y - 7,
-        turret.x + 14, turret.y + 7, turret.x, turret.y + 15, turret.x - 14, turret.y + 7]).fill(color).stroke(unitOutline);
-      g.rect(turret.x - 16, turret.y - 26, 32, 3).fill(0x172222)
-        .rect(turret.x - 16, turret.y - 26, 32 * turret.hp / turret.maxHp, 3).fill(color);
-      this.label(`turret-${turret.id}`, `T${owner + 1} · ${Math.ceil(turret.remaining)}s`, turret.x, turret.y + 30, color, 11);
-    }
-    if (me?.state === 'alive' && me.secondary === 'turret' && me.turretCooldown <= 0 && this.predicted && s.phase === 'active') {
-      const at = { x: this.predicted.x + Math.cos(this.control.aim) * s.rules.turretPlacement,
-        y: this.predicted.y + Math.sin(this.control.aim) * s.rules.turretPlacement };
-      const allowed = this.canStand(at, 14) && this.lineOfSight(this.predicted, at) &&
-        !s.turrets.some(t => t.owner !== me.id && Math.hypot(t.x - at.x, t.y - at.y) < 28);
-      const color = allowed ? colors.teal : colors.red;
-      g.rect(at.x - 14, at.y - 14, 28, 28).stroke({ color, width: 1.5, alpha: .7 });
-      this.label('turret-placement', allowed ? 'G' : '설치 불가', at.x, at.y + 28, color, 10);
+      this.label(`supply-${supply.id}`, supply.objective ? '보급품 회수' : supply.cooldown > 0 ? `보급 · ${Math.ceil(supply.cooldown)}s` : '체력 / 마나 보급', supply.x, supply.y + 30, color, 12);
     }
     const landing = me?.state === 'deploying' ? { x: me.landingX, y: me.landingY } : me?.state === 'waiting' ? this.landing : undefined;
     if (landing && s.phase !== 'ended') {
@@ -248,13 +258,35 @@ export class World {
       enemies = [...enemies].sort((a, b) => Math.hypot(a.x - at.x, a.y - at.y) - Math.hypot(b.x - at.x, b.y - at.y)).slice(0, this.renderBudget);
     }
     this.shownEnemies = enemies.length;
-    // Iterate the current visible set only: an enemy removed by server visibility never lingers in interpolation.
+    // 현재 공개된 적만 그린다. 시야에서 빠진 적과 기술 예고는 즉시 제거한다.
+    const now = s.now + elapsed;
     for (const enemy of enemies) {
       const p = interpolate(enemy, oldEnemies.get(enemy.id));
-      if (enemy.kind === 'ranged') {
-        u.poly([p.x, p.y - 14, p.x + 13, p.y, p.x, p.y + 14, p.x - 13, p.y]).fill(colors.gold).stroke(unitOutline);
+      const r = enemy.radius;
+      const action = enemy.action;
+      if (action) this.drawAction(u, p, action, now, false);
+      const color = enemy.kind === 'warden' ? colors.teal : enemy.kind === 'breaker' ? colors.red : 0xd2b49b;
+      if (enemy.kind === 'warden') {
+        u.poly([p.x, p.y - r, p.x + r, p.y - r * .4, p.x + r * .8, p.y + r * .7,
+          p.x, p.y + r, p.x - r * .8, p.y + r * .7, p.x - r, p.y - r * .4]).fill(color).stroke(unitOutline);
+        u.rect(p.x - 10, p.y - 10, 20, 20).stroke({ color: 0x172222, width: 3 });
+      } else if (enemy.kind === 'breaker') {
+        u.poly([p.x - r, p.y - r, p.x, p.y - r * .6, p.x + r, p.y - r,
+          p.x + r, p.y + r * .6, p.x, p.y + r, p.x - r, p.y + r * .6]).fill(color).stroke(unitOutline);
       } else {
-        u.rect(p.x - 12, p.y - 12, 24, 24).fill(colors.red).stroke(unitOutline);
+        u.circle(p.x, p.y, r).fill(color).stroke(unitOutline);
+      }
+      const aim = action?.aim ?? Math.atan2((me?.y ?? p.y) - p.y, (me?.x ?? p.x) - p.x);
+      u.circle(p.x + Math.cos(aim) * r * .7, p.y + Math.sin(aim) * r * .7, 3).fill(0x172222);
+      if (enemy.maxHp > 1) {
+        this.label(`enemy-type-${enemy.id}`, `${enemy.name} · 타${enemy.tiers[0]} 방${enemy.tiers[1]} 잡${enemy.tiers[2]}`, p.x, p.y + r + 17, color, 11);
+        for (let i = 0; i < enemy.maxHp; i++) {
+          u.rect(p.x - enemy.maxHp * 5 + i * 10, p.y - r - 10, 7, 4).fill(i < enemy.hp ? color : 0x394342);
+        }
+      }
+      if (action && now < action.activeUntil) {
+        const suffix = action.tier === 2 ? 'Ⅱ · 대응 2' : 'Ⅰ';
+        this.label(`enemy-action-${enemy.id}`, `${affinityNames[action.kind]} ${suffix}`, p.x, p.y - r - 26, affinityColors[action.kind], 13);
       }
     }
     s.players.forEach((player, index) => {
@@ -263,37 +295,25 @@ export class World {
       const p = isMe ? this.predicted! : interpolate(player, this.previous?.players.find(old => old.id === player.id));
       const color = team[index % team.length];
       const aim = isMe ? this.control.aim : player.aim;
-      const forward = { x: Math.cos(aim), y: Math.sin(aim) };
-      const barrelWidth = player.weapon === 'shotgun' ? 6 : player.weapon === 'piercer' ? 3 : 4;
-      const barrelLength = player.weapon === 'piercer' ? 30 : player.weapon === 'shotgun' ? 21 : 24;
-      const side = { x: -forward.y * barrelWidth, y: forward.x * barrelWidth };
-      // A flat disk and a short rectangular barrel keep direction readable with two simple shapes.
-      u.poly([
-        p.x + forward.x * 8 + side.x, p.y + forward.y * 8 + side.y,
-        p.x + forward.x * barrelLength + side.x, p.y + forward.y * barrelLength + side.y,
-        p.x + forward.x * barrelLength - side.x, p.y + forward.y * barrelLength - side.y,
-        p.x + forward.x * 8 - side.x, p.y + forward.y * 8 - side.y,
-      ]).fill(color).stroke(unitOutline);
-      u.circle(p.x, p.y, 13).fill(color).stroke(unitOutline);
+      for (const action of player.actions) this.drawAction(u, p, { ...action, aim }, now, true);
+      // 면과 테두리, 두 손만으로 몸체와 방향을 표시한다.
+      for (const sign of [-1, 1]) {
+        const x = p.x + Math.cos(aim) * 16 - Math.sin(aim) * 8 * sign;
+        const y = p.y + Math.sin(aim) * 16 + Math.cos(aim) * 8 * sign;
+        u.circle(x, y, 5).fill(color).stroke(unitOutline);
+      }
+      u.circle(p.x, p.y, s.rules.playerRadius).fill(color).stroke(unitOutline);
       u.rect(p.x - 16, p.y - 24, 32, 3).fill(0x172222).rect(p.x - 16, p.y - 24, 32 * player.hp / player.maxHp, 3).fill(color);
-      this.label(`player-${player.id}`, `${isMe ? '▼ ' : ''}${player.name}${player.connected ? '' : ' · 연결 끊김'}`, p.x, p.y - 40, color, 13);
+      this.label(`player-${player.id}`, `${isMe ? '▼ ' : ''}${player.name}${player.connected ? '' : ' · 연결 끊김'}`, p.x, p.y - 42, color, 13);
     });
-    for (const b of s.bullets) {
-      const p = interpolate(b, this.previous?.bullets.find(old => old.id === b.id));
-      const length = Math.hypot(b.vx, b.vy) || 1;
-      const trail = b.kind === 'piercer' ? 28 : b.kind === 'shotgun' ? 9 : 15;
-      const color = b.hostile ? colors.red : b.kind === 'piercer' ? 0xaeb5fa : b.kind === 'shotgun' ? colors.gold : b.kind === 'turret' ? colors.teal : colors.lime;
-      u.moveTo(p.x - b.vx / length * trail, p.y - b.vy / length * trail).lineTo(p.x, p.y)
-        .stroke({ color, width: b.kind === 'piercer' ? 4 : b.kind === 'shotgun' ? 2 : 3, cap: 'round' });
-    }
-    for (const g of s.grenades) u.circle(g.x, g.y, 6).fill(colors.gold).stroke({ color: 0xffffff, width: 1 });
     for (const effect of s.effects) {
       const remain = Math.max(0, effect.until - (s.now + elapsed));
       if (!remain) continue;
-      const big = effect.kind === 'explosion';
-      const radius = big ? (1 - remain / .8) * 140 + 10 : (1 - remain / .6) * 30 + 2;
-      const color = effect.kind === 'heal' || effect.kind === 'deploy' ? colors.teal : colors.gold;
-      u.circle(effect.x, effect.y, Math.max(2, radius)).fill({ color, alpha: remain * .15 }).stroke({ color, alpha: Math.min(1, remain * 2), width: big ? 3 : 2 });
+      const text: Record<string, string> = { break: '완전 파훼', partial: '부분 대응', draw: '비김', guard: '방어', hit: '−1', hurt: '피격', heal: '보급 완료', deploy: '투입' };
+      const color = effect.kind === 'break' ? colors.lime : effect.kind === 'hurt' || effect.kind === 'draw' ? colors.red : effect.kind === 'partial' ? colors.gold : colors.teal;
+      u.circle(effect.x, effect.y, Math.max(3, 30 * (1 - remain / .65))).stroke({ color, alpha: Math.min(1, remain * 2), width: 2 });
+      this.label(`effect-${effect.id}`, text[effect.kind] ?? '', effect.x, effect.y - 48 - (1 - remain / .65) * 15, color, 13);
+
     }
     this.removeUnusedLabels();
   }

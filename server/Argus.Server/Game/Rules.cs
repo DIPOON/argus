@@ -1,64 +1,63 @@
 namespace Argus.Server.Game;
 
-// 밸런스 조정용 수치다. 게임 판정과 진행 규칙은 서버가 결정한다.
+// 플레이 시험을 위한 초기 수치다. 확정한 판정 규칙은 docs/combat.md에 기록한다.
 public sealed class Rules
 {
     public const double Step = 1.0 / 30;
     public const int MaxPlayers = 4;
+    public const float PlayerRadius = 13;
     public double DeploySeconds { get; init; } = 5;
-    public double ReloadSeconds { get; init; } = 2;
     public double PulseSeconds { get; init; } = 600;
+    public double PulseDamage { get; init; } = 2;
     public double ExtractionSeconds { get; init; } = 20;
     public double ReconnectSeconds { get; init; } = 120;
-    public double SpawnInterval { get; init; } = 3.2;
-    public int MaxEnemies { get; init; } = 180;
-    public int Magazine { get; init; } = 30;
-    public int Grenades { get; init; } = 3;
+    public double SpawnInterval { get; init; } = 7;
+    public int MaxEnemies { get; init; } = 60;
+    // 첫 작전에서는 기본 상성을 익히도록 일반 적만 내보내고 준비 시간을 늘린다.
+    public bool AllowEliteEnemies { get; init; } = false;
+    public double EnemyWindupMultiplier { get; init; } = 2;
     public double PlayerSpeed { get; init; } = 180;
+    public double PlayerHealth { get; init; } = 6;
+    public int MaxMana { get; init; } = 24;
     public double Vision { get; init; } = 410;
-    public double ShotInterval { get; init; } = 0.14;
-    public double BulletSpeed { get; init; } = 1050;
-    public double RifleDamage { get; init; } = 24;
-    public double GrenadeDamage { get; init; } = 150;
-    public double GrenadeRadius { get; init; } = 155;
-    public double TurretCooldown { get; init; } = 20;
-    public double TurretLifetime { get; init; } = 45;
-    public double TurretHealth { get; init; } = 100;
-    public double TurretRange { get; init; } = 360;
-    public double TurretDamage { get; init; } = 16;
-    public double TurretShotInterval { get; init; } = 0.25;
-    public const float TurretPlacementDistance = 44;
+    public double SupplyCooldown { get; init; } = 18;
+    public double GuardHalfAngle { get; init; } = Math.PI / 3;
 
-    private static readonly WeaponDefinition Shotgun =
-        new WeaponDefinition(6, 2.6, 0.75, 850, 12, 300, pellets: 7, spread: 0.42);
-    private static readonly WeaponDefinition Piercer =
-        new WeaponDefinition(8, 2.8, 0.7, 1400, 60, 1155, enemyHits: 3);
+    public SkillDefinition Strike { get; } =
+        new SkillDefinition("strike", "strike", 1, 0.18, 0.42, 0.66, 54, 10);
+    public SkillDefinition Parry { get; } =
+        new SkillDefinition("parry", "block", 1, 0, 0.55, 0.98, 54, 10);
+    public SkillDefinition Grab { get; } =
+        new SkillDefinition("grab", "channel", 1, 0.12, 0.65, 0.85, 48, 8);
+    public double ParryFollowupSeconds { get; init; } = 0.18;
 
-    public static bool ValidWeapon(string weapon)
+    public SkillDefinition Skill(string id)
     {
-        return weapon == "rifle" || weapon == "shotgun" || weapon == "piercer";
+        if (id == "strike")
+        {
+            return Strike;
+        }
+        if (id == "parry")
+        {
+            return Parry;
+        }
+        if (id == "grab")
+        {
+            return Grab;
+        }
+        throw new ArgumentOutOfRangeException(nameof(id));
     }
 
-    public static bool ValidSecondary(string secondary)
+    public static bool ValidSlots(string[]? slots)
     {
-        return secondary == "grenade" || secondary == "turret";
-    }
-
-    public WeaponDefinition Weapon(string weapon)
-    {
-        if (weapon == "rifle")
+        if (slots == null || slots.Length != 4)
         {
-            return new WeaponDefinition(Magazine, ReloadSeconds, ShotInterval,
-                BulletSpeed, RifleDamage, BulletSpeed * 1.1);
+            return false;
         }
-        if (weapon == "shotgun")
+        if (slots[0] != "strike" || slots[1] != "parry" || slots[2] != "grab")
         {
-            return Shotgun;
+            return false;
         }
-        if (weapon == "piercer")
-        {
-            return Piercer;
-        }
-        throw new ArgumentOutOfRangeException(nameof(weapon));
+        return slots[3] == "strike" || slots[3] == "parry" || slots[3] == "grab";
     }
 }

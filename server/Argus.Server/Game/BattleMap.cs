@@ -85,7 +85,7 @@ public sealed class BattleMap
         Tiles[index] = kind;
         if (kind == 1)
         {
-            _hp[index] = 100;
+            _hp[index] = 3;
         }
         else
         {
@@ -181,25 +181,86 @@ public sealed class BattleMap
 
     public WallHit RayWall(Vector2 from, Vector2 to)
     {
-        Vector2 delta = to - from;
-        int steps = Math.Max(1, (int)Math.Ceiling(delta.Length() / 5));
-        for (int i = 0; i <= steps; i++)
+        // 타일 경계를 순서대로 지난다. 일정 간격 샘플링은 모서리를 조금 스친 벽을 놓칠 수 있다.
+        int x = (int)Math.Floor(from.X / Cell);
+        int y = (int)Math.Floor(from.Y / Cell);
+        if (Solid(x, y))
         {
-            double fraction = (double)i / steps;
-            Vector2 position = from + delta * (float)fraction;
-            int x = (int)Math.Floor(position.X / Cell);
-            int y = (int)Math.Floor(position.Y / Cell);
+            return TileHit(0, x, y);
+        }
+        double dx = to.X - from.X;
+        double dy = to.Y - from.Y;
+        int stepX = Math.Sign(dx);
+        int stepY = Math.Sign(dy);
+        double nextX = double.PositiveInfinity;
+        double nextY = double.PositiveInfinity;
+        double deltaX = double.PositiveInfinity;
+        double deltaY = double.PositiveInfinity;
+        if (dx != 0)
+        {
+            double boundary = x * Cell;
+            if (dx > 0)
+            {
+                boundary += Cell;
+            }
+            nextX = (boundary - from.X) / dx;
+            deltaX = Cell / Math.Abs(dx);
+        }
+        if (dy != 0)
+        {
+            double boundary = y * Cell;
+            if (dy > 0)
+            {
+                boundary += Cell;
+            }
+            nextY = (boundary - from.Y) / dy;
+            deltaY = Cell / Math.Abs(dy);
+        }
+        while (Math.Min(nextX, nextY) <= 1)
+        {
+            double fraction = Math.Min(nextX, nextY);
+            if (Math.Abs(nextX - nextY) < 0.000000001)
+            {
+                // 정확한 꼭짓점 통과도 양옆 타일을 확인한다.
+                if (Solid(x + stepX, y))
+                {
+                    return TileHit(fraction, x + stepX, y);
+                }
+                if (Solid(x, y + stepY))
+                {
+                    return TileHit(fraction, x, y + stepY);
+                }
+                x += stepX;
+                y += stepY;
+                nextX += deltaX;
+                nextY += deltaY;
+            }
+            else if (nextX < nextY)
+            {
+                x += stepX;
+                nextX += deltaX;
+            }
+            else
+            {
+                y += stepY;
+                nextY += deltaY;
+            }
             if (Solid(x, y))
             {
-                int tile = -1;
-                if (x >= 0 && y >= 0 && x < Columns && y < Rows)
-                {
-                    tile = y * Columns + x;
-                }
-                return new WallHit(fraction, tile);
+                return TileHit(fraction, x, y);
             }
         }
         return new WallHit(double.PositiveInfinity, -1);
+    }
+
+    private static WallHit TileHit(double fraction, int x, int y)
+    {
+        int tile = -1;
+        if (x >= 0 && y >= 0 && x < Columns && y < Rows)
+        {
+            tile = y * Columns + x;
+        }
+        return new WallHit(fraction, tile);
     }
 
     public bool LineOfSight(Vector2 from, Vector2 to)
