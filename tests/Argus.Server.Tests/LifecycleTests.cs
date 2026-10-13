@@ -27,6 +27,8 @@ internal static class LifecycleTests
         tests.Add(new TestCase("A room with nobody left is released soon instead of holding a slot for fifteen minutes", EmptyRoomExpiry));
         tests.Add(new TestCase("Hidden spawns do not advance the id sequence that player actions reveal", HiddenIdGaps));
         tests.Add(new TestCase("Walls, rules and map are resent until delivered and walls again after they change", StaticParts));
+        tests.Add(new TestCase("Tokens of removed players are cleaned when a room steps", TokenCleanup));
+        tests.Add(new TestCase("A room whose simulation keeps throwing is closed instead of holding its slot", FailingRoom));
     }
 
     private static void Deployment()
@@ -402,6 +404,41 @@ internal static class LifecycleTests
         }
         OutgoingMessage changed = Next(peer);
         Check(Carries(changed, "walls") && !Carries(changed, "rules"), "바뀐 벽을 다시 보내지 않았습니다");
+    }
+
+    private static void TokenCleanup()
+    {
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        Guest owner = host.Create(new EntryRequest("owner"))!;
+        (Room room, Player player, Peer peer) = host.Attach(owner.Room, owner.Token)!.Value;
+        host.Join(owner.Room, new EntryRequest("squatter"));
+        Equal(room.Tokens.Count, 2);
+        // 접속하지 않은 자리가 풀린 뒤 방을 한 틱 진행하면 그 자리의 토큰도 정리된다.
+        Advance(room.Match, room.Match.Rules.FirstConnectSeconds + 0.1);
+        host.StepRoom(room.Match.Code, room, Rules.Step, false);
+        Equal(room.Tokens.Count, room.Match.Players.Count);
+        Equal(room.Tokens.Count, 1);
+    }
+
+    private static void FailingRoom()
+    {
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        Guest guest = host.Create(new EntryRequest("pilot"))!;
+        (Room room, Player player, Peer peer) = host.Attach(guest.Room, guest.Token)!.Value;
+        Check(room.Match.Deploy(player, BattleMap.Camp.X, BattleMap.Camp.Y));
+        Advance(room.Match, room.Match.Rules.DeploySeconds + 0.1);
+        room.Match.Enemies.Clear();
+        // 행동 목록이 빈 적이 대원 곁에 있다. 행동을 고를 때마다 예외가 나므로 매 틱 진행이 실패한다.
+        EnemyDefinition broken = new EnemyDefinition("broken", "고장", 13, 1, 0, new EnemySkill[0]);
+        room.Match.Enemies.Add(new Enemy(30040, player.Position + new Vector2(40, 0), broken));
+        for (int tick = 0; tick < 60; tick++)
+        {
+            host.StepRoom(room.Match.Code, room, Rules.Step, false);
+        }
+        // 고칠 수 없는 방은 닫는다. 남겨 두면 32개 자리 중 하나를 차지한 채 오류만 쌓인다.
+        Check(host.Join(guest.Room, new EntryRequest("late")) == null, "계속 실패하는 방이 남아 있습니다");
+        // 연결도 닫아 클라이언트가 멈춘 방에 붙어 있지 않게 한다.
+        Check(!peer.Outgoing.Writer.TryWrite(new OutgoingMessage(new byte[0], -1, false)), "닫힌 방의 연결이 열려 있습니다");
     }
 
     private static void BlockedDeployment()

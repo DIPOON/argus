@@ -10,6 +10,8 @@ internal static class EncounterTests
         tests.Add(new TestCase("AI telegraphs and actual hits both wait for the longer mission windup", LongerWindup));
         tests.Add(new TestCase("Reinforcements never appear inside the squad's shared sight", HiddenSpawns));
         tests.Add(new TestCase("An enemy whose body clips a wall corner on an open sight line still reaches the player", CornerSlip));
+        tests.Add(new TestCase("The flow field has no heading inside its own source cell", FlowSource));
+        tests.Add(new TestCase("An enemy touching a wall walks straight along it instead of zigzagging", WallHug));
     }
 
     private static void FirstMission()
@@ -135,6 +137,34 @@ internal static class EncounterTests
         f.Match.Enemies.Add(enemy);
         Advance(f.Match, 2);
         Check(enemy.Position.X > 1560, "모서리에 걸려 멈췄습니다");
+    }
+
+    private static void FlowSource()
+    {
+        // 대원은 캠프에 있고 흐름장도 캠프 칸을 출발점(비용 0)으로 만들어졌다.
+        Fixture f = new Fixture();
+        // 출발점 칸 안에서는 더 나은 이웃이 없다. 이웃 칸(비용 1)으로 향하면 대원에게서 멀어진다.
+        Vector2 inside = f.Match.FlowHeading(BattleMap.Camp);
+        Check(inside.LengthSquared() < 0.001f, "출발점 칸 안에서 이웃 칸으로 향합니다");
+        // 옆 칸에서는 출발점 칸 쪽을 가리킨다.
+        Vector2 beside = f.Match.FlowHeading(BattleMap.Camp + new Vector2(BattleMap.Cell, 0));
+        Check(beside.X < 0, "옆 칸에서 출발점 쪽을 가리키지 않습니다");
+    }
+
+    private static void WallHug()
+    {
+        Fixture f = new Fixture();
+        f.Player.Hp = 1000;
+        // 벽 타일 (32,10)–(32,11)의 왼쪽 면은 x = 1536이다. 반지름 13인 적이 면에 딱 붙어 아래로 내려간다.
+        Vector2 start = new Vector2(1523, 470);
+        f.Player.Position = new Vector2(1523, 650);
+        Enemy enemy = new Enemy(30030, start, EnemyDefinition.Grunt);
+        enemy.NextActionAt = double.MaxValue;
+        f.Match.Enemies.Add(enemy);
+        Advance(f.Match, 1);
+        Check(enemy.Position.Y > start.Y + 60, "아래로 내려가지 않았습니다");
+        // 몸이 지나갈 수 있는 직선이므로 옆으로 흔들리지 않아야 한다.
+        Check(Math.Abs(enemy.Position.X - start.X) < 1, "벽에 붙은 적이 직진하지 않고 옆으로 흔들립니다");
     }
 
     private static void LongerWindup()

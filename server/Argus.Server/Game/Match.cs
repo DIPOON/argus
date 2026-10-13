@@ -22,6 +22,8 @@ public sealed partial class Match
     public string? Result { get; private set; }
     public double ExtractionProgress { get; private set; }
     public int Pulse { get; private set; }
+    // 대원이 방에서 빠질 때마다 늘어난다. 방 관리 쪽이 토큰 정리가 필요한지 알 때 쓴다.
+    public int Departures { get; private set; }
     private readonly Random? _random;
     private double _nextSpawn = 10;
     private int _nextId = 100;
@@ -301,6 +303,7 @@ public sealed partial class Match
             }
             Note(notice);
             Players.RemoveAt(i);
+            Departures++;
             for (int j = 0; j < Supplies.Count; j++)
             {
                 Supplies[j].ReadyAt.Remove(player.Id);

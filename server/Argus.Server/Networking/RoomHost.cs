@@ -81,6 +81,10 @@ public sealed class Room
     public Dictionary<string, Player> Tokens { get; } = new Dictionary<string, Player>();
     public Dictionary<string, Peer> Peers { get; } = new Dictionary<string, Peer>();
     public DateTime LastVisit { get; set; } = DateTime.UtcNow;
+    // 토큰을 마지막으로 정리했을 때의 Match.Departures 값이다.
+    public int SeenDepartures { get; set; }
+    // 진행에 연속해서 실패한 횟수다.
+    public int Failures { get; set; }
 
     public Room(string code)
     {
@@ -150,6 +154,8 @@ public sealed class RoomHost : BackgroundService
     private long _connection;
     // 한 틱에 진행하는 시간의 상한이다. 서버가 오래 멈췄다 깨어나도 이보다 많이 따라잡지 않는다.
     private const double MaxTickSeconds = 0.25;
+    // 연속해서 이만큼 진행에 실패한 방은 닫는다. 30번이면 약 1초다.
+    private const int MaxRoomFailures = 30;
     // 방 수 확인과 추가가 따로 일어나면 동시 요청으로 상한을 넘을 수 있으므로 함께 잠근다.
     private readonly object _createGate = new object();
 
@@ -361,27 +367,58 @@ public sealed class RoomHost : BackgroundService
         }
     }
 
-    private void StepRoom(string code, Room room, double delta, bool publish)
+    // 방 하나를 한 틱 진행한다. 타이머 반복문이 부르며, 검사에서도 직접 부른다.
+    public void StepRoom(string code, Room room, double delta, bool publish)
     {
-        try
+        lock (room.Gate)
         {
-            lock (room.Gate)
+            try
             {
                 room.Match.Step(delta);
-                RemoveExpiredTokens(room);
+                // 대원이 실제로 빠졌을 때만 토큰을 정리한다. 매 틱 모든 방을 훑을 필요가 없다.
+                if (room.Match.Departures != room.SeenDepartures)
+                {
+                    RemoveExpiredTokens(room);
+                    room.SeenDepartures = room.Match.Departures;
+                }
                 if (publish)
                 {
                     PublishSnapshots(room);
                 }
-                if (room.Expired(DateTime.UtcNow))
+                room.Failures = 0;
+            }
+            catch (Exception error)
+            {
+                room.Failures++;
+                // 같은 오류가 틱마다 반복되므로 연속 실패의 첫 번째만 기록한다.
+                if (room.Failures == 1)
                 {
-                    _rooms.TryRemove(code, out _);
+                    _logger.LogError(error, "Room simulation failed: {Room}", code);
                 }
             }
+            // 진행에 계속 실패하는 방은 고칠 수 없으므로 닫는다. 남겨 두면 자리를 차지한 채 오류만 쌓인다.
+            if (room.Failures >= MaxRoomFailures)
+            {
+                _logger.LogError("Closing room after repeated simulation failures: {Room}", code);
+                CloseRoom(code, room);
+                return;
+            }
+            // 진행에 실패한 틱에도 만료 검사는 한다.
+            if (room.Expired(DateTime.UtcNow))
+            {
+                _rooms.TryRemove(code, out _);
+            }
         }
-        catch (Exception error)
+    }
+
+    // 방을 목록에서 지우고 연결을 닫는다. 보낼 통로를 닫으면 Send가 끝나고 연결 처리가 소켓을 닫는다.
+    // 방 잠금 안에서 불러야 한다.
+    private void CloseRoom(string code, Room room)
+    {
+        _rooms.TryRemove(code, out _);
+        foreach (KeyValuePair<string, Peer> entry in room.Peers)
         {
-            _logger.LogError(error, "Room simulation failed: {Room}", code);
+            entry.Value.Outgoing.Writer.TryComplete();
         }
     }
 

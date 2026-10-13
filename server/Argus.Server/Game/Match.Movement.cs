@@ -176,11 +176,17 @@ public sealed partial class Match
     }
 
     // 흐름장에서 다음으로 갈 방향을 찾는다. 갈 곳이 없으면 0 벡터를 돌려준다.
-    private Vector2 FlowHeading(Enemy enemy)
+    // 흐름장에서 다음으로 갈 방향을 찾는다. 자기 칸보다 비용이 낮은 이웃이 없으면(대원이 있는 출발점 칸)
+    // 0 벡터를 돌려주어 부르는 쪽이 대원에게 직진하게 한다. 이웃 칸(비용 1)으로 향하면 오히려 멀어진다.
+    public Vector2 FlowHeading(Vector2 position)
     {
-        int x = (int)(enemy.Position.X / BattleMap.Cell);
-        int y = (int)(enemy.Position.Y / BattleMap.Cell);
+        int x = (int)(position.X / BattleMap.Cell);
+        int y = (int)(position.Y / BattleMap.Cell);
         int best = int.MaxValue;
+        if (!Map.Solid(x, y))
+        {
+            best = _flow[y * BattleMap.Columns + x];
+        }
         Vector2 heading = Vector2.Zero;
         for (int direction = 0; direction < 4; direction++)
         {
@@ -194,7 +200,7 @@ public sealed partial class Match
             if (cost < best)
             {
                 best = cost;
-                heading = new Vector2((nx + 0.5f) * BattleMap.Cell, (ny + 0.5f) * BattleMap.Cell) - enemy.Position;
+                heading = new Vector2((nx + 0.5f) * BattleMap.Cell, (ny + 0.5f) * BattleMap.Cell) - position;
             }
         }
         return heading;
@@ -210,7 +216,8 @@ public sealed partial class Match
         {
             return true;
         }
-        Vector2 normal = Vector2.Normalize(new Vector2(-direction.Y, direction.X)) * enemy.Definition.Radius;
+        // 옆선 간격을 반지름보다 조금 줄인다. 벽에 딱 붙은 적은 옆선이 벽 면 위에서 시작해 거리 0에서 막혔다고 나오기 때문이다.
+        Vector2 normal = Vector2.Normalize(new Vector2(-direction.Y, direction.X)) * (enemy.Definition.Radius - 0.5f);
         if (!Map.LineOfSight(enemy.Position + normal, target + normal))
         {
             return false;
@@ -291,7 +298,7 @@ public sealed partial class Match
             Vector2 heading = direct;
             if (!sight || !BodyCanPass(enemy, target.Position))
             {
-                Vector2 flow = FlowHeading(enemy);
+                Vector2 flow = FlowHeading(enemy.Position);
                 if (flow.LengthSquared() > 0.001f)
                 {
                     heading = flow;
