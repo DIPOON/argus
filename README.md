@@ -4,7 +4,7 @@ PC 브라우저에서 플레이하는 1–4인 협동 PvE. C# 서버가 이동·
 
 ## 실행
 
-.NET 10 SDK와 Node.js 22.12 이상이 필요하다. Linux/WSL에서도 실행할 수 있다. 저장소 루트에서:
+.NET 10 SDK와 Node.js 24 이상이 필요하다. Linux/WSL에서도 실행할 수 있다. 저장소 루트에서:
 
 ```bash
 npm --prefix client ci
