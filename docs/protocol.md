@@ -1,10 +1,14 @@
-# Argus protocol v2
+# Argus protocol v3
 
 2026-10-09. JSON over HTTP + WebSocket, UTF-8. 좌표 단위는 월드 단위, 시간은 서버 초, 각도는 라디안이다. 원점은 왼쪽 위다. X는 오른쪽, Y는 아래쪽이다.
 
-v1의 총기·탄창·재장전·보조 장비·패시브 필드를 제거하고 네 슬롯의 근접 기술과 마나로 전환했다. 서버와 클라이언트를 함께 갱신한다. `/health`의 `protocol`과 snapshot의 `version`은 2다.
+`/health`의 `protocol`과 snapshot의 `version`은 3이다.
 
-버전 정책: 하위 버전 호환은 유지하지 않는다. 프로토콜 버전이 올라가면 공식 클라이언트를 함께 갱신해 배포한다. 서드파티 클라이언트는 `/health`의 `protocol`과 스냅샷의 `version`을 확인하고, 지원 버전과 다르면 접속을 멈추고 갱신해야 한다. 현재 공식 클라이언트는 `version`이 2가 아니면 접속을 끊고 새로고침을 안내한다.
+v2 → v3(2026-10-14): `walls`는 수신자가 아직 받지 못한 판일 때만, `rules`와 `map`은 수신자가 아직 받지 못했을 때만 스냅샷에 담긴다. 빠진 값은 같은 방의 이전 스냅샷 값을 그대로 쓴다. `rules.skills`에 기술별 동작(`guardsFront`, `hasFollowup`, `singleTarget`, `breaksStructures`)이 추가되었고, 적 `id`는 무작위가 되었다.
+
+v1 → v2: 총기·탄창·재장전·보조 장비·패시브 필드를 제거하고 네 슬롯의 근접 기술과 마나로 전환했다.
+
+버전 정책: 하위 버전 호환은 유지하지 않는다. 프로토콜 버전이 올라가면 공식 클라이언트를 함께 갱신해 배포한다. 서드파티 클라이언트는 `/health`의 `protocol`과 스냅샷의 `version`을 확인하고, 지원 버전과 다르면 접속을 멈추고 갱신해야 한다. 현재 공식 클라이언트는 `version`이 3이 아니면 접속을 끊고 새로고침을 안내한다.
 
 ## 참가와 복구
 
@@ -57,17 +61,19 @@ slots를 생략하면 `["strike","parry","grab","strike"]`. 길이는 정확히 
 
 ## 스냅샷
 
-연결 직후 한 번, 이후 약 10Hz로 전체 스냅샷을 전송한다. 느린 수신자에게 쌓인 오래된 스냅샷은 버린다.
+연결 직후 한 번, 이후 약 10Hz로 스냅샷을 전송한다. 느린 수신자에게 쌓인 오래된 스냅샷은 버린다.
+
+작전 중 바뀌지 않거나 드물게 바뀌는 `walls`, `rules`, `map`은 필요할 때만 담는다. 서버는 그 정보를 담은 스냅샷을 **실제로 보낸 뒤에야** 수신자가 받았다고 기록한다. 그래서 담긴 스냅샷이 느린 연결에서 버려져도 다음 스냅샷에 다시 담기고, 클라이언트가 처음 받는 스냅샷에는 세 값이 모두 있다. `mapRevision`은 매번 온다. 클라이언트는 이 값이 바뀌면 함께 온 `walls`로 벽을 갱신하고, 세 값이 빠진 스냅샷에서는 이전 값을 그대로 쓴다.
 
 | 필드 | 내용 |
 | --- | --- |
-| type, version, room, you | snapshot, 2, 방 코드, 수신자 공개 ID |
+| type, version, room, you | snapshot, 3, 방 코드, 수신자 공개 ID |
 | now, elapsed | 방 시간 / 첫 투입 이후 임무 시간. 임무 종료 후 elapsed 고정 |
 | phase, result | staging / active / ended, null / success / failure |
 | pulse, nextPulse | 전역 피해 회차 / 다음 피해까지 초 |
-| map | width, height, cell, columns, rows, campX, campY |
-| walls, mapRevision | 행 우선 byte 타일 배열의 Base64 / 파괴 버전. 0 빈 지면, 1 파괴 가능, 2 맵 경계 |
-| rules | deploy, speed, playerRadius, guardHalfAngle, parryFollowupSeconds, skills |
+| map | width, height, cell, columns, rows, campX, campY. 아직 받지 못했을 때만 온다 |
+| walls, mapRevision | 행 우선 byte 타일 배열의 Base64 / 파괴 버전. 0 빈 지면, 1 파괴 가능, 2 맵 경계. walls는 그 판을 아직 받지 못했을 때만 온다 |
+| rules | deploy, speed, playerRadius, guardHalfAngle, parryFollowupSeconds, skills. 아직 받지 못했을 때만 온다 |
 | sight | 팀 시야 다각형 배열. 다각형은 `[x0,y0,x1,y1,…]`이며 좌표는 정수다 |
 | players | 분대 전체 상태 |
 | enemies | 팀 시야에 실제 들어온 적과 기술 예고 |
@@ -77,7 +83,7 @@ slots를 생략하면 `["strike","parry","grab","strike"]`. 길이는 정확히 
 | extraction | x, y, progress, duration, unlocked |
 | notices | 최근 안내 최대 6개: at, text |
 
-`rules.skills`는 기본기별 `id, kind, mana, contactAfter, activeSeconds, duration, range, halfWidth`를 제공한다. kind는 strike / block / channel이다. 이 수치를 클라이언트가 돌려보내도 서버 설정을 바꾸지 않는다.
+`rules.skills`는 기본기별 `id, kind, mana, contactAfter, activeSeconds, duration, range, halfWidth, guardsFront, hasFollowup, singleTarget, breaksStructures`를 제공한다. kind는 strike / block / channel이다. 뒤의 네 값은 기술별 동작이다. `guardsFront`는 먼저 치지 않고 앞에서 들어오는 공격에만 반응함, `hasFollowup`은 유효 시간 뒤 상성 없는 반격, `singleTarget`은 가장 가까운 한 명만 판정, `breaksStructures`는 시설과 벽을 부숨을 뜻한다. 동작은 id가 아니라 이 값으로 정해진다. 이 수치를 클라이언트가 돌려보내도 서버 설정을 바꾸지 않는다.
 
 대원:
 

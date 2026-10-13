@@ -90,7 +90,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 | --- | --- |
 | `Game/Match.cs` | 참가·장비·투입·입력 검증, `Step`/`StepOnce` 진행 순서, 마나·보급·증원·전역 충격·임무 종료, `Visible` |
 | `Game/Match.Combat.cs` | 접촉 → 유효 대응 수집 → 완전 파훼 → 부분 대응·비김·패배 → 후속 반격, 시설·벽 파괴 |
-| `Game/Match.Movement.cs` | 몸 충돌, 적 생성, 흐름장(flow field) 경로, 적 이동과 예고 시작 |
+| `Game/Match.Movement.cs` | 몸 충돌, 적 생성, 흐름장(flow field) 경로, 적 조향과 예고 시작 |
 
 `Match.Step(dt)`은 받은 `dt`를 `Rules.Step` 이하 조각으로 **쪼개서** `StepOnce`를 반복 호출한다. 서버 틱이 늦어도 0.25초 적 공격 창이나 0.55초 방어 창, 몸 충돌을 통째로 건너뛰지 않기 위한 설계이며 `CombatTests`의 `LongStep`이 이를 검사한다. 판정을 추가할 때 이 가정을 깨지 않는다.
 
@@ -100,7 +100,9 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 
 주의할 구분: `Affinity.Beats`는 **기술 id가 아니라 `Kind`를 비교한다.** 플레이어 기술 id `strike`/`parry`/`grab`의 `Kind`는 각각 `strike`/`block`/`channel`이다. `parry`를 `"parry"`로 비교하면 조용히 틀린다.
 
-반대로 기술별 동작(방어 창, 후속 반격, 단일 대상 잡기, 시설·벽 파괴)은 `Skill.Id == "parry"`처럼 **기술 id 문자열**로 나뉜다. 같은 종류의 새 기술을 추가하면 이 비교를 모두 찾아 `SkillDefinition`의 속성으로 옮긴다. 그대로 두면 새 기술에서 방어·반격·시설 파괴가 조용히 빠진다.
+기술별 동작은 id가 아니라 `SkillDefinition`의 속성으로 판단한다. `GuardsFront`(먼저 치지 않고 전방 120°로 들어오는 공격에만 반응), `HasFollowup`(유효 시간 뒤 상성 없는 반격), `SingleTarget`(가장 가까운 한 명만 판정), `BreaksStructures`(시설·벽 파괴)다. **판정 코드에 `Skill.Id == "parry"` 같은 비교를 다시 넣지 않는다.** 새 기술은 속성만 정하면 같은 판정을 받는다. `CombatTests`의 `SkillFlags`가 id만 다른 기술로 네 동작을 모두 확인한다. 클라이언트도 `rules.skills`의 같은 속성으로 방어 호와 반격을 그린다.
+
+적은 조향 방식으로 움직인다. 움직이기 전에 방향을 한 번 정하고 `MoveBody`는 한 번만 부른다. 몸이 직선으로 지나갈 수 있으면 직진하고(`BodyCanPass`: 몸 중심선과 양옆 두 선이 모두 열려 있음), 아니면 흐름장을 따른다. 그 방향에 이웃 적과의 분리 방향(`Separation`)을 더한다. 막혔다고 다른 방향을 거듭 시도하지 않는다. `EncounterTests`의 `CornerSlip`이 사선은 열려 있지만 몸이 모서리에 걸리는 경우를 검사한다.
 
 - 일반 적(1티어): 승리 시 피해 없이 처치, 비김은 서로 피해 1, 패배는 플레이어만 피해 1. 무행동 적에게는 일반 피해 1.
 - 2티어 엘리트 행동은 동시에 유효한 대응 **두 개**가 필요하고 동료의 대응과 합산된다. 완전 파훼는 체력과 무관한 처치이며 같은 공격 범위의 무행동 동료까지 보호한다.
@@ -127,16 +129,16 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 
 ### 프로토콜
 
-통신 형식은 [docs/protocol.md](docs/protocol.md)의 protocol v2다. `/health`의 `protocol`과 스냅샷의 `version`이 모두 2다. `Game/Snapshot.cs`(공개 상태 선별)와 `Game/SnapshotMessage.cs`(전송 자료구조)가 서버 쪽이고, `client/src/types.ts`가 같은 모양을 TypeScript로 옮겨 둔 것이다.
+통신 형식은 [docs/protocol.md](docs/protocol.md)의 protocol v3다. `/health`의 `protocol`과 스냅샷의 `version`이 모두 3이다. `Game/Snapshot.cs`(공개 상태 선별)와 `Game/SnapshotMessage.cs`(전송 자료구조)가 서버 쪽이고, `client/src/types.ts`가 같은 모양을 TypeScript로 옮겨 둔 것이다.
 
-방송할 때 `RoomHost.PublishSnapshots`는 `Snapshot.CreateShared`로 팀 공통 부분(시야 계산 포함)을 한 번만 만들고, 수신자마다 `Snapshot.Personalize`로 `you`와 보급 `cooldown`만 덮어쓴 뒤 직렬화한다. **수신자별 값을 새로 추가하면 반드시 `Personalize`에서 매번 덮어쓴다.** 같은 메시지 객체를 다음 수신자에게 재사용하므로, 빠뜨리면 앞 수신자의 값이 그대로 전송된다. `LifecycleTests`의 `SharedSnapshot`이 이를 검사한다.
+방송할 때 `RoomHost.PublishSnapshots`는 `Snapshot.CreateShared`로 팀 공통 부분(시야 계산 포함)을 한 번만 만들고, 수신자마다 `Snapshot.Personalize`로 `you`, 보급 `cooldown`, 그리고 `walls`·`rules`·`map`을 담을지를 정한 뒤 직렬화한다. `walls`는 그 연결이 아직 받지 못한 판일 때만, `rules`·`map`은 아직 받지 못했을 때만 담는다. 받았는지는 **보낸 뒤에** `Peer.MarkSent`가 기록한다(`Program.Send`). 만들 때 기록하면, 느린 연결에서 그 스냅샷이 버려졌을 때 클라이언트가 바뀐 벽을 영영 받지 못한다. 클라이언트(`main.ts`)와 임무 검사 봇은 빠진 값을 같은 방의 이전 스냅샷에서 이어 쓴다. **수신자별 값을 새로 추가하면 반드시 `Personalize`에서 매번 덮어쓴다.** 같은 메시지 객체를 다음 수신자에게 재사용하므로, 빠뜨리면 앞 수신자의 값이 그대로 전송된다. `LifecycleTests`의 `SharedSnapshot`이 이를 검사한다.
 
-**전송 형식을 바꾸면 세 곳을 함께 갱신한다**: `SnapshotMessage.cs`, `client/src/types.ts`, `docs/protocol.md`. v1과는 호환되지 않으므로 서버와 브라우저 빌드를 같이 배포한다.
+**전송 형식을 바꾸면 세 곳을 함께 갱신한다**: `SnapshotMessage.cs`, `client/src/types.ts`, `docs/protocol.md`. 이전 버전과는 호환되지 않으므로 서버와 브라우저 빌드를 같이 배포한다. 통신 형식을 깨는 변경은 버전을 올린다.
 
 ### 클라이언트
 
 - `client/src/main.ts`: 로비, 방 생성·참가, 네 슬롯 입력, HUD, 재접속. 복구 토큰을 탭별 `sessionStorage`에 둔다.
-- `client/src/world.ts`: PixiJS 렌더링, 스냅샷 보간, 이동 예측과 서버 재조정. 하드웨어 WebGL이 없으면 Canvas 렌더러로 내려간다(Playwright는 `--disable-webgl`로 이 경로를 검사한다).
+- `client/src/world.ts`: PixiJS 렌더링, 스냅샷 보간, 이동 예측과 서버 재조정. 하드웨어 WebGL이 없으면 Canvas 렌더러로 내려간다(Playwright는 `--disable-webgl`로 이 경로를 검사한다). 라벨(`Text`)은 쓰지 않게 되면 숨겨 두었다가 다시 쓰고, 64개를 넘는 것만 해제한다. 매번 새로 만드는 비용이 Canvas에서 라벨 하나에 약 30µs였다.
 - 서버 재조정: `main.ts`의 `sendInput`이 실제로 보낸 입력만 `World.recordInput`으로 기록하고, `update`가 스냅샷의 `ack` 이하를 버린다. `draw`는 서버 위치 위에 남은 입력을 `replay`로 다시 적용한 곳을 보정 목표로 삼는다. **입력을 보내는 새 경로를 만들면 반드시 `sendInput`을 거친다.** 기록되지 않은 입력은 예측에서 빠져 화면이 서버와 어긋난다. 서버는 이 과정에 관여하지 않고, 클라이언트 시각은 화면 계산에만 쓴다.
 - 클라이언트는 모양·진행률·예고만 그린다. 판정 결과를 결정하지 않는다.
 
@@ -154,7 +156,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 | --- | --- |
 | [docs/requirements.md](docs/requirements.md) | 합의한 목표와 범위. 무엇을 넣지 않기로 했는지 포함 |
 | [docs/combat.md](docs/combat.md) | 확정된 전투 판정 규칙, 시험 수치, 아직 규칙이 아닌 임시 처리 |
-| [docs/protocol.md](docs/protocol.md) | protocol v2 통신 형식 |
+| [docs/protocol.md](docs/protocol.md) | protocol v3 통신 형식과 버전별 변경 |
 | [docs/verification.md](docs/verification.md) | 날짜별 검증 기록과 실제 확인한 범위 |
 
 `docs/combat.md`는 세 층으로 나뉜다. **합의한 규칙**은 바꾸기 전에 확인을 받고, **시험 설정**의 수치는 자유롭게 조정하며, **규칙으로 확정하지 않은 임시 처리**는 지금 적당히 맞춰 둔 동작이라 바꿔도 규칙 위반이 아니다. 어느 층에 해당하는지 먼저 판단한다. 게임 규칙을 바꾸면 해당 절을 함께 고친다. 검증을 수행했으면 `docs/verification.md`에 날짜와 확인 범위를 남긴다. 가독성 정리처럼 동작을 바꾸지 않아야 하는 작업에서는 게임 규칙과 통신 형식을 보존하고, 서버 검사와 브라우저 검사로 회귀가 없음을 확인한다.
