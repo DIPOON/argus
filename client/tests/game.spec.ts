@@ -95,6 +95,18 @@ test('all four input bindings use slots, consume mana on whiffs and keep the fre
     expect(me.player!.actions.at(-1)!.skill).toBe(skill);
     expect(me.player!.mana).toBe(mana - 1);
   }
+  // 키를 누른 채 창이 포커스를 잃었다가 돌아오면 그 키는 자동 반복(repeat)으로만 들어온다.
+  // 이때도 다시 누르지 않고 기술이 이어져야 한다.
+  await expect.poll(() => me.player?.busy).toBe(0);
+  const held = me.player!.mana;
+  await page.keyboard.down('Digit1');
+  await expect.poll(() => me.player?.mana).toBe(held - 1);
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await expect.poll(() => me.player?.busy).toBe(0);
+  // 이미 눌린 키를 다시 누르면 Playwright는 repeat=true로 보낸다.
+  await page.keyboard.down('Digit1');
+  await expect.poll(() => me.player?.mana).toBeLessThan(held - 1);
+  await page.keyboard.up('Digit1');
   const before = me.player!;
   await page.reload();
   await expect.poll(() => me.player?.id).toBe(before.id);

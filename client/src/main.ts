@@ -94,16 +94,45 @@ let lastNotice = '';
 let toastTimer = 0;
 const keys = new Set<string>();
 let mouse = { x: 0, y: 0, known: false };
+// 동시에 눌린 슬롯 중 가장 나중에 누른 것이 나가도록 누름 순서를 유지한다.
+const slotOrder: number[] = [];
+function slotHeld(slot: number) {
+  if (slot === 1) return mouseButtons.has(0) || keys.has('Digit1');
+  if (slot === 2) return mouseButtons.has(2) || keys.has('Digit2');
+  if (slot === 3) return keys.has('Space') || keys.has('Digit3');
+  return keys.has('KeyQ') || keys.has('Digit4');
+}
+function slotFromCode(code: string) {
+  if (code === 'Digit1') return 1;
+  if (code === 'Digit2') return 2;
+  if (code === 'Space' || code === 'Digit3') return 3;
+  if (code === 'KeyQ' || code === 'Digit4') return 4;
+  return 0;
+}
+function pressSlot(slot: number) {
+  const index = slotOrder.indexOf(slot);
+  if (index >= 0) slotOrder.splice(index, 1);
+  slotOrder.push(slot);
+}
 
 function me(): Player | undefined { return snapshot?.players.find(p => p.id === snapshot?.you); }
-function send(value: object) { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(value)); }
+function send(value: object) {
+  if (socket?.readyState !== WebSocket.OPEN) return false;
+  socket.send(JSON.stringify(value));
+  return true;
+}
+// 입력을 보내고, 서버가 확인할 때까지 화면 예측에 쓰도록 기록한다. 실제로 보낸 입력만 기록한다.
+function sendInput(x: number, y: number, aim: number, slot: number) {
+  const seq = sequence++;
+  if (send({ type: 'input', seq, moveX: x, moveY: y, aim, slot })) world?.recordInput(seq, x, y);
+}
 function status(text: string, connected = false) { $('connection').innerHTML = `<i class="${connected ? 'online' : ''}"></i> ${escape(text)}`; }
 function toast(text: string) {
   $('toast').textContent = text; $('toast').hidden = false;
   window.clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => { $('toast').hidden = true; }, 3500);
 }
-function clearInput() { keys.clear(); mouseButtons.clear(); if (world) world.control = { x: 0, y: 0, aim: world.control.aim, slot: 0 }; send({ type: 'input', seq: sequence++, moveX: 0, moveY: 0, aim: world?.control.aim ?? 0, slot: 0 }); }
+function clearInput() { keys.clear(); mouseButtons.clear(); slotOrder.length = 0; if (world) world.control = { x: 0, y: 0, aim: world.control.aim, slot: 0 }; sendInput(0, 0, world?.control.aim ?? 0, 0); }
 
 async function enter(code?: string) {
   if (connecting) return;
@@ -145,7 +174,7 @@ async function openOperation() {
         const point = world.screenToWorld(event.clientX, event.clientY);
         if (!world.canStand(point)) { toast('벽을 피해 빈 지면을 선택하세요.'); return; }
         world.landing = point; updateUi();
-      } else if (me()?.state === 'alive') { mouseButtons.add(event.button); }
+      } else if (me()?.state === 'alive') { mouseButtons.add(event.button); pressSlot(event.button === 0 ? 1 : 2); }
     });
     canvas.addEventListener('contextmenu', event => event.preventDefault());
   }
@@ -281,6 +310,10 @@ window.addEventListener('keydown', event => {
   if (!guest || event.target instanceof HTMLInputElement) return;
   if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyQ', 'KeyM', 'Space', 'Digit1', 'Digit2', 'Digit3', 'Digit4'].includes(event.code)) event.preventDefault();
   keys.add(event.code);
+  const pressed = slotFromCode(event.code);
+  // 자동 반복은 누름 순서를 바꾸지 않는다. 다만 창이 포커스를 잃어 순서가 비워진 뒤에도
+  // 계속 누르고 있던 키는 자동 반복으로만 들어오므로, 순서에 없을 때는 다시 넣는다.
+  if (pressed > 0 && (!event.repeat || !slotOrder.includes(pressed))) pressSlot(pressed);
   if (event.repeat) return;
   if (event.code === 'KeyM' && world) world.overview = !world.overview;
 });
@@ -294,12 +327,9 @@ window.setInterval(() => {
   const aimAt = mouse.known ? world.screenToWorld(mouse.x, mouse.y) : { x: p.x + 1, y: p.y };
   const aim = Math.atan2(aimAt.y - p.y, aimAt.x - p.x);
   let slot = 0;
-  if (mouseButtons.has(0) || keys.has('Digit1')) slot = 1;
-  if (mouseButtons.has(2) || keys.has('Digit2')) slot = 2;
-  if (keys.has('Space') || keys.has('Digit3')) slot = 3;
-  if (keys.has('KeyQ') || keys.has('Digit4')) slot = 4;
+  for (const candidate of slotOrder) { if (slotHeld(candidate)) slot = candidate; }
   world.control = { x, y, aim, slot };
-  send({ type: 'input', seq: sequence++, moveX: x, moveY: y, aim, slot });
+  sendInput(x, y, aim, slot);
 }, 1000 / 30);
 window.setInterval(() => send({ type: 'ping', sent: performance.now() }), 2000);
 

@@ -10,6 +10,10 @@ interface TestWorld {
   canStand(position: Position, radius: number): boolean;
   control: Control;
   move(position: Position, dx: number, dy: number): Position;
+  recordInput(seq: number, x: number, y: number, at?: number): void;
+  replay(from: Position, speed: number, now: number): Position;
+  pending: unknown[];
+  mePosition(): Position | undefined;
   labelsById: Map<string, Text>;
   labels: Container;
 }
@@ -155,4 +159,46 @@ test('prediction blocks enemy bodies while allowing teammate overlap', async ({ 
   expect(result.blocked.x).toBeLessThanOrEqual(425);
   expect(result.blocked.x).toBeGreaterThan(400);
   expect(result.through.x).toBe(600);
+});
+
+test('reconciliation replays unacknowledged input on top of the server position', async ({ page }) => {
+  const state = snapshot();
+  const result = await page.evaluate(state => {
+    const world = window.testWorld;
+    const interval = 1000 / 30;
+    world.update(structuredClone(state));
+    // 1/30초마다 오른쪽 입력 6개를 보냈고 서버는 아직 하나도 처리하지 않았다.
+    for (let seq = 1; seq <= 6; seq++) world.recordInput(seq, 1, 0, 1000 + (seq - 1) * interval);
+    const now = 1000 + 6 * interval;
+    const ahead = world.replay(state.players[0], 180, now);
+    // 서버가 입력 4까지 처리했다는 스냅샷이 오면 그 이하는 버리고 새 서버 위치에서 다시 계산한다.
+    state.players[0] = { ...state.players[0], x: 424, ack: 4 };
+    world.update(structuredClone(state));
+    const left = world.pending.length;
+    const after = world.replay(state.players[0], 180, now);
+    return { ahead, left, after };
+  }, state);
+  // 확인받지 않은 입력 0.2초 분량(180 × 0.2 = 36단위)만큼 서버 위치 400보다 앞이다.
+  expect(result.ahead.x).toBeCloseTo(436, 1);
+  expect(result.left).toBe(2);
+  // 서버가 예측과 같은 곳에 있으면 확인이 와도 그리는 위치가 튀지 않는다.
+  expect(result.after.x).toBeCloseTo(436, 1);
+});
+
+test('the drawn position follows the reconciled position instead of the lagging server position', async ({ page }) => {
+  const state = snapshot();
+  const drawn = await page.evaluate(state => {
+    const world = window.testWorld;
+    world.update(structuredClone(state));
+    const now = performance.now();
+    // 0.2초 동안 오른쪽으로 보낸 입력을 서버가 아직 처리하지 않은 상태다.
+    for (let i = 0; i < 6; i++) world.recordInput(i + 1, 1, 0, now - 200 + i * 1000 / 30);
+    // 현재 입력을 0으로 두어 프레임마다의 이동을 빼고 보정 목표만 본다.
+    world.control = { x: 0, y: 0, aim: 0, slot: 0 };
+    for (let frame = 0; frame < 30; frame++) world.draw(1 / 60);
+    return world.mePosition()!;
+  }, state);
+  // 예전 방식은 서버 위치 400에 머물렀다. 재조정하면 입력 0.2초 분량인 436 근처로 간다.
+  expect(drawn.x).toBeGreaterThan(430);
+  expect(drawn.x).toBeLessThan(445);
 });

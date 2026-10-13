@@ -23,6 +23,8 @@ export class World {
   private tiles = new Uint8Array();
   private revision = -1;
   private predicted?: Position;
+  // 보냈지만 서버가 아직 확인하지 않은 내 입력. 서버 재조정에서 서버 위치 위에 다시 적용한다.
+  private pending: { seq: number; x: number; y: number; at: number }[] = [];
   private oldState = '';
   private camera = { x: 960, y: 720, zoom: 1 };
   private averageFrame = 16.7;
@@ -58,8 +60,14 @@ export class World {
       this.drawMap();
     }
     const me = snapshot.players.find(p => p.id === snapshot.you);
-    if (me && (me.state !== this.oldState || changedRoom)) this.predicted = { x: me.x, y: me.y };
+    if (me && (me.state !== this.oldState || changedRoom)) {
+      this.predicted = { x: me.x, y: me.y };
+      // 투입·사망·방 이동으로 위치가 새로 정해지면 그 전에 보낸 입력은 의미가 없다.
+      this.pending = [];
+    }
     this.oldState = me?.state ?? '';
+    // ack 이하의 입력은 서버가 이미 처리해 서버 위치에 반영되어 있다.
+    if (me) this.pending = this.pending.filter(input => input.seq > me.ack);
     this.light.clear();
     for (const polygon of snapshot.sight) this.light.poly(polygon).fill(colors.lit);
   }
@@ -70,6 +78,27 @@ export class World {
   }
 
   mePosition() { return this.predicted; }
+
+  // 보낸 입력을 서버가 확인할 때까지 보관한다. 시각은 화면 계산에만 쓰며 서버로 보내지 않는다.
+  recordInput(seq: number, x: number, y: number, at = performance.now()) {
+    this.pending.push({ seq, x, y, at });
+    // 확인이 오지 않는 이상한 상황에서도 끝없이 늘지 않게 한다. 30Hz 기준 2초 분량이다.
+    if (this.pending.length > 60) this.pending.shift();
+  }
+
+  // 서버 재조정: 서버가 보낸 내 위치에서 출발해 서버가 아직 처리하지 않은 입력을 보낸 순서대로 다시 적용한다.
+  // 각 입력은 다음 입력을 보낼 때까지(마지막 입력은 지금까지) 유지된 시간만큼 움직인다.
+  // 서버는 입력이 0.35초 넘게 없으면 멈추므로 한 입력의 효과도 그만큼으로 자른다.
+  private replay(from: Position, speed: number, now: number): Position {
+    let position = { x: from.x, y: from.y };
+    for (let i = 0; i < this.pending.length; i++) {
+      const input = this.pending[i];
+      const until = i + 1 < this.pending.length ? this.pending[i + 1].at : now;
+      const seconds = Math.min(.35, Math.max(0, (until - input.at) / 1000));
+      position = this.move(position, input.x * speed * seconds, input.y * speed * seconds);
+    }
+    return position;
+  }
 
   canStand(p: Position, radius = 15) {
     const m = this.snapshot?.map;
@@ -204,7 +233,9 @@ export class World {
       const active = me.state === 'alive' && s.phase === 'active' && performance.now() - this.received < 500;
       const dx = active ? this.control.x * speed : 0, dy = active ? this.control.y * speed : 0;
       next = this.move(next, dx * dt, dy * dt);
-      const target = this.move(me, dx * elapsed, dy * elapsed);
+      // 서버 위치는 왕복 지연만큼 과거 입력의 결과다. 그대로 따라가면 화면의 내 캐릭터가 입력보다 늦으므로
+      // 확인받지 않은 입력을 다시 적용한 곳을 목표로 삼는다.
+      const target = active ? this.replay(me, speed, performance.now()) : { x: me.x, y: me.y };
       const distance = Math.hypot(target.x - next.x, target.y - next.y);
       const correction = distance > 100 ? 1 : Math.min(1, dt * 12);
       this.predicted = { x: next.x + (target.x - next.x) * correction, y: next.y + (target.y - next.y) * correction };
