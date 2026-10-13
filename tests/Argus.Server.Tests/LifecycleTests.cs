@@ -20,7 +20,10 @@ internal static class LifecycleTests
         tests.Add(new TestCase("Guest tokens, replacement and reconnect preserve identity and resources", Reconnect));
         tests.Add(new TestCase("Disconnected slots expire and cannot keep a solo mission alive", Expiry));
         tests.Add(new TestCase("Snapshots omit hidden enemy actions and effects and share teammate sight", Visibility));
-        tests.Add(new TestCase("Deployment requests do not disclose hidden occupancy; arrival still blocks overlap", BlockedDeployment));
+        tests.Add(new TestCase("Deployment never discloses hidden occupancy; a blocked arrival lands nearby without overlap", BlockedDeployment));
+        tests.Add(new TestCase("A reused broadcast snapshot keeps no previous recipient data and sends integer sight", SharedSnapshot));
+        tests.Add(new TestCase("A slot that never connects is released quickly while a dropped member keeps the long grace", FirstConnectGrace));
+        tests.Add(new TestCase("A long session keeps its room for the full retention time after the last disconnect", RoomRetention));
     }
 
     private static void Deployment()
@@ -237,6 +240,67 @@ internal static class LifecycleTests
         Check(visible.Hp > 0);
     }
 
+    private static void SharedSnapshot()
+    {
+        Fixture f = new Fixture();
+        Player ally = Ally(f, "scout");
+        // 한 대원만 보급 대기 중이게 해서 수신자마다 값이 달라지게 한다.
+        f.Match.Supplies[0].ReadyAt[f.Player.Id] = f.Match.Now + 10;
+        SnapshotMessage shared = Snapshot.CreateShared(f.Match);
+        Snapshot.Personalize(shared, f.Match, f.Player);
+        string forPilot = JsonSerializer.Serialize(shared, RoomHost.Json);
+        Snapshot.Personalize(shared, f.Match, ally);
+        string forScout = JsonSerializer.Serialize(shared, RoomHost.Json);
+        // 같은 메시지를 다음 수신자에게 다시 써도 따로 만든 스냅샷과 같아야 한다.
+        Equal(forPilot, JsonSerializer.Serialize(Snapshot.Create(f.Match, f.Player), RoomHost.Json));
+        Equal(forScout, JsonSerializer.Serialize(Snapshot.Create(f.Match, ally), RoomHost.Json));
+        Check(forPilot != forScout, "수신자별 값이 달라야 합니다");
+        Near(shared.Supplies[0].Cooldown, 0);
+        // 시야 다각형은 그리기 전용이라 정수로 보낸다. 실제 전송되는 JSON에서 확인한다.
+        using JsonDocument json = JsonDocument.Parse(forScout);
+        JsonElement sight = json.RootElement.GetProperty("sight");
+        Check(sight.GetArrayLength() > 0);
+        foreach (JsonElement polygon in sight.EnumerateArray())
+        {
+            foreach (JsonElement value in polygon.EnumerateArray())
+            {
+                Check(value.TryGetInt32(out int _), "시야 좌표가 정수가 아닙니다");
+            }
+        }
+    }
+
+    private static void FirstConnectGrace()
+    {
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        Guest owner = host.Create(new EntryRequest("owner"))!;
+        (Room room, Player player, Peer peer) = host.Attach(owner.Room, owner.Token)!.Value;
+        Guest squatter = host.Join(owner.Room, new EntryRequest("squatter"))!;
+        Equal(room.Match.Players.Count, 2);
+        // HTTP로 참가만 하고 접속하지 않은 자리는 짧은 유예 뒤에 풀린다.
+        Advance(room.Match, room.Match.Rules.FirstConnectSeconds + 0.1);
+        Equal(room.Match.Players.Count, 1);
+        Check(host.Attach(owner.Room, squatter.Token) == null);
+        // 접속했다가 끊긴 대원은 같은 시간이 지나도 긴 복구 유예를 유지한다.
+        host.Detach(room, player, peer);
+        Advance(room.Match, room.Match.Rules.FirstConnectSeconds + 0.1);
+        Equal(room.Match.Players.Count, 1);
+        Check(host.Attach(owner.Room, owner.Token) != null);
+    }
+
+    private static void RoomRetention()
+    {
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        Guest guest = host.Create(new EntryRequest("pilot"))!;
+        (Room room, Player player, Peer peer) = host.Attach(guest.Room, guest.Token)!.Value;
+        // 16분 동안 접속해 플레이한 상황이다. 마지막 참가·접속 시각이 16분 전이다.
+        room.LastVisit = DateTime.UtcNow - TimeSpan.FromMinutes(16);
+        Check(!room.Expired(DateTime.UtcNow), "접속 중인 방이 삭제 대상입니다");
+        host.Detach(room, player, peer);
+        // 연결이 끊긴 순간부터 15분을 센다. 끊기자마자 지우면 120초 재접속 유예가 의미가 없다.
+        Check(!room.Expired(DateTime.UtcNow), "연결이 끊기자마자 방이 삭제 대상이 됩니다");
+        Check(room.Expired(DateTime.UtcNow + TimeSpan.FromMinutes(16)));
+    }
+
     private static void BlockedDeployment()
     {
         Fixture f = new Fixture();
@@ -247,8 +311,14 @@ internal static class LifecycleTests
         Check(f.Match.Deploy(late, enemy.Position.X, enemy.Position.Y));
         Check(!f.Match.Visible(enemy.Position));
         Advance(f.Match, 5.1);
-        Equal(late.State, "waiting");
-        Check(!late.HasDeployed);
-        Check(!f.Match.Visible(enemy.Position));
+        // 대기로 되돌리지 않고 가까운 빈 자리로 투입한다. 투입 성공 여부로 안개 속을 엿볼 수 없다.
+        Equal(late.State, "alive");
+        Check(late.HasDeployed);
+        double gap = Vector2.Distance(late.Position, enemy.Position);
+        Check(gap >= Rules.PlayerRadius + enemy.Definition.Radius - 0.01, "적과 겹쳐 투입되었습니다");
+        Check(gap < 80, "투입 지점에서 너무 멀리 옮겨졌습니다");
+        Check(f.Match.Map.LineOfSight(late.Position, enemy.Position), "원래 투입 지점이 보이지 않는 곳으로 옮겨졌습니다");
+        // 투입된 뒤에는 자기 시야로 적을 정상적으로 본다.
+        Check(f.Match.Visible(enemy.Position));
     }
 }

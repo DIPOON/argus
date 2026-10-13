@@ -4,7 +4,17 @@ namespace Argus.Server.Game;
 
 public static class Snapshot
 {
+    // 연결 직후처럼 수신자 한 명에게만 보낼 때 사용한다.
     public static SnapshotMessage Create(Match match, Player recipient)
+    {
+        SnapshotMessage message = CreateShared(match);
+        Personalize(message, match, recipient);
+        return message;
+    }
+
+    // 팀 전체가 똑같이 받는 부분을 만든다. 시야 계산이 대부분의 비용이므로 방송할 때는 한 번만 부른다.
+    // 수신자를 받지 않으므로 수신자별 정보가 여기에 섞일 수 없다.
+    public static SnapshotMessage CreateShared(Match match)
     {
         SnapshotMessage message = new SnapshotMessage();
         message.Room = match.Code;
@@ -12,7 +22,6 @@ public static class Snapshot
         message.Elapsed = Round(match.Elapsed);
         message.Phase = match.Phase;
         message.Result = match.Result;
-        message.You = recipient.Id;
         message.Pulse = match.Pulse;
         message.NextPulse = Round((match.Pulse + 1) * match.Rules.PulseSeconds - match.Elapsed);
         message.Extraction.X = BattleMap.Extraction.X;
@@ -112,7 +121,7 @@ public static class Snapshot
             entry.Y = supply.Position.Y;
             entry.Objective = supply.Objective;
             entry.Collected = supply.Collected;
-            entry.Cooldown = Round(Math.Max(0, supply.AvailableAt(recipient) - match.Now));
+            // 보급 대기 시간은 대원마다 다르므로 Personalize에서 정한다.
             message.Supplies.Add(entry);
         }
         message.Notices = match.Notices;
@@ -124,6 +133,19 @@ public static class Snapshot
         message.Rules.Skills.Add(match.Rules.Parry);
         message.Rules.Skills.Add(match.Rules.Grab);
         return message;
+    }
+
+    // 수신자마다 다른 값만 덮어쓴다. 같은 메시지를 다음 수신자에게 다시 쓰므로
+    // 수신자별 값은 빠짐없이 모두 여기서 정해야 앞 수신자의 값이 남지 않는다.
+    public static void Personalize(SnapshotMessage message, Match match, Player recipient)
+    {
+        message.You = recipient.Id;
+        // CreateShared가 match.Supplies와 같은 순서로 보급을 넣었으므로 번호가 일치한다.
+        for (int i = 0; i < match.Supplies.Count; i++)
+        {
+            Supply supply = match.Supplies[i];
+            message.Supplies[i].Cooldown = Round(Math.Max(0, supply.AvailableAt(recipient) - match.Now));
+        }
     }
 
     private static PlayerSnapshot CreatePlayer(Match match, Player player)
@@ -186,9 +208,9 @@ public static class Snapshot
         return entry;
     }
 
-    private static List<double> CreateSightPolygon(Match match, Vector2 origin, double radius)
+    private static int[] CreateSightPolygon(Match match, Vector2 origin, double radius)
     {
-        List<double> points = new List<double>();
+        int[] points = new int[96 * 2];
         for (int i = 0; i < 96; i++)
         {
             double angle = i * Math.Tau / 96;
@@ -199,8 +221,9 @@ public static class Snapshot
             {
                 end = Vector2.Lerp(origin, target, (float)wall.Fraction);
             }
-            points.Add(Round(end.X));
-            points.Add(Round(end.Y));
+            // 시야 다각형은 그리기에만 쓰이고 1단위 미만은 화면에서 구분되지 않으므로 정수로 보낸다.
+            points[i * 2] = (int)Math.Round(end.X);
+            points[i * 2 + 1] = (int)Math.Round(end.Y);
         }
         return points;
     }

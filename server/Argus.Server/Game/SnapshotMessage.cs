@@ -19,7 +19,8 @@ public sealed class SnapshotMessage
     public List<PlayerSnapshot> Players { get; set; } = new List<PlayerSnapshot>();
     public List<EnemySnapshot> Enemies { get; set; } = new List<EnemySnapshot>();
     public List<Effect> Effects { get; set; } = new List<Effect>();
-    public List<List<double>> Sight { get; set; } = new List<List<double>>();
+    // 정수 좌표라 double보다 직렬화가 빠르다. 전송되는 JSON은 같다.
+    public List<int[]> Sight { get; set; } = new List<int[]>();
     public List<FacilitySnapshot> Facilities { get; set; } = new List<FacilitySnapshot>();
     public List<SupplySnapshot> Supplies { get; set; } = new List<SupplySnapshot>();
     public List<Notice> Notices { get; set; } = new List<Notice>();

@@ -26,6 +26,8 @@ public sealed class Player
     public long Connection;
     public bool Connected;
     public double? DisconnectedAt;
+    // HTTP로 참가했지만 아직 WebSocket으로 한 번도 접속하지 않은 자리다.
+    public bool AwaitingFirstConnection;
     public int Kills;
     public int Deaths;
 

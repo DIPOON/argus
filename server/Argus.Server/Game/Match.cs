@@ -283,14 +283,27 @@ public sealed partial class Match
         for (int i = Players.Count - 1; i >= 0; i--)
         {
             Player player = Players[i];
-            if (player.DisconnectedAt.HasValue && Now - player.DisconnectedAt.Value > Rules.ReconnectSeconds)
+            if (!player.DisconnectedAt.HasValue)
             {
-                Note($"{player.Name} 연결 복구 시간 만료");
-                Players.RemoveAt(i);
-                for (int j = 0; j < Supplies.Count; j++)
-                {
-                    Supplies[j].ReadyAt.Remove(player.Id);
-                }
+                continue;
+            }
+            // 한 번도 접속하지 않은 자리는 짧게, 접속했다가 끊긴 대원은 복구할 수 있도록 길게 기다린다.
+            double grace = Rules.ReconnectSeconds;
+            string notice = $"{player.Name} 연결 복구 시간 만료";
+            if (player.AwaitingFirstConnection)
+            {
+                grace = Rules.FirstConnectSeconds;
+                notice = $"{player.Name} 접속하지 않아 자리 해제";
+            }
+            if (Now - player.DisconnectedAt.Value <= grace)
+            {
+                continue;
+            }
+            Note(notice);
+            Players.RemoveAt(i);
+            for (int j = 0; j < Supplies.Count; j++)
+            {
+                Supplies[j].ReadyAt.Remove(player.Id);
             }
         }
     }
@@ -304,13 +317,15 @@ public sealed partial class Match
             {
                 continue;
             }
-            if (!CanOccupy(player.Landing, Rules.PlayerRadius, null))
+            // 숨은 적이 투입 지점을 막고 있어도 실패시키지 않고 가장 가까운 빈 자리로 투입한다.
+            // 대기로 되돌리면 대기 중인 대원이 투입 결과만으로 안개 속 적의 위치를 알아낼 수 있다.
+            Vector2? landing = FindLanding(player.Landing);
+            if (!landing.HasValue)
             {
-                player.State = "waiting";
-                Note($"{player.Name} 투입 지점이 막혔습니다. 다른 위치를 선택하세요.");
+                // 주변과 캠프가 모두 막힌 드문 경우다. 대기로 되돌리지 않고 다음 틱에 다시 찾는다.
                 continue;
             }
-            player.Position = player.Landing;
+            player.Position = landing.Value;
             player.Hp = player.MaxHp;
             player.Mana = 0;
             player.Actions.Clear();
@@ -328,6 +343,35 @@ public sealed partial class Match
                 Note("작전 시작 · 보급 상자에서 마나를 채우고 시설 3곳을 파괴하세요");
             }
         }
+    }
+
+    // 투입 지점이 비어 있으면 그대로 쓴다. 막혀 있으면 16단위 간격의 고리를 넓혀 가며 가장 가까운 빈 자리를 찾는다.
+    // 후보는 원래 투입 지점이 보이는 곳으로 제한한다. 벽 너머로 옮겨지면 옮겨졌다는 사실만으로
+    // 보이지 않는 곳에 무언가 있다는 것을 알게 되기 때문이다. 128단위 안에 없으면 캠프, 캠프도 막혔으면 null이다.
+    private Vector2? FindLanding(Vector2 landing)
+    {
+        if (CanOccupy(landing, Rules.PlayerRadius, null))
+        {
+            return landing;
+        }
+        for (int ring = 1; ring <= 8; ring++)
+        {
+            float radius = ring * 16;
+            for (int i = 0; i < 16; i++)
+            {
+                double angle = i * Math.Tau / 16;
+                Vector2 candidate = landing + new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * radius;
+                if (CanOccupy(candidate, Rules.PlayerRadius, null) && Map.LineOfSight(candidate, landing))
+                {
+                    return candidate;
+                }
+            }
+        }
+        if (CanOccupy(BattleMap.Camp, Rules.PlayerRadius, null))
+        {
+            return BattleMap.Camp;
+        }
+        return null;
     }
 
     private void UpdatePlayer(Player player, double dt)

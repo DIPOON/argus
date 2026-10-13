@@ -11,6 +11,8 @@ public sealed class Rules
     public double PulseDamage { get; init; } = 2;
     public double ExtractionSeconds { get; init; } = 20;
     public double ReconnectSeconds { get; init; } = 120;
+    // HTTP 참가 후 첫 접속까지 기다리는 시간이다. 연결이 끊긴 대원의 복구 유예와 별개다.
+    public double FirstConnectSeconds { get; init; } = 15;
     public double SpawnInterval { get; init; } = 7;
     public int MaxEnemies { get; init; } = 60;
     // 첫 작전에서는 기본 상성을 익히도록 일반 적만 내보내고 준비 시간을 늘린다.

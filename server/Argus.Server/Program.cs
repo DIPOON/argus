@@ -116,8 +116,16 @@ internal static class Program
             return;
         }
 
+        // 스냅샷은 매번 비슷한 JSON 텍스트라 압축 효과가 크다. 압축은 접속할 때 협상하며
+        // 지원하지 않는 클라이언트는 압축 없이 받는다.
+        // 이 옵션이 Dangerous인 이유는 비밀과 공격자가 바꿀 수 있는 값이 같은 압축 문맥에 들어가면
+        // 압축된 크기로 비밀을 추측할 수 있기 때문이다(CRIME/BREACH). 서버 메시지에는 복구 토큰이 없고
+        // 숨겨진 적은 직렬화 전에 빠지므로 수신자가 이미 볼 수 있는 정보만 압축된다.
+        // 이후에도 서버가 보내는 메시지에 비밀을 넣지 않는다.
+        WebSocketAcceptContext acceptContext = new WebSocketAcceptContext();
+        acceptContext.DangerousEnableCompression = true;
         // using은 이 함수를 나갈 때 소켓과 취소 토큰의 자원을 정리한다.
-        using WebSocket socket = await context.WebSockets.AcceptWebSocketAsync();
+        using WebSocket socket = await context.WebSockets.AcceptWebSocketAsync(acceptContext);
         using CancellationTokenSource lifetime = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
         Room? room = null;
         Player? player = null;

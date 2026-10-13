@@ -59,26 +59,26 @@ public sealed partial class Match
         return from;
     }
 
-    private void AddEnemy(Vector2 position, EnemyDefinition definition)
+    // 자리가 비어 있으면 적을 추가하고 true를 돌려준다.
+    private bool AddEnemy(Vector2 position, EnemyDefinition definition)
     {
         if (Enemies.Count >= Rules.MaxEnemies)
         {
-            return;
+            return false;
         }
         Enemy candidate = new Enemy(_nextId + 1, position, definition);
         if (!CanOccupy(position, definition.Radius, candidate))
         {
-            return;
+            return false;
         }
         _nextId++;
         candidate.NextActionAt = Now + 1;
         Enemies.Add(candidate);
+        return true;
     }
 
     private void SpawnEnemy()
     {
-        double angle = NextRandom() * Math.Tau;
-        Vector2 position = new Vector2(1080 + (float)Math.Cos(angle) * 650, 710 + (float)Math.Sin(angle) * 540);
         EnemyDefinition definition = EnemyDefinition.Grunt;
         // 시간이 지나도 첫 작전에는 2티어 적이 섞이지 않도록 추가 생성에도 같은 규칙을 적용한다.
         if (Rules.AllowEliteEnemies)
@@ -93,7 +93,20 @@ public sealed partial class Match
                 definition = EnemyDefinition.Warden;
             }
         }
-        AddEnemy(position, definition);
+        // 분대가 보고 있거나 벽·몸에 막힌 자리면 각도를 다시 뽑는다. 끝까지 못 찾으면 이번 회차는 넘긴다.
+        for (int attempt = 0; attempt < 12; attempt++)
+        {
+            double angle = NextRandom() * Math.Tau;
+            Vector2 position = new Vector2(1080 + (float)Math.Cos(angle) * 650, 710 + (float)Math.Sin(angle) * 540);
+            if (Visible(position))
+            {
+                continue;
+            }
+            if (AddEnemy(position, definition))
+            {
+                return;
+            }
+        }
     }
 
     private void BuildFlow()
@@ -138,6 +151,44 @@ public sealed partial class Match
         }
     }
 
+    // 흐름장에서 다음으로 갈 방향을 찾는다. 갈 곳이 없으면 0 벡터를 돌려준다.
+    private Vector2 FlowHeading(Enemy enemy)
+    {
+        int x = (int)(enemy.Position.X / BattleMap.Cell);
+        int y = (int)(enemy.Position.Y / BattleMap.Cell);
+        int best = int.MaxValue;
+        Vector2 heading = Vector2.Zero;
+        for (int direction = 0; direction < 4; direction++)
+        {
+            int nx = x + NeighborX[direction];
+            int ny = y + NeighborY[direction];
+            if (Map.Solid(nx, ny))
+            {
+                continue;
+            }
+            int cost = _flow[ny * BattleMap.Columns + nx];
+            if (cost < best)
+            {
+                best = cost;
+                heading = new Vector2((nx + 0.5f) * BattleMap.Cell, (ny + 0.5f) * BattleMap.Cell) - enemy.Position;
+            }
+        }
+        return heading;
+    }
+
+    // 한 방향으로 움직여 보고 실제로 전진했는지 알려준다. moved에는 시도 결과를 담는다.
+    private bool TryMove(Enemy enemy, Vector2 heading, double dt, out Vector2 moved)
+    {
+        moved = enemy.Position;
+        if (heading.LengthSquared() < 0.001)
+        {
+            return false;
+        }
+        Vector2 movement = Vector2.Normalize(heading) * (float)(enemy.Definition.Speed * dt);
+        moved = MoveBody(enemy.Position, movement, enemy.Definition.Radius, enemy);
+        return Vector2.DistanceSquared(moved, enemy.Position) >= movement.LengthSquared() * 0.1f;
+    }
+
     private void UpdateEnemies(double dt)
     {
         for (int i = 0; i < Enemies.Count; i++)
@@ -171,56 +222,68 @@ public sealed partial class Match
             {
                 continue;
             }
-            Vector2 heading = target.Position - enemy.Position;
+            Vector2 direct = target.Position - enemy.Position;
             bool sight = Map.LineOfSight(enemy.Position, target.Position);
             if (Now >= enemy.NextActionAt && closest < 75 * 75 && sight)
             {
                 int index = (int)(NextRandom() * enemy.Definition.Skills.Length);
                 EnemySkill skill = enemy.Definition.Skills[index];
                 _nextId++;
-                enemy.Action = new EnemyAction(_nextId, skill, Math.Atan2(heading.Y, heading.X), Now, Rules.EnemyWindupMultiplier);
+                enemy.Action = new EnemyAction(_nextId, skill, Math.Atan2(direct.Y, direct.X), Now, Rules.EnemyWindupMultiplier);
                 enemy.NextActionAt = enemy.Action.EndsAt + 0.25;
                 continue;
             }
+
+            // 사선이 보이면 직진하고, 가려져 있으면 흐름장 경로를 따른다.
+            Vector2 heading = direct;
             if (!sight)
             {
-                int x = (int)(enemy.Position.X / BattleMap.Cell);
-                int y = (int)(enemy.Position.Y / BattleMap.Cell);
-                int best = int.MaxValue;
-                for (int direction = 0; direction < 4; direction++)
-                {
-                    int nx = x + NeighborX[direction];
-                    int ny = y + NeighborY[direction];
-                    if (Map.Solid(nx, ny))
-                    {
-                        continue;
-                    }
-                    int cost = _flow[ny * BattleMap.Columns + nx];
-                    if (cost < best)
-                    {
-                        best = cost;
-                        heading = new Vector2((nx + 0.5f) * BattleMap.Cell, (ny + 0.5f) * BattleMap.Cell) - enemy.Position;
-                    }
-                }
+                heading = FlowHeading(enemy);
             }
-            if (heading.LengthSquared() < 0.001)
+            Vector2 moved;
+            bool advanced = TryMove(enemy, heading, dt, out moved);
+            if (advanced)
             {
+                enemy.Position = moved;
                 continue;
             }
-            Vector2 movement = Vector2.Normalize(heading) * (float)(enemy.Definition.Speed * dt);
-            Vector2 moved = MoveBody(enemy.Position, movement, enemy.Definition.Radius, enemy);
-            // 앞줄의 적에게 막히면 옆으로 돌아서되 몸을 겹치거나 밀어 넣지 않는다.
-            if (Vector2.DistanceSquared(moved, enemy.Position) < movement.LengthSquared() * 0.1f)
+            // 전진하지 못했어도 조금 움직인 결과는 남겨 두고 다른 방향을 시도한다.
+            Vector2 creep = moved;
+            // 사선이 열려 있어도 몸이 모서리에 걸릴 수 있다. 이때는 흐름장 경로로 돌아간다.
+            if (sight)
             {
-                float side = 1;
-                if (enemy.Id % 2 == 0)
+                advanced = TryMove(enemy, FlowHeading(enemy), dt, out moved);
+                if (advanced)
                 {
-                    side = -1;
+                    enemy.Position = moved;
+                    continue;
                 }
-                movement = new Vector2(-movement.Y * side, movement.X * side);
-                moved = MoveBody(enemy.Position, movement, enemy.Definition.Radius, enemy);
             }
-            enemy.Position = moved;
+            // 앞줄의 적에게 막히면 양옆을 모두 시도한다. 짝수·홀수로 먼저 도는 쪽을 나눈다.
+            Vector2 forward = heading;
+            if (forward.LengthSquared() < 0.001)
+            {
+                forward = direct;
+            }
+            float side = 1;
+            if (enemy.Id % 2 == 0)
+            {
+                side = -1;
+            }
+            for (int turn = 0; turn < 2 && !advanced; turn++)
+            {
+                Vector2 sideways = new Vector2(-forward.Y * side, forward.X * side);
+                advanced = TryMove(enemy, sideways, dt, out moved);
+                if (advanced)
+                {
+                    enemy.Position = moved;
+                }
+                side = -side;
+            }
+            if (!advanced)
+            {
+                enemy.Position = creep;
+            }
         }
     }
 }
