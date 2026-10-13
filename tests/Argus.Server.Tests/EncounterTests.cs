@@ -9,6 +9,7 @@ internal static class EncounterTests
         tests.Add(new TestCase("The first mission has only tier-one enemies, including late reinforcements", FirstMission));
         tests.Add(new TestCase("AI telegraphs and actual hits both wait for the longer mission windup", LongerWindup));
         tests.Add(new TestCase("Reinforcements never appear inside the squad's shared sight", HiddenSpawns));
+        tests.Add(new TestCase("An enemy whose body clips a wall corner on an open sight line still reaches the player", CornerSlip));
     }
 
     private static void FirstMission()
@@ -117,6 +118,23 @@ internal static class EncounterTests
             }
         }
         return true;
+    }
+
+    private static void CornerSlip()
+    {
+        Fixture f = new Fixture();
+        f.Player.Hp = 1000;
+        // 벽 타일 (32,10)–(32,11)의 아래쪽 면은 y = 576이다. y = 588 직선은 몸 중심의 사선은 열려 있지만
+        // 반지름 13인 몸은 모서리에 12만큼 걸린다.
+        Vector2 start = new Vector2(1505, 588);
+        f.Player.Position = new Vector2(1615, 588);
+        Check(f.Match.Map.LineOfSight(start, f.Player.Position), "사선이 막혀 있어 검사 조건이 아닙니다");
+        // id가 짝수인 적은 예전 방식에서 위(벽 쪽)로 비켜 가려다 계속 걸렸다. 행동 없이 이동만 본다.
+        Enemy enemy = new Enemy(30020, start, EnemyDefinition.Grunt);
+        enemy.NextActionAt = double.MaxValue;
+        f.Match.Enemies.Add(enemy);
+        Advance(f.Match, 2);
+        Check(enemy.Position.X > 1560, "모서리에 걸려 멈췄습니다");
     }
 
     private static void LongerWindup()

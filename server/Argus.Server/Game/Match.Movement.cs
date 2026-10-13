@@ -200,17 +200,45 @@ public sealed partial class Match
         return heading;
     }
 
-    // 한 방향으로 움직여 보고 실제로 전진했는지 알려준다. moved에는 시도 결과를 담는다.
-    private bool TryMove(Enemy enemy, Vector2 heading, double dt, out Vector2 moved)
+    // 몸이 직선으로 지나갈 수 있는지 본다. 몸 중심선은 호출 전에 사선으로 이미 확인했고,
+    // 여기서는 몸 양옆 가장자리를 지나는 두 선을 본다. 세 선의 간격(반지름 이하)이 벽 타일(48)보다 좁아서
+    // 그 사이로 벽이 빠져나가지 못한다.
+    private bool BodyCanPass(Enemy enemy, Vector2 target)
     {
-        moved = enemy.Position;
-        if (heading.LengthSquared() < 0.001)
+        Vector2 direction = target - enemy.Position;
+        if (direction.LengthSquared() < 0.001f)
+        {
+            return true;
+        }
+        Vector2 normal = Vector2.Normalize(new Vector2(-direction.Y, direction.X)) * enemy.Definition.Radius;
+        if (!Map.LineOfSight(enemy.Position + normal, target + normal))
         {
             return false;
         }
-        Vector2 movement = Vector2.Normalize(heading) * (float)(enemy.Definition.Speed * dt);
-        moved = MoveBody(enemy.Position, movement, enemy.Definition.Radius, enemy);
-        return Vector2.DistanceSquared(moved, enemy.Position) >= movement.LengthSquared() * 0.1f;
+        return Map.LineOfSight(enemy.Position - normal, target - normal);
+    }
+
+    // 가까운 적끼리 서로 밀어내는 방향을 구한다. 몸이 닿기 조금 전부터, 가까울수록 세게 민다.
+    private Vector2 Separation(Enemy enemy)
+    {
+        Vector2 push = Vector2.Zero;
+        for (int i = 0; i < Enemies.Count; i++)
+        {
+            Enemy other = Enemies[i];
+            if (other == enemy || other.Hp <= 0)
+            {
+                continue;
+            }
+            Vector2 away = enemy.Position - other.Position;
+            float reach = enemy.Definition.Radius + other.Definition.Radius + 12;
+            float distance = away.Length();
+            if (distance >= reach || distance < 0.001f)
+            {
+                continue;
+            }
+            push += away / distance * ((reach - distance) / reach);
+        }
+        return push;
     }
 
     private void UpdateEnemies(double dt)
@@ -258,56 +286,29 @@ public sealed partial class Match
                 continue;
             }
 
-            // 사선이 보이면 직진하고, 가려져 있으면 흐름장 경로를 따른다.
+            // 조향: 움직이기 전에 방향을 한 번 정하고 한 번만 움직인다. 막혔다고 다른 방향을 거듭 시도하지 않는다.
+            // 몸이 직선으로 지나갈 수 있으면 직진하고, 사선이 가려졌거나 몸이 모서리에 걸리면 흐름장 경로를 따른다.
             Vector2 heading = direct;
-            if (!sight)
+            if (!sight || !BodyCanPass(enemy, target.Position))
             {
-                heading = FlowHeading(enemy);
+                Vector2 flow = FlowHeading(enemy);
+                if (flow.LengthSquared() > 0.001f)
+                {
+                    heading = flow;
+                }
             }
-            Vector2 moved;
-            bool advanced = TryMove(enemy, heading, dt, out moved);
-            if (advanced)
+            if (heading.LengthSquared() < 0.001f)
             {
-                enemy.Position = moved;
                 continue;
             }
-            // 전진하지 못했어도 조금 움직인 결과는 남겨 두고 다른 방향을 시도한다.
-            Vector2 creep = moved;
-            // 사선이 열려 있어도 몸이 모서리에 걸릴 수 있다. 이때는 흐름장 경로로 돌아간다.
-            if (sight)
+            // 가까운 적끼리 밀어내는 방향을 더해, 줄지어 막히지 않고 옆으로 비켜 가게 한다.
+            Vector2 steer = Vector2.Normalize(heading) + Separation(enemy) * 0.8f;
+            if (steer.LengthSquared() < 0.001f)
             {
-                advanced = TryMove(enemy, FlowHeading(enemy), dt, out moved);
-                if (advanced)
-                {
-                    enemy.Position = moved;
-                    continue;
-                }
+                continue;
             }
-            // 앞줄의 적에게 막히면 양옆을 모두 시도한다. 짝수·홀수로 먼저 도는 쪽을 나눈다.
-            Vector2 forward = heading;
-            if (forward.LengthSquared() < 0.001)
-            {
-                forward = direct;
-            }
-            float side = 1;
-            if (enemy.Id % 2 == 0)
-            {
-                side = -1;
-            }
-            for (int turn = 0; turn < 2 && !advanced; turn++)
-            {
-                Vector2 sideways = new Vector2(-forward.Y * side, forward.X * side);
-                advanced = TryMove(enemy, sideways, dt, out moved);
-                if (advanced)
-                {
-                    enemy.Position = moved;
-                }
-                side = -side;
-            }
-            if (!advanced)
-            {
-                enemy.Position = creep;
-            }
+            Vector2 movement = Vector2.Normalize(steer) * (float)(enemy.Definition.Speed * dt);
+            enemy.Position = MoveBody(enemy.Position, movement, enemy.Definition.Radius, enemy);
         }
     }
 }
