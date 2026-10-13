@@ -72,10 +72,17 @@ test('all four input bindings use slots, consume mana on whiffs and keep the fre
   const invalid = await request.post('/api/rooms', { data: { slots: ['strike', 'parry', 'grab', 'turret'] } });
   expect(invalid.status()).toBe(400);
   const me = observe(page);
+  const sent: string[] = [];
+  page.on('websocket', ws => ws.on('framesent', frame => sent.push(String(frame.payload))));
   await page.goto('/');
   await page.locator('input[name="free-slot"][value="grab"]').check();
   await page.getByRole('button', { name: '새 작전 시작' }).click();
   await expect.poll(() => me.player?.slots[3]).toBe('grab');
+  // 투입 전(대기 중)에는 서버가 입력을 받지 않는다. 창이 포커스를 잃어도 입력을 보내지 않아야 한다.
+  sent.length = 0;
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await page.waitForTimeout(300);
+  expect(sent.filter(text => text.includes('"input"'))).toEqual([]);
   await page.getByRole('button', { name: '캠프 선택' }).click();
   await page.locator('#deploy').click();
   await expect.poll(() => me.player?.state, { timeout: 8000 }).toBe('alive');
@@ -107,6 +114,19 @@ test('all four input bindings use slots, consume mana on whiffs and keep the fre
   await page.keyboard.down('Digit1');
   await expect.poll(() => me.player?.mana).toBeLessThan(held - 1);
   await page.keyboard.up('Digit1');
+  // 좌클릭을 누른 채 우클릭을 누르면 브라우저는 pointerdown 대신 pointermove로만 알린다.
+  // 나중에 누른 우클릭(받아치기)이 이어서 나가야 한다.
+  await expect.poll(() => me.player?.busy).toBe(0);
+  await page.mouse.down({ button: 'left' });
+  await page.mouse.down({ button: 'right' });
+  await expect.poll(() => me.player?.actions.at(-1)?.slot).toBe(2);
+  // 좌클릭부터 떼는 것도 pointermove로만 알린다. 버튼이 눌린 채로 남으면 타격이 계속 나가 마나가 준다.
+  await page.mouse.up({ button: 'left' });
+  await page.mouse.up({ button: 'right' });
+  await expect.poll(() => me.player?.busy).toBe(0);
+  const settled = me.player!.mana;
+  await page.waitForTimeout(1200);
+  expect(me.player!.mana).toBe(settled);
   const before = me.player!;
   await page.reload();
   await expect.poll(() => me.player?.id).toBe(before.id);

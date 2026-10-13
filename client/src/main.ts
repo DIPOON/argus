@@ -114,6 +114,18 @@ function pressSlot(slot: number) {
   if (index >= 0) slotOrder.splice(index, 1);
   slotOrder.push(slot);
 }
+// 버튼을 겹쳐 누르거나 뗄 때 브라우저는 pointerdown·pointerup 대신 pointermove로만 알린다.
+// 그래서 세 이벤트 모두에서 event.buttons(지금 눌린 버튼 비트)로 상태를 다시 맞춘다.
+// 직전 이벤트와 비교해 새로 눌린 버튼만 누름으로 본다. 투입 클릭을 쥔 채 살아난 순간 타격이 나가지 않게 한다.
+let pointerButtons = 0;
+function syncButtons(buttons: number, allowPress: boolean) {
+  for (const [button, bit, slot] of [[0, 1, 1], [2, 2, 2]] as const) {
+    const pressed = (buttons & bit) !== 0 && (pointerButtons & bit) === 0;
+    if (pressed && allowPress && !mouseButtons.has(button)) { mouseButtons.add(button); pressSlot(slot); }
+    if ((buttons & bit) === 0) mouseButtons.delete(button);
+  }
+  pointerButtons = buttons;
+}
 
 function me(): Player | undefined { return snapshot?.players.find(p => p.id === snapshot?.you); }
 function send(value: object) {
@@ -132,7 +144,12 @@ function toast(text: string) {
   window.clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => { $('toast').hidden = true; }, 3500);
 }
-function clearInput() { keys.clear(); mouseButtons.clear(); slotOrder.length = 0; if (world) world.control = { x: 0, y: 0, aim: world.control.aim, slot: 0 }; sendInput(0, 0, world?.control.aim ?? 0, 0); }
+function clearInput() {
+  keys.clear(); mouseButtons.clear(); slotOrder.length = 0; pointerButtons = 0;
+  if (world) world.control = { x: 0, y: 0, aim: world.control.aim, slot: 0 };
+  // 서버는 작전 중 살아 있는 대원의 입력만 받는다. 30Hz 입력과 같은 조건일 때만 멈춤 입력을 보낸다.
+  if (me()?.state === 'alive' && snapshot?.phase === 'active') sendInput(0, 0, world?.control.aim ?? 0, 0);
+}
 
 async function enter(code?: string) {
   if (connecting) return;
@@ -166,15 +183,19 @@ async function openOperation() {
     try { world = new World(); await world.init($('canvas-host')); }
     catch { world = undefined; leave(); $('lobby-error').textContent = '그래픽 초기화에 실패했습니다. 브라우저의 하드웨어 가속을 확인해 주세요.'; return; }
     const canvas = world.app.canvas;
-    canvas.addEventListener('pointermove', event => { mouse = { x: event.clientX, y: event.clientY, known: true }; });
+    canvas.addEventListener('pointermove', event => {
+      mouse = { x: event.clientX, y: event.clientY, known: true };
+      syncButtons(event.buttons, me()?.state === 'alive');
+    });
     canvas.addEventListener('pointerdown', event => {
       if (!world || (event.button !== 0 && event.button !== 2)) return;
       mouse = { x: event.clientX, y: event.clientY, known: true };
       if (event.button === 0 && me()?.state === 'waiting' && snapshot?.phase !== 'ended') {
         const point = world.screenToWorld(event.clientX, event.clientY);
+        syncButtons(event.buttons, false);
         if (!world.canStand(point)) { toast('벽을 피해 빈 지면을 선택하세요.'); return; }
         world.landing = point; updateUi();
-      } else if (me()?.state === 'alive') { mouseButtons.add(event.button); pressSlot(event.button === 0 ? 1 : 2); }
+      } else { syncButtons(event.buttons, me()?.state === 'alive'); }
     });
     canvas.addEventListener('contextmenu', event => event.preventDefault());
   }
@@ -309,7 +330,9 @@ $('camp').addEventListener('click', () => {
 $('deploy').addEventListener('click', () => { if (world?.landing) send({ type: 'deploy', ...world.landing }); });
 $('leave').addEventListener('click', leave);
 $('again').addEventListener('click', leave);
-window.addEventListener('pointerup', event => { mouseButtons.delete(event.button); });
+// 캔버스 밖에서 떼거나 움직여도 놓은 버튼은 반영한다. 새로 누르는 것은 캔버스 위에서만 받는다.
+window.addEventListener('pointerup', event => syncButtons(event.buttons, false));
+window.addEventListener('pointermove', event => { if (event.target !== world?.app.canvas) syncButtons(event.buttons, false); });
 window.addEventListener('blur', clearInput);
 document.addEventListener('visibilitychange', () => { if (document.hidden) clearInput(); });
 window.addEventListener('keydown', event => {
