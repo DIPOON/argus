@@ -24,6 +24,8 @@ internal static class LifecycleTests
         tests.Add(new TestCase("A reused broadcast snapshot keeps no previous recipient data and sends integer sight", SharedSnapshot));
         tests.Add(new TestCase("A slot that never connects is released quickly while a dropped member keeps the long grace", FirstConnectGrace));
         tests.Add(new TestCase("A long session keeps its room for the full retention time after the last disconnect", RoomRetention));
+        tests.Add(new TestCase("A room with nobody left is released soon instead of holding a slot for fifteen minutes", EmptyRoomExpiry));
+        tests.Add(new TestCase("Hidden spawns do not advance the id sequence that player actions reveal", HiddenIdGaps));
     }
 
     private static void Deployment()
@@ -299,6 +301,59 @@ internal static class LifecycleTests
         // 연결이 끊긴 순간부터 15분을 센다. 끊기자마자 지우면 120초 재접속 유예가 의미가 없다.
         Check(!room.Expired(DateTime.UtcNow), "연결이 끊기자마자 방이 삭제 대상이 됩니다");
         Check(room.Expired(DateTime.UtcNow + TimeSpan.FromMinutes(16)));
+    }
+
+    private static void EmptyRoomExpiry()
+    {
+        // HTTP로 방을 만들고 참가만 한 뒤 한 번도 접속하지 않은 방이다.
+        Room squatted = new Room("SQUAT1");
+        Player squatter = squatted.Match.Join("q", "squatter")!;
+        squatter.DisconnectedAt = squatted.Match.Now;
+        squatter.AwaitingFirstConnection = true;
+        Check(!squatted.Expired(DateTime.UtcNow), "막 만든 방이 바로 삭제 대상입니다");
+        Advance(squatted.Match, squatted.Match.Rules.FirstConnectSeconds + 0.1);
+        Equal(squatted.Match.Players.Count, 0);
+        // 대원이 아무도 남지 않은 방은 15분을 기다리지 않는다. 기다리면 빈 방 32개로 방 생성을 막을 수 있다.
+        Check(squatted.Expired(DateTime.UtcNow + TimeSpan.FromSeconds(31)), "빈 방이 15분 동안 자리를 차지합니다");
+
+        // 연결이 끊겼지만 복구 유예 중인 대원이 있는 방은 그대로 남는다.
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        Guest guest = host.Create(new EntryRequest("pilot"))!;
+        (Room room, Player player, Peer peer) = host.Attach(guest.Room, guest.Token)!.Value;
+        host.Detach(room, player, peer);
+        Check(!room.Expired(DateTime.UtcNow + TimeSpan.FromSeconds(31)), "복구를 기다리는 대원이 있는 방이 지워집니다");
+    }
+
+    private static void HiddenIdGaps()
+    {
+        Rules rules = new Rules();
+        Match match = new Match("IDGAP1", rules, 73);
+        // 처음 배치된 적이 다가와 행동하면 그 id가 끼어들므로 치우고 추가 생성만 본다.
+        match.Enemies.Clear();
+        Player player = match.Join("p", "pilot")!;
+        player.Connected = true;
+        Check(match.Deploy(player, BattleMap.Camp.X, BattleMap.Camp.Y));
+        Advance(match, rules.DeploySeconds + 0.01);
+        player.Mana = player.MaxMana;
+        long sequence = 1;
+        match.Input(player, sequence, 0, 0, 0, 1);
+        Advance(match, Rules.Step);
+        int first = player.Actions[player.Actions.Count - 1].Id;
+        sequence++;
+        match.Input(player, sequence, 0, 0, 0, 0);
+        // 안개 속에서 적이 생성될 때까지 진행한다. 생성된 적은 1초 동안 행동하지 않는다.
+        double limit = match.Now + 30;
+        while (match.Enemies.Count == 0 && match.Now < limit)
+        {
+            Advance(match, Rules.Step);
+        }
+        Check(match.Enemies.Count > 0, "적이 생성되지 않았습니다");
+        sequence++;
+        match.Input(player, sequence, 0, 0, 0, 1);
+        Advance(match, Rules.Step);
+        int second = player.Actions[player.Actions.Count - 1].Id;
+        // 그 사이 보이는 곳에서는 아무 일도 없었다. 숨은 생성이 순번을 쓰면 빈 번호로 생성 수가 드러난다.
+        Equal(second, first + 1);
     }
 
     private static void BlockedDeployment()

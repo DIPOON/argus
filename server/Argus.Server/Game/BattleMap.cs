@@ -157,28 +157,6 @@ public sealed class BattleMap
         return true;
     }
 
-    public Vector2 Move(Vector2 from, Vector2 delta, float radius = 13)
-    {
-        // 밀려나는 거리가 커도 벽을 통과하지 않도록 이동을 작은 단계로 나눈다.
-        int steps = Math.Max(1, (int)Math.Ceiling(delta.Length() / 8));
-        delta /= steps;
-        for (int i = 0; i < steps; i++)
-        {
-            Vector2 nextX = new Vector2(from.X + delta.X, from.Y);
-            if (CanStand(nextX, radius))
-            {
-                from = nextX;
-            }
-
-            Vector2 nextY = new Vector2(from.X, from.Y + delta.Y);
-            if (CanStand(nextY, radius))
-            {
-                from = nextY;
-            }
-        }
-        return from;
-    }
-
     public WallHit RayWall(Vector2 from, Vector2 to)
     {
         // 타일 경계를 순서대로 지난다. 일정 간격 샘플링은 모서리를 조금 스친 벽을 놓칠 수 있다.
@@ -267,35 +245,5 @@ public sealed class BattleMap
     {
         WallHit wall = RayWall(from, to);
         return double.IsPositiveInfinity(wall.Fraction);
-    }
-
-    public static double RayCircle(Vector2 from, Vector2 to, Vector2 center, float radius)
-    {
-        Vector2 direction = to - from;
-        Vector2 offset = from - center;
-        float a = Vector2.Dot(direction, direction);
-        float c = Vector2.Dot(offset, offset) - radius * radius;
-        if (c <= 0)
-        {
-            return 0;
-        }
-        if (a < 0.00001)
-        {
-            return double.PositiveInfinity;
-        }
-
-        float b = 2 * Vector2.Dot(offset, direction);
-        float discriminant = b * b - 4 * a * c;
-        if (discriminant < 0)
-        {
-            return double.PositiveInfinity;
-        }
-
-        double fraction = (-b - Math.Sqrt(discriminant)) / (2 * a);
-        if (fraction >= 0 && fraction <= 1)
-        {
-            return fraction;
-        }
-        return double.PositiveInfinity;
     }
 }

@@ -37,14 +37,24 @@ public sealed class Room
         Match = new Match(code);
     }
 
-    // 연결이 모두 끊긴 뒤 15분이 지나면 방을 지운다. 기준은 마지막 참가·접속·연결 해제 시각이다.
+    // 대원이 모두 떠난 방에는 복구할 자리가 없다. 오래 남기면 빈 방으로 방 생성을 막을 수 있으므로 짧게 둔다.
+    // 막 만든 방이 첫 참가 전에 지워지지 않도록, 첫 접속 유예(15초)보다 긴 30초는 기다린다.
+    private static readonly TimeSpan EmptyRoomGrace = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan IdleRoomGrace = TimeSpan.FromMinutes(15);
+
+    // 연결이 모두 끊긴 방을 지울지 정한다. 기준은 마지막 참가·접속·연결 해제 시각이다.
+    // 복구를 기다리는 대원이 있으면 15분, 대원이 아무도 없으면 30초 뒤에 지운다.
     public bool Expired(DateTime now)
     {
         if (Peers.Count > 0)
         {
             return false;
         }
-        return now - LastVisit > TimeSpan.FromMinutes(15);
+        if (Match.Players.Count == 0)
+        {
+            return now - LastVisit > EmptyRoomGrace;
+        }
+        return now - LastVisit > IdleRoomGrace;
     }
 }
 
@@ -88,6 +98,8 @@ public sealed class RoomHost : BackgroundService
     private readonly ConcurrentDictionary<string, Room> _rooms = new ConcurrentDictionary<string, Room>();
     private readonly ILogger<RoomHost> _logger;
     private long _connection;
+    // 한 틱에 진행하는 시간의 상한이다. 서버가 오래 멈췄다 깨어나도 이보다 많이 따라잡지 않는다.
+    private const double MaxTickSeconds = 0.25;
     // 방 수 확인과 추가가 따로 일어나면 동시 요청으로 상한을 넘을 수 있으므로 함께 잠근다.
     private readonly object _createGate = new object();
 
@@ -268,6 +280,13 @@ public sealed class RoomHost : BackgroundService
             double current = watch.Elapsed.TotalSeconds;
             double delta = current - previous;
             previous = current;
+            // 절전이나 디버거로 서버가 멈췄다 깨어나도 밀린 시간을 한꺼번에 따라잡지 않는다.
+            // 따라잡으면 잠금을 쥔 채 수천 단계를 돌리고, 아무도 보지 못하는 사이에 대원이 죽거나 작전이 끝난다.
+            // 넘친 시간은 게임 시간에서 버린다. 처리가 밀릴수록 다음 단계가 커지는 악순환도 막는다.
+            if (delta > MaxTickSeconds)
+            {
+                delta = MaxTickSeconds;
+            }
             bool publish = current >= publishAt;
             if (publish)
             {

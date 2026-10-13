@@ -368,7 +368,12 @@ internal static class CombatTests
         f.Match.Step(2);
         Near(enemy.Hp, 0);
         Near(f.Player.Hp, 6);
-        Vector2 at = f.Match.Map.Move(new Vector2(680, 500), new Vector2(1000, 0));
-        Check(at.X < 720);
+        // 긴 단계에서도 실제 이동 경로가 벽을 통과하지 않는다. 오른쪽 벽의 왼쪽 면은 x = 720이다.
+        Fixture walker = new Fixture();
+        walker.Player.Position = new Vector2(680, 500);
+        walker.Match.Input(walker.Player, 1, 1, 0, 0, 0);
+        walker.Match.Step(2);
+        Check(walker.Player.Position.X < 720, "긴 단계에서 벽을 통과했습니다");
+        Check(walker.Player.Position.X > 700, "벽까지 이동하지 않았습니다");
     }
 }

@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Security.Cryptography;
 
 namespace Argus.Server.Game;
 
@@ -59,6 +60,30 @@ public sealed partial class Match
         return from;
     }
 
+    // 적 id는 무작위로 정한다. 효과·행동과 같은 순번을 쓰면 보이는 id 사이의 빈 번호로
+    // 안개 속에서 생성된 적의 수를 셀 수 있다. 살아 있는 적끼리는 겹치지 않게 한다.
+    // 게임 진행용 난수와 따로 뽑으므로 시드를 고정한 검사의 진행은 바뀌지 않는다.
+    private int NewEnemyId()
+    {
+        while (true)
+        {
+            int id = RandomNumberGenerator.GetInt32(1, int.MaxValue);
+            bool taken = false;
+            for (int i = 0; i < Enemies.Count; i++)
+            {
+                if (Enemies[i].Id == id)
+                {
+                    taken = true;
+                    break;
+                }
+            }
+            if (!taken)
+            {
+                return id;
+            }
+        }
+    }
+
     // 자리가 비어 있으면 적을 추가하고 true를 돌려준다.
     private bool AddEnemy(Vector2 position, EnemyDefinition definition)
     {
@@ -66,12 +91,11 @@ public sealed partial class Match
         {
             return false;
         }
-        Enemy candidate = new Enemy(_nextId + 1, position, definition);
+        Enemy candidate = new Enemy(NewEnemyId(), position, definition);
         if (!CanOccupy(position, definition.Radius, candidate))
         {
             return false;
         }
-        _nextId++;
         candidate.NextActionAt = Now + 1;
         Enemies.Add(candidate);
         return true;
