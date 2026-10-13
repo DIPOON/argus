@@ -10,9 +10,19 @@ public sealed class SkillDefinition
     public double Duration { get; }
     public double Range { get; }
     public double HalfWidth { get; }
+    // 기술별 동작은 id가 아니라 아래 속성으로 판단한다. 같은 종류의 새 기술도 속성만 정하면 같은 판정을 받는다.
+    // 먼저 치지 않고, 유효 시간 동안 앞에서 들어오는 공격에만 반응한다.
+    public bool GuardsFront { get; }
+    // 유효 시간이 끝나면 상성 없는 일반 반격을 낸다.
+    public bool HasFollowup { get; }
+    // 처음 닿은 가장 가까운 적 하나만 대상으로 정하고 그 적만 판정한다.
+    public bool SingleTarget { get; }
+    // 접촉 중에 시설과 파괴 가능한 벽을 부순다.
+    public bool BreaksStructures { get; }
 
     public SkillDefinition(string id, string kind, int mana, double contactAfter,
-        double activeSeconds, double duration, double range, double halfWidth)
+        double activeSeconds, double duration, double range, double halfWidth,
+        bool guardsFront, bool hasFollowup, bool singleTarget, bool breaksStructures)
     {
         Id = id;
         Kind = kind;
@@ -22,6 +32,10 @@ public sealed class SkillDefinition
         Duration = duration;
         Range = range;
         HalfWidth = halfWidth;
+        GuardsFront = guardsFront;
+        HasFollowup = hasFollowup;
+        SingleTarget = singleTarget;
+        BreaksStructures = breaksStructures;
     }
 }
 

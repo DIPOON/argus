@@ -53,7 +53,7 @@ public sealed partial class Match
             for (int j = 0; j < player.Actions.Count; j++)
             {
                 PlayerAction action = player.Actions[j];
-                if (!action.IsActive(Now) || action.Skill.Id != "grab" || action.Target.HasValue)
+                if (!action.IsActive(Now) || !action.Skill.SingleTarget || action.Target.HasValue)
                 {
                     continue;
                 }
@@ -141,7 +141,7 @@ public sealed partial class Match
                     continue;
                 }
                 bool initiates = false;
-                if (action.Skill.Id == "parry")
+                if (action.Skill.GuardsFront)
                 {
                     // 방어 창에 들어온 공격이 없으면 아무 판정도 일어나지 않는다.
                     if (!incoming || !GuardFaces(player, enemy))
@@ -151,7 +151,7 @@ public sealed partial class Match
                 }
                 else
                 {
-                    if (!PlayerContact(player, action, enemy) || (action.Skill.Id == "grab" && action.Target != enemy.Id))
+                    if (!PlayerContact(player, action, enemy) || (action.Skill.SingleTarget && action.Target != enemy.Id))
                     {
                         continue;
                     }
@@ -297,11 +297,11 @@ public sealed partial class Match
             {
                 PlayerAction action = player.Actions[j];
                 if (enemy.Hp <= 0 || !action.IsActive(Now) || Now < action.ContactAt ||
-                    action.Skill.Id == "parry" || action.JudgedEnemies.Contains(enemy.Id))
+                    action.Skill.GuardsFront || action.JudgedEnemies.Contains(enemy.Id))
                 {
                     continue;
                 }
-                if (action.Skill.Id == "grab" && action.Target != enemy.Id)
+                if (action.Skill.SingleTarget && action.Target != enemy.Id)
                 {
                     continue;
                 }
@@ -369,8 +369,8 @@ public sealed partial class Match
             for (int j = 0; j < player.Actions.Count; j++)
             {
                 PlayerAction action = player.Actions[j];
-                bool strike = action.Skill.Id == "strike" && action.IsActive(Now) && Now >= action.ContactAt;
-                if (!strike && !action.IsFollowup(Now, Rules.ParryFollowupSeconds))
+                bool contact = action.Skill.BreaksStructures && action.IsActive(Now) && Now >= action.ContactAt;
+                if (!contact && !action.IsFollowup(Now, Rules.ParryFollowupSeconds))
                 {
                     continue;
                 }

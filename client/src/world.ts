@@ -140,13 +140,15 @@ export class World {
     if (now >= action.endsAt || action.phase === 'interrupted') return;
     let activeUntil = action.activeUntil;
     let kind = action.kind;
-    const followup = player && action.skill === 'parry' && now >= activeUntil && now < activeUntil + this.snapshot!.rules.parryFollowupSeconds;
+    // 기술별 그림은 id가 아니라 서버가 보낸 기술 속성으로 정한다. 적의 행동에는 기술 정의가 없다.
+    const definition = player ? this.snapshot!.rules.skills.find(d => d.id === action.skill) : undefined;
+    const followup = !!definition?.hasFollowup && now >= activeUntil && now < activeUntil + this.snapshot!.rules.parryFollowupSeconds;
     if (followup) { kind = 'none'; activeUntil += this.snapshot!.rules.parryFollowupSeconds; }
     if (now >= activeUntil) return;
     const color = affinityColors[kind];
     const aim = action.aim;
     const f = { x: Math.cos(aim), y: Math.sin(aim) };
-    if (player && action.skill === 'parry' && !followup) {
+    if (definition?.guardsFront && !followup) {
       const half = this.snapshot!.rules.guardHalfAngle;
       g.arc(p.x, p.y, 28, aim - half, aim + half).stroke({ color, width: 5 });
       g.moveTo(p.x, p.y).lineTo(p.x + Math.cos(aim - half) * 28, p.y + Math.sin(aim - half) * 28)

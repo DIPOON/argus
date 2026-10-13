@@ -72,7 +72,7 @@ public sealed class PlayerAction
 
     public bool IsFollowup(double now, double duration)
     {
-        return !Cancelled && Skill.Id == "parry" && now >= ActiveUntil && now < ActiveUntil + duration;
+        return !Cancelled && Skill.HasFollowup && now >= ActiveUntil && now < ActiveUntil + duration;
     }
 }
 

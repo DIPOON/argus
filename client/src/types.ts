@@ -6,6 +6,8 @@ export const affinityNames: Record<Affinity, string> = { strike: '타격', block
 export interface SkillDefinition {
   id: Skill; kind: Affinity; mana: number; contactAfter: number; activeSeconds: number;
   duration: number; range: number; halfWidth: number;
+  // 기술별 동작. 그림도 id가 아니라 이 속성으로 정한다.
+  guardsFront: boolean; hasFollowup: boolean; singleTarget: boolean; breaksStructures: boolean;
 }
 export interface CombatAction {
   id: number; skill: string; kind: Affinity; slot: number; tier: number;

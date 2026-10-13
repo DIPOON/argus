@@ -26,6 +26,7 @@ internal static class CombatTests
         tests.Add(new TestCase("Melee destroys walls and mission facilities through normal inputs", Structures));
         tests.Add(new TestCase("Player-enemy and enemy-enemy bodies block movement while skills allow walking", Bodies));
         tests.Add(new TestCase("Long server steps preserve short active windows and prevent body tunneling", LongStep));
+        tests.Add(new TestCase("A new skill id with guard flags still guards and follows up like a parry", SkillFlags));
     }
 
     private static void OrdinaryMatrix()
@@ -358,6 +359,70 @@ internal static class CombatTests
             Check(Vector2.Distance(lead.Position, following.Position) >= 26 - 0.001);
             Check(Vector2.Distance(lead.Position, moving.Player.Position) >= 26 - 0.001);
         }
+    }
+
+    // 같은 수치와 속성에 id만 바꾼 새 기술을 만든다.
+    private static SkillDefinition Renamed(SkillDefinition skill, string id)
+    {
+        return new SkillDefinition(id, skill.Kind, skill.Mana, skill.ContactAfter, skill.ActiveSeconds,
+            skill.Duration, skill.Range, skill.HalfWidth, skill.GuardsFront, skill.HasFollowup,
+            skill.SingleTarget, skill.BreaksStructures);
+    }
+
+    private static PlayerAction Use(Fixture f, SkillDefinition skill, int id)
+    {
+        PlayerAction action = new PlayerAction(id, skill, 1, f.Match.Now);
+        f.Player.Actions.Add(action);
+        f.Player.BusyUntil = action.EndsAt;
+        return action;
+    }
+
+    private static void SkillFlags()
+    {
+        // 판정이 id 문자열에 묶여 있으면, id만 다른 새 기술은 아래 동작을 조용히 잃는다.
+        Rules rules = new Rules();
+        SkillDefinition shield = Renamed(rules.Parry, "shield");
+        SkillDefinition hook = Renamed(rules.Grab, "hook");
+        SkillDefinition smash = Renamed(rules.Strike, "smash");
+
+        // 전방 방어: 조준에서 40도 벗어난 곳의 타격도 막는다. 먼저 치는 기술의 좁은 범위로는 닿지 않는 곳이다.
+        Fixture guarded = new Fixture();
+        Enemy striker = Target(guarded);
+        double side = 40 * Math.PI / 180;
+        striker.Position = guarded.Player.Position + new Vector2((float)Math.Cos(side), (float)Math.Sin(side)) * 50;
+        striker.Action = new EnemyAction(30010, new EnemySkill("strike", 1, 0, 0.05, 85, 25), side + Math.PI, guarded.Match.Now);
+        Use(guarded, shield, 30011);
+        Advance(guarded.Match, 0.08);
+        Near(striker.Hp, 0);
+        Near(guarded.Player.Hp, 6);
+
+        // 방어 창 안에서는 무행동인 적을 치지 않고, 창이 끝나면 일반 반격이 나간다.
+        Fixture countered = new Fixture();
+        Enemy idle = Target(countered);
+        Use(countered, shield, 30012);
+        Advance(countered.Match, 0.3);
+        Near(idle.Hp, 1);
+        Advance(countered.Match, shield.ActiveSeconds - 0.3 + 0.1);
+        Near(idle.Hp, 0);
+
+        // 단일 대상: 범위 안에 둘이 있어도 가까운 한 명만 판정한다.
+        Fixture held = new Fixture();
+        Enemy near = Target(held);
+        Enemy far = Target(held);
+        near.Position = held.Player.Position + new Vector2(40, 0);
+        far.Position = held.Player.Position + new Vector2(58, 0);
+        Use(held, hook, 30013);
+        Advance(held.Match, 0.2);
+        Near(near.Hp, 0);
+        Near(far.Hp, 1);
+
+        // 구조물 파괴: 접촉 중에 시설을 부순다.
+        Fixture breaker = new Fixture();
+        Facility facility = breaker.Match.Facilities[0];
+        breaker.Player.Position = facility.Position - new Vector2(40, 0);
+        Use(breaker, smash, 30014);
+        Advance(breaker.Match, 0.25);
+        Near(facility.Hp, facility.MaxHp - 1);
     }
 
     private static void LongStep()
