@@ -78,7 +78,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 
 `RoomHost`(`Networking/RoomHost.cs`)는 싱글턴 `BackgroundService`이고 모든 방을 `ConcurrentDictionary`로 들고 있다. `ExecuteAsync`의 `PeriodicTimer` 하나가 `Rules.Step`(1/30초)마다 깨어나 이번 틱의 방 목록을 만든 뒤 `StepRoom`으로 각 방을 진행하고, 0.1초마다 스냅샷을 보낸다. 방이 둘 이상이면 `Parallel.For`로 **동시에** 진행한다. 방마다 상태와 잠금이 독립이라 가능한 것이며, 아직 부하를 측정한 적은 없다. 한 틱에 진행하는 시간은 0.25초(`MaxTickSeconds`)로 자른다. 서버가 절전 등으로 오래 멈췄다 깨어났을 때 밀린 시간을 한꺼번에 따라잡으면, 아무도 보지 못하는 사이에 대원이 죽고 작전이 끝나기 때문이다. 방은 마지막 연결이 끊긴 뒤 15분이 지나면 사라진다(`Room.Expired`). `Detach`가 `LastVisit`를 갱신하므로 기준은 마지막 연결이 끊긴 시각이다. 대원이 아무도 남지 않은 방은 30초 뒤에 지운다. 빈 방으로 방 32개 상한을 막아 두지 못하게 하기 위해서다.
 
-방 상태를 건드리는 모든 경로가 `lock (room.Gate)`를 잡는다. HTTP 참가, WebSocket 접속·입력, 시뮬레이션 루프가 같은 자료구조를 공유하므로 **새 경로를 추가할 때도 이 잠금 안에서 `Match`를 만진다.** 방 삭제(`StepRoom`)도 그 방의 잠금 안에서 일어난다. 그래서 방을 찾은 뒤 잠금을 잡는 경로는 잠금 안에서 `IsRegistered`로 방이 아직 등록되어 있는지 다시 확인한다. `Join`과 `Attach`가 그렇게 한다. 연결마다 용량 2의 `BoundedChannel`(`DropOldest`)을 두어 느린 수신자에게는 오래된 스냅샷을 버린다.
+방 상태를 건드리는 모든 경로가 `lock (room.Gate)`를 잡는다. HTTP 참가, WebSocket 접속·입력, 시뮬레이션 루프가 같은 자료구조를 공유하므로 **새 경로를 추가할 때도 이 잠금 안에서 `Match`를 만진다.** 방 삭제(`StepRoom`)도 그 방의 잠금 안에서 일어난다. 그래서 방을 찾은 뒤 잠금을 잡는 경로는 잠금 안에서 `IsRegistered`로 방이 아직 등록되어 있는지 다시 확인한다. `Join`과 `Attach`가 그렇게 한다. `StepRoom`은 진행 중 예외를 잡아 연속 실패를 센다. 30번(약 1초) 연속 실패하면 방을 닫고 연결도 닫는다. 오류는 연속 실패의 첫 번째만 기록한다. 토큰 정리는 대원이 실제로 빠져 `Match.Departures`가 바뀌었을 때만 한다. 연결마다 용량 2의 `BoundedChannel`(`DropOldest`)을 두어 느린 수신자에게는 오래된 스냅샷을 버린다.
 
 `Program.cs`가 `/health`, `POST /api/rooms`, `POST /api/rooms/{code}/join`, `/ws`를 연결하고 요청 본문 4096바이트 상한과 IP당 분당 30회 참가 제한을 건다.
 
@@ -102,7 +102,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 
 기술별 동작은 id가 아니라 `SkillDefinition`의 속성으로 판단한다. `GuardsFront`(먼저 치지 않고 전방 120°로 들어오는 공격에만 반응), `HasFollowup`(유효 시간 뒤 상성 없는 반격), `SingleTarget`(가장 가까운 한 명만 판정), `BreaksStructures`(시설·벽 파괴)다. **판정 코드에 `Skill.Id == "parry"` 같은 비교를 다시 넣지 않는다.** 새 기술은 속성만 정하면 같은 판정을 받는다. `CombatTests`의 `SkillFlags`가 id만 다른 기술로 네 동작을 모두 확인한다. 클라이언트도 `rules.skills`의 같은 속성으로 방어 호와 반격을 그린다.
 
-적은 조향 방식으로 움직인다. 움직이기 전에 방향을 한 번 정하고 `MoveBody`는 한 번만 부른다. 몸이 직선으로 지나갈 수 있으면 직진하고(`BodyCanPass`: 몸 중심선과 양옆 두 선이 모두 열려 있음), 아니면 흐름장을 따른다. 그 방향에 이웃 적과의 분리 방향(`Separation`)을 더한다. 막혔다고 다른 방향을 거듭 시도하지 않는다. `EncounterTests`의 `CornerSlip`이 사선은 열려 있지만 몸이 모서리에 걸리는 경우를 검사한다.
+적은 조향 방식으로 움직인다. 움직이기 전에 방향을 한 번 정하고 `MoveBody`는 한 번만 부른다. 몸이 직선으로 지나갈 수 있으면 직진하고(`BodyCanPass`: 몸 중심선과 양옆 두 선이 모두 열려 있음), 아니면 흐름장을 따른다. 그 방향에 이웃 적과의 분리 방향(`Separation`)을 더한다. 막혔다고 다른 방향을 거듭 시도하지 않는다. `EncounterTests`의 `CornerSlip`이 사선은 열려 있지만 몸이 모서리에 걸리는 경우를 검사한다. `FlowHeading`은 자기 칸보다 비용이 낮은 이웃이 있을 때만 방향을 준다. 대원이 있는 출발점 칸에서 이웃 칸으로 향하면 오히려 멀어지기 때문이다. 몸 통과 판단의 옆선은 반지름보다 0.5 좁게 긋는다. 벽에 딱 붙은 적의 옆선이 벽 면 위에서 시작하면 거리 0에서 막혔다고 나온다.
 
 - 일반 적(1티어): 승리 시 피해 없이 처치, 비김은 서로 피해 1, 패배는 플레이어만 피해 1. 무행동 적에게는 일반 피해 1.
 - 2티어 엘리트 행동은 동시에 유효한 대응 **두 개**가 필요하고 동료의 대응과 합산된다. 완전 파훼는 체력과 무관한 처치이며 같은 공격 범위의 무행동 동료까지 보호한다.
@@ -137,7 +137,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 
 ### 클라이언트
 
-- `client/src/main.ts`: 로비, 방 생성·참가, 네 슬롯 입력, HUD, 재접속. 복구 토큰을 탭별 `sessionStorage`에 둔다.
+- `client/src/main.ts`: 로비, 방 생성·참가, 네 슬롯 입력, HUD, 재접속. 마우스 버튼 상태는 `pointerdown`·`pointermove`·`pointerup`의 `event.buttons`로 다시 맞춘다(`syncButtons`). **버튼을 겹쳐 누르거나 뗄 때 브라우저는 `pointerdown`/`pointerup` 대신 `pointermove`만 보낸다.** `event.button`만 보면 두 번째 버튼이 빠지고 놓은 버튼이 눌린 채로 남는다. 입력 정리(`clearInput`)는 작전 중 살아 있을 때만 서버에 멈춤 입력을 보낸다. 복구 토큰을 탭별 `sessionStorage`에 둔다.
 - `client/src/world.ts`: PixiJS 렌더링, 스냅샷 보간, 이동 예측과 서버 재조정. 하드웨어 WebGL이 없으면 Canvas 렌더러로 내려간다(Playwright는 `--disable-webgl`로 이 경로를 검사한다). 라벨(`Text`)은 쓰지 않게 되면 숨겨 두었다가 다시 쓰고, 64개를 넘는 것만 해제한다. 매번 새로 만드는 비용이 Canvas에서 라벨 하나에 약 30µs였다.
 - 서버 재조정: `main.ts`의 `sendInput`이 실제로 보낸 입력만 `World.recordInput`으로 기록하고, `update`가 스냅샷의 `ack` 이하를 버린다. `draw`는 서버 위치 위에 남은 입력을 `replay`로 다시 적용한 곳을 보정 목표로 삼는다. **입력을 보내는 새 경로를 만들면 반드시 `sendInput`을 거친다.** 기록되지 않은 입력은 예측에서 빠져 화면이 서버와 어긋난다. 서버는 이 과정에 관여하지 않고, 클라이언트 시각은 화면 계산에만 쓴다.
 - 클라이언트는 모양·진행률·예고만 그린다. 판정 결과를 결정하지 않는다.
