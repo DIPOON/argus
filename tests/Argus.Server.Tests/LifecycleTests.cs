@@ -26,6 +26,7 @@ internal static class LifecycleTests
         tests.Add(new TestCase("A long session keeps its room for the full retention time after the last disconnect", RoomRetention));
         tests.Add(new TestCase("A room with nobody left is released soon instead of holding a slot for fifteen minutes", EmptyRoomExpiry));
         tests.Add(new TestCase("Hidden spawns do not advance the id sequence that player actions reveal", HiddenIdGaps));
+        tests.Add(new TestCase("Walls, rules and map are resent until delivered and walls again after they change", StaticParts));
     }
 
     private static void Deployment()
@@ -231,7 +232,7 @@ internal static class LifecycleTests
         f.Match.Effects.Add(new Effect(9003, 1300, 1100, "break", f.Match.Now + 1));
         string serialized = JsonSerializer.Serialize(Snapshot.Create(f.Match, f.Player), RoomHost.Json);
         using JsonDocument json = JsonDocument.Parse(serialized);
-        Equal(json.RootElement.GetProperty("version").GetInt32(), 2);
+        Equal(json.RootElement.GetProperty("version").GetInt32(), 3);
         Equal(json.RootElement.GetProperty("enemies").GetArrayLength(), 1);
         Check(!serialized.Contains("9001") && !serialized.Contains("9002") && !serialized.Contains("9003"));
         Player ally = Ally(f, "scout");
@@ -249,9 +250,9 @@ internal static class LifecycleTests
         // 한 대원만 보급 대기 중이게 해서 수신자마다 값이 달라지게 한다.
         f.Match.Supplies[0].ReadyAt[f.Player.Id] = f.Match.Now + 10;
         SnapshotMessage shared = Snapshot.CreateShared(f.Match);
-        Snapshot.Personalize(shared, f.Match, f.Player);
+        Snapshot.Personalize(shared, f.Match, f.Player, true, true);
         string forPilot = JsonSerializer.Serialize(shared, RoomHost.Json);
-        Snapshot.Personalize(shared, f.Match, ally);
+        Snapshot.Personalize(shared, f.Match, ally, true, true);
         string forScout = JsonSerializer.Serialize(shared, RoomHost.Json);
         // 같은 메시지를 다음 수신자에게 다시 써도 따로 만든 스냅샷과 같아야 한다.
         Equal(forPilot, JsonSerializer.Serialize(Snapshot.Create(f.Match, f.Player), RoomHost.Json));
@@ -354,6 +355,53 @@ internal static class LifecycleTests
         int second = player.Actions[player.Actions.Count - 1].Id;
         // 그 사이 보이는 곳에서는 아무 일도 없었다. 숨은 생성이 순번을 쓰면 빈 번호로 생성 수가 드러난다.
         Equal(second, first + 1);
+    }
+
+    private static OutgoingMessage Next(Peer peer)
+    {
+        Check(peer.Outgoing.Reader.TryRead(out OutgoingMessage? message), "보낼 메시지가 없습니다");
+        return message!;
+    }
+
+    private static bool Carries(OutgoingMessage message, string field)
+    {
+        using JsonDocument json = JsonDocument.Parse(message.Bytes);
+        return json.RootElement.TryGetProperty(field, out JsonElement _);
+    }
+
+    private static void StaticParts()
+    {
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        Guest guest = host.Create(new EntryRequest("pilot"))!;
+        (Room room, Player player, Peer peer) = host.Attach(guest.Room, guest.Token)!.Value;
+        // 접속 직후 스냅샷에는 벽·규칙·맵이 모두 있다.
+        OutgoingMessage first = Next(peer);
+        Check(Carries(first, "walls") && Carries(first, "rules") && Carries(first, "map"));
+        // 아직 보내지 않았다. 느린 연결에서 버려질 수 있으므로 다음 방송에도 다시 담는다.
+        lock (room.Gate)
+        {
+            RoomHost.PublishSnapshots(room);
+        }
+        OutgoingMessage resent = Next(peer);
+        Check(Carries(resent, "walls") && Carries(resent, "rules") && Carries(resent, "map"), "보내기 전에 버려질 수 있는 정보를 다시 담지 않았습니다");
+        // 실제로 보낸 뒤에는 바뀌지 않은 정보를 뺀다. 판 번호는 매번 보낸다.
+        peer.MarkSent(resent);
+        lock (room.Gate)
+        {
+            RoomHost.PublishSnapshots(room);
+        }
+        OutgoingMessage lean = Next(peer);
+        Check(!Carries(lean, "walls") && !Carries(lean, "rules") && !Carries(lean, "map"), "보낸 정보를 또 보냅니다");
+        Check(Carries(lean, "mapRevision"));
+        peer.MarkSent(lean);
+        // 벽이 부서져 판 번호가 바뀌면 벽만 다시 보낸다. 장애물 타일 (19, 11)의 체력은 3이다.
+        Check(room.Match.Map.Damage(11 * BattleMap.Columns + 19, 3));
+        lock (room.Gate)
+        {
+            RoomHost.PublishSnapshots(room);
+        }
+        OutgoingMessage changed = Next(peer);
+        Check(Carries(changed, "walls") && !Carries(changed, "rules"), "바뀐 벽을 다시 보내지 않았습니다");
     }
 
     private static void BlockedDeployment()

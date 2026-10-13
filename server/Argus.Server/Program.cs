@@ -71,7 +71,7 @@ internal static class Program
 
     private static IResult Health()
     {
-        return Results.Ok(new { status = "ok", protocol = 2 });
+        return Results.Ok(new { status = "ok", protocol = 3 });
     }
 
     private static IResult CreateRoom(EntryRequest request, RoomHost host)
@@ -322,7 +322,7 @@ internal static class Program
                             type = "error",
                             message = "해당 위치에는 투입할 수 없습니다. 빈 지면을 선택하세요."
                         }, RoomHost.Json);
-                        peer.Outgoing.Writer.TryWrite(message);
+                        peer.Outgoing.Writer.TryWrite(new OutgoingMessage(message, -1, false));
                     }
                 }
                 else if (type == "loadout")
@@ -336,7 +336,7 @@ internal static class Program
                         type = "pong",
                         sent = Number(root, "sent")
                     }, RoomHost.Json);
-                    peer.Outgoing.Writer.TryWrite(message);
+                    peer.Outgoing.Writer.TryWrite(new OutgoingMessage(message, -1, false));
                 }
             }
         }
@@ -363,9 +363,11 @@ internal static class Program
     private static async Task Send(WebSocket socket, Peer peer, CancellationToken token)
     {
         // await foreach는 다음 전송 메시지가 들어올 때까지 비동기로 기다린다.
-        await foreach (byte[] bytes in peer.Outgoing.Reader.ReadAllAsync(token))
+        await foreach (OutgoingMessage message in peer.Outgoing.Reader.ReadAllAsync(token))
         {
-            await socket.SendAsync(bytes.AsMemory(), WebSocketMessageType.Text, true, token);
+            await socket.SendAsync(message.Bytes.AsMemory(), WebSocketMessageType.Text, true, token);
+            // 실제로 보낸 뒤에야 이 연결이 바뀌지 않는 정보를 받았다고 본다.
+            peer.MarkSent(message);
         }
     }
 

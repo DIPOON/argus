@@ -1,6 +1,6 @@
 import './style.css';
 import { World } from './world';
-import { skillNames, type Guest, type Player, type Snapshot, type Skill } from './types';
+import { skillNames, type Guest, type Player, type Snapshot, type SnapshotWire, type Skill } from './types';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const escape = (value: string) => value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -195,8 +195,14 @@ function connect() {
     if (message.type === 'pong') { ping = Math.round(performance.now() - message.sent); return; }
     if (message.type === 'error') { toast(message.message); return; }
     if (message.type !== 'snapshot') return;
-    if (message.version !== 2) { leave(); $('lobby-error').textContent = '서버와 클라이언트 버전이 다릅니다. 새로고침 후 다시 접속하세요.'; return; }
-    snapshot = message as Snapshot;
+    if (message.version !== 3) { leave(); $('lobby-error').textContent = '서버와 클라이언트 버전이 다릅니다. 새로고침 후 다시 접속하세요.'; return; }
+    // 벽은 바뀔 때만, 규칙과 맵은 접속 직후에만 온다. 빠진 값은 같은 방의 이전 스냅샷에서 이어 쓴다.
+    const wire = message as SnapshotWire;
+    const previous = snapshot?.room === wire.room ? snapshot : undefined;
+    const walls = wire.walls ?? previous?.walls, rules = wire.rules ?? previous?.rules, map = wire.map ?? previous?.map;
+    // 서버는 실제로 보낼 때까지 다시 담으므로 처음 받은 스냅샷에는 모두 있다. 그래도 빠졌으면 다음 것을 기다린다.
+    if (walls === undefined || rules === undefined || map === undefined) return;
+    snapshot = { ...wire, walls, rules, map };
     sequence = Math.max(sequence, (me()?.ack ?? -1) + 1);
     status('분대 연결됨', true);
     world!.update(snapshot);

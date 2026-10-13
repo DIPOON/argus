@@ -38,5 +38,7 @@ export interface Snapshot {
   effects: (Position & { id: number; kind: string; until: number })[];
   sight: number[][]; notices: { at: number; text: string }[];
 }
+// 서버가 보내는 그대로의 스냅샷. 벽은 바뀔 때만, 규칙과 맵은 접속 직후에만 담긴다(protocol v3).
+export type SnapshotWire = Omit<Snapshot, 'walls' | 'rules' | 'map'> & Partial<Pick<Snapshot, 'walls' | 'rules' | 'map'>>;
 export interface Guest { room: string; id: string; token: string }
 export interface Control { x: number; y: number; aim: number; slot: number }

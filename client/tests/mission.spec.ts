@@ -81,7 +81,10 @@ test('a squad counters enemies and completes the mission using only public gamep
     const client = { ws, snapshot: undefined as Snapshot | undefined, seq: 0, lastDeploy: 0 };
     ws.addEventListener('message', event => {
       const value = JSON.parse(String(event.data));
-      if (value.type === 'snapshot') client.snapshot = value;
+      if (value.type !== 'snapshot') return;
+      // 벽·규칙·맵은 바뀌거나 처음일 때만 온다(protocol v3). 빠진 값은 이전 스냅샷에서 이어 쓴다.
+      const previous = client.snapshot;
+      client.snapshot = { ...value, walls: value.walls ?? previous?.walls, rules: value.rules ?? previous?.rules, map: value.map ?? previous?.map };
     });
     await new Promise<void>(resolve => ws.addEventListener('open', () => resolve()));
     ws.send(JSON.stringify({ type: 'hello', room: guest.room, token: guest.token }));

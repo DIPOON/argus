@@ -8,7 +8,8 @@ public static class Snapshot
     public static SnapshotMessage Create(Match match, Player recipient)
     {
         SnapshotMessage message = CreateShared(match);
-        Personalize(message, match, recipient);
+        // 한 명에게 따로 보낼 때는 벽·규칙·맵을 모두 담는다.
+        Personalize(message, match, recipient, true, true);
         return message;
     }
 
@@ -29,7 +30,7 @@ public static class Snapshot
         message.Extraction.Progress = Round(match.ExtractionProgress);
         message.Extraction.Duration = match.Rules.ExtractionSeconds;
         message.Extraction.Unlocked = match.ObjectivesComplete;
-        message.Walls = match.Map.Tiles;
+        // 벽 자체는 수신자별로 Personalize가 담는다. 판 번호는 매번 보내 클라이언트가 바뀐 것을 알게 한다.
         message.MapRevision = match.Map.Revision;
         for (int i = 0; i < match.Players.Count; i++)
         {
@@ -125,21 +126,41 @@ public static class Snapshot
             message.Supplies.Add(entry);
         }
         message.Notices = match.Notices;
-        message.Rules.Deploy = match.Rules.DeploySeconds;
-        message.Rules.Speed = match.Rules.PlayerSpeed;
-        message.Rules.GuardHalfAngle = match.Rules.GuardHalfAngle;
-        message.Rules.ParryFollowupSeconds = match.Rules.ParryFollowupSeconds;
-        message.Rules.Skills.Add(match.Rules.Strike);
-        message.Rules.Skills.Add(match.Rules.Parry);
-        message.Rules.Skills.Add(match.Rules.Grab);
         return message;
+    }
+
+    private static RulesSnapshot CreateRules(Match match)
+    {
+        RulesSnapshot rules = new RulesSnapshot();
+        rules.Deploy = match.Rules.DeploySeconds;
+        rules.Speed = match.Rules.PlayerSpeed;
+        rules.GuardHalfAngle = match.Rules.GuardHalfAngle;
+        rules.ParryFollowupSeconds = match.Rules.ParryFollowupSeconds;
+        rules.Skills.Add(match.Rules.Strike);
+        rules.Skills.Add(match.Rules.Parry);
+        rules.Skills.Add(match.Rules.Grab);
+        return rules;
     }
 
     // 수신자마다 다른 값만 덮어쓴다. 같은 메시지를 다음 수신자에게 다시 쓰므로
     // 수신자별 값은 빠짐없이 모두 여기서 정해야 앞 수신자의 값이 남지 않는다.
-    public static void Personalize(SnapshotMessage message, Match match, Player recipient)
+    // includeWalls는 이 수신자가 아직 지금 판의 벽을 받지 못했을 때, includeStatic은 규칙과 맵을 아직 받지 못했을 때 켠다.
+    public static void Personalize(SnapshotMessage message, Match match, Player recipient, bool includeWalls, bool includeStatic)
     {
         message.You = recipient.Id;
+        // 담지 않을 때는 null로 비워 JSON에서 빠지게 한다. 앞 수신자에게 담았던 값이 남지 않도록 매번 정한다.
+        message.Walls = null;
+        if (includeWalls)
+        {
+            message.Walls = match.Map.Tiles;
+        }
+        message.Map = null;
+        message.Rules = null;
+        if (includeStatic)
+        {
+            message.Map = new MapSnapshot();
+            message.Rules = CreateRules(match);
+        }
         // CreateShared가 match.Supplies와 같은 순서로 보급을 넣었으므로 번호가 일치한다.
         for (int i = 0; i < match.Supplies.Count; i++)
         {

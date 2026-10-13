@@ -1,10 +1,12 @@
+using System.Text.Json.Serialization;
+
 namespace Argus.Server.Game;
 
 // 모든 위치·피해·기술 시간은 서버가 계산한 값이다. JSON 속성명은 camelCase다.
 public sealed class SnapshotMessage
 {
     public string Type { get; set; } = "snapshot";
-    public int Version { get; set; } = 2;
+    public int Version { get; set; } = 3;
     public string Room { get; set; } = "";
     public double Now { get; set; }
     public double Elapsed { get; set; }
@@ -14,7 +16,9 @@ public sealed class SnapshotMessage
     public int Pulse { get; set; }
     public double NextPulse { get; set; }
     public ExtractionSnapshot Extraction { get; set; } = new ExtractionSnapshot();
-    public byte[] Walls { get; set; } = Array.Empty<byte>();
+    // 벽은 수신자가 아직 받지 못한 판일 때만 담는다. 비어 있으면 JSON에서 빠진다.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public byte[]? Walls { get; set; }
     public int MapRevision { get; set; }
     public List<PlayerSnapshot> Players { get; set; } = new List<PlayerSnapshot>();
     public List<EnemySnapshot> Enemies { get; set; } = new List<EnemySnapshot>();
@@ -24,8 +28,11 @@ public sealed class SnapshotMessage
     public List<FacilitySnapshot> Facilities { get; set; } = new List<FacilitySnapshot>();
     public List<SupplySnapshot> Supplies { get; set; } = new List<SupplySnapshot>();
     public List<Notice> Notices { get; set; } = new List<Notice>();
-    public MapSnapshot Map { get; set; } = new MapSnapshot();
-    public RulesSnapshot Rules { get; set; } = new RulesSnapshot();
+    // 맵과 규칙은 작전 중 바뀌지 않으므로 수신자가 아직 받지 못했을 때만 담는다.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MapSnapshot? Map { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RulesSnapshot? Rules { get; set; }
 }
 
 public sealed class PlayerSnapshot

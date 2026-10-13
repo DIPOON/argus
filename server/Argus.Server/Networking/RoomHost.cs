@@ -7,11 +7,48 @@ using Argus.Server.Game;
 
 namespace Argus.Server.Networking;
 
+// 연결로 보낼 메시지와, 그 안에 바뀌지 않는 정보가 담겼는지를 함께 둔다.
+public sealed class OutgoingMessage
+{
+    public byte[] Bytes { get; }
+    // 담긴 벽 정보의 판 번호다. 벽이 없으면 -1이다.
+    public int WallRevision { get; }
+    // 규칙과 맵 정보를 담았는지 나타낸다.
+    public bool HasStatic { get; }
+
+    public OutgoingMessage(byte[] bytes, int wallRevision, bool hasStatic)
+    {
+        Bytes = bytes;
+        WallRevision = wallRevision;
+        HasStatic = hasStatic;
+    }
+}
+
 public sealed class Peer
 {
     public long Connection { get; }
     public bool Replaced { get; set; }
-    public Channel<byte[]> Outgoing { get; }
+    public Channel<OutgoingMessage> Outgoing { get; }
+    // 실제로 보낸 벽 판 번호와 규칙·맵 전송 여부다. 느린 수신자에게 쌓인 메시지는 버려질 수 있으므로
+    // 만들 때가 아니라 보낸 뒤에 기록한다. 보내는 작업과 방송이 다른 스레드에서 쓰고 읽으므로 volatile로 둔다.
+    private volatile int _sentWallRevision = -1;
+    private volatile bool _sentStatic;
+
+    public int SentWallRevision
+    {
+        get
+        {
+            return _sentWallRevision;
+        }
+    }
+
+    public bool SentStatic
+    {
+        get
+        {
+            return _sentStatic;
+        }
+    }
 
     public Peer(long connection)
     {
@@ -20,7 +57,20 @@ public sealed class Peer
         options.FullMode = BoundedChannelFullMode.DropOldest;
         options.SingleReader = true;
         options.SingleWriter = false;
-        Outgoing = Channel.CreateBounded<byte[]>(options);
+        Outgoing = Channel.CreateBounded<OutgoingMessage>(options);
+    }
+
+    // 메시지를 실제로 보낸 뒤에 부른다.
+    public void MarkSent(OutgoingMessage message)
+    {
+        if (message.WallRevision >= 0)
+        {
+            _sentWallRevision = message.WallRevision;
+        }
+        if (message.HasStatic)
+        {
+            _sentStatic = true;
+        }
     }
 }
 
@@ -246,7 +296,7 @@ public sealed class RoomHost : BackgroundService
             player.AwaitingFirstConnection = false;
             room.LastVisit = DateTime.UtcNow;
             byte[] snapshot = JsonSerializer.SerializeToUtf8Bytes(Snapshot.Create(room.Match, player), Json);
-            peer.Outgoing.Writer.TryWrite(snapshot);
+            peer.Outgoing.Writer.TryWrite(new OutgoingMessage(snapshot, room.Match.Map.Revision, true));
             return (room, player, peer);
         }
     }
@@ -352,7 +402,8 @@ public sealed class RoomHost : BackgroundService
         }
     }
 
-    private static void PublishSnapshots(Room room)
+    // 방에 연결된 대원들에게 스냅샷을 보낸다. 방 잠금 안에서 불러야 한다.
+    public static void PublishSnapshots(Room room)
     {
         if (room.Peers.Count == 0)
         {
@@ -367,10 +418,19 @@ public sealed class RoomHost : BackgroundService
             {
                 continue;
             }
+            // 벽은 이 연결이 아직 받지 못한 판일 때만, 규칙과 맵은 아직 받지 못했을 때만 담는다.
+            int revision = room.Match.Map.Revision;
+            bool includeWalls = peer.SentWallRevision != revision;
+            bool includeStatic = !peer.SentStatic;
             // 같은 메시지에 수신자별 값만 바꿔 넣고 바로 직렬화한다.
-            Snapshot.Personalize(message, room.Match, player);
+            Snapshot.Personalize(message, room.Match, player, includeWalls, includeStatic);
             byte[] snapshot = JsonSerializer.SerializeToUtf8Bytes(message, Json);
-            peer.Outgoing.Writer.TryWrite(snapshot);
+            int wallRevision = -1;
+            if (includeWalls)
+            {
+                wallRevision = revision;
+            }
+            peer.Outgoing.Writer.TryWrite(new OutgoingMessage(snapshot, wallRevision, includeStatic));
         }
     }
 }
