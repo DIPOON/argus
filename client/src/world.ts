@@ -100,7 +100,8 @@ export class World {
     return position;
   }
 
-  canStand(p: Position, radius = 15) {
+  // 투입 위치 검사도 서버와 같은 대원 반지름을 쓴다.
+  canStand(p: Position, radius = this.snapshot?.rules.playerRadius ?? 13) {
     const m = this.snapshot?.map;
     if (!m || p.x < radius || p.y < radius || p.x > m.width - radius || p.y > m.height - radius) return false;
     for (let y = Math.floor((p.y - radius) / m.cell); y <= Math.floor((p.y + radius) / m.cell); y++) {

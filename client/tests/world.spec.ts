@@ -7,7 +7,7 @@ import type { Control, Position, Snapshot } from '../src/types';
 interface TestWorld {
   update(snapshot: Snapshot): void;
   draw(dt: number): void;
-  canStand(position: Position, radius: number): boolean;
+  canStand(position: Position, radius?: number): boolean;
   control: Control;
   move(position: Position, dx: number, dy: number): Position;
   recordInput(seq: number, x: number, y: number, at?: number): void;
@@ -201,4 +201,14 @@ test('the drawn position follows the reconciled position instead of the lagging 
   // 예전 방식은 서버 위치 400에 머물렀다. 재조정하면 입력 0.2초 분량인 436 근처로 간다.
   expect(drawn.x).toBeGreaterThan(430);
   expect(drawn.x).toBeLessThan(445);
+});
+
+test('deploy placement uses the server player radius', async ({ page }) => {
+  const result = await page.evaluate(state => {
+    const world = window.testWorld;
+    world.update(structuredClone(state));
+    // 벽 타일 (10, 10)의 왼쪽 면(x = 480)에서 14 떨어진 자리다. 서버 반지름 13이면 설 수 있다.
+    return world.canStand({ x: 466, y: 504 });
+  }, snapshot());
+  expect(result).toBe(true);
 });
