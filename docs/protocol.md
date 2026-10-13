@@ -94,6 +94,8 @@ id, x, y, kind(grunt/breaker/warden), name, radius, hp, maxHp,
 tiers([타격, 방어, 채널]), action(null 또는 기술 객체)
 ```
 
+적 `id`는 무작위이며 순서나 크기에 뜻이 없다. 순번으로 정하면 보이는 id 사이의 빈 번호로 안개 속에서 생성된 적의 수가 드러나기 때문이다.
+
 기술 객체:
 
 ```text

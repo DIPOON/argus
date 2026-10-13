@@ -76,7 +76,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 
 ### 실행 구조
 
-`RoomHost`(`Networking/RoomHost.cs`)는 싱글턴 `BackgroundService`이고 모든 방을 `ConcurrentDictionary`로 들고 있다. `ExecuteAsync`의 `PeriodicTimer` 하나가 `Rules.Step`(1/30초)마다 깨어나 이번 틱의 방 목록을 만든 뒤 `StepRoom`으로 각 방을 진행하고, 0.1초마다 스냅샷을 보낸다. 방이 둘 이상이면 `Parallel.For`로 **동시에** 진행한다. 방마다 상태와 잠금이 독립이라 가능한 것이며, 아직 부하를 측정한 적은 없다. 방은 마지막 연결이 끊긴 뒤 15분이 지나면 사라진다(`Room.Expired`). `Detach`가 `LastVisit`를 갱신하므로 기준은 마지막 연결이 끊긴 시각이다.
+`RoomHost`(`Networking/RoomHost.cs`)는 싱글턴 `BackgroundService`이고 모든 방을 `ConcurrentDictionary`로 들고 있다. `ExecuteAsync`의 `PeriodicTimer` 하나가 `Rules.Step`(1/30초)마다 깨어나 이번 틱의 방 목록을 만든 뒤 `StepRoom`으로 각 방을 진행하고, 0.1초마다 스냅샷을 보낸다. 방이 둘 이상이면 `Parallel.For`로 **동시에** 진행한다. 방마다 상태와 잠금이 독립이라 가능한 것이며, 아직 부하를 측정한 적은 없다. 한 틱에 진행하는 시간은 0.25초(`MaxTickSeconds`)로 자른다. 서버가 절전 등으로 오래 멈췄다 깨어났을 때 밀린 시간을 한꺼번에 따라잡으면, 아무도 보지 못하는 사이에 대원이 죽고 작전이 끝나기 때문이다. 방은 마지막 연결이 끊긴 뒤 15분이 지나면 사라진다(`Room.Expired`). `Detach`가 `LastVisit`를 갱신하므로 기준은 마지막 연결이 끊긴 시각이다. 대원이 아무도 남지 않은 방은 30초 뒤에 지운다. 빈 방으로 방 32개 상한을 막아 두지 못하게 하기 위해서다.
 
 방 상태를 건드리는 모든 경로가 `lock (room.Gate)`를 잡는다. HTTP 참가, WebSocket 접속·입력, 시뮬레이션 루프가 같은 자료구조를 공유하므로 **새 경로를 추가할 때도 이 잠금 안에서 `Match`를 만진다.** 방 삭제(`StepRoom`)도 그 방의 잠금 안에서 일어난다. 그래서 방을 찾은 뒤 잠금을 잡는 경로는 잠금 안에서 `IsRegistered`로 방이 아직 등록되어 있는지 다시 확인한다. `Join`과 `Attach`가 그렇게 한다. 연결마다 용량 2의 `BoundedChannel`(`DropOldest`)을 두어 느린 수신자에게는 오래된 스냅샷을 버린다.
 
@@ -100,6 +100,8 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 
 주의할 구분: `Affinity.Beats`는 **기술 id가 아니라 `Kind`를 비교한다.** 플레이어 기술 id `strike`/`parry`/`grab`의 `Kind`는 각각 `strike`/`block`/`channel`이다. `parry`를 `"parry"`로 비교하면 조용히 틀린다.
 
+반대로 기술별 동작(방어 창, 후속 반격, 단일 대상 잡기, 시설·벽 파괴)은 `Skill.Id == "parry"`처럼 **기술 id 문자열**로 나뉜다. 같은 종류의 새 기술을 추가하면 이 비교를 모두 찾아 `SkillDefinition`의 속성으로 옮긴다. 그대로 두면 새 기술에서 방어·반격·시설 파괴가 조용히 빠진다.
+
 - 일반 적(1티어): 승리 시 피해 없이 처치, 비김은 서로 피해 1, 패배는 플레이어만 피해 1. 무행동 적에게는 일반 피해 1.
 - 2티어 엘리트 행동은 동시에 유효한 대응 **두 개**가 필요하고 동료의 대응과 합산된다. 완전 파훼는 체력과 무관한 처치이며 같은 공격 범위의 무행동 동료까지 보호한다.
 - 적의 예고(telegraph)에는 이미 상성이 있고 회복(recovery) 중에는 없다.
@@ -118,6 +120,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 - 클라이언트가 보내는 것은 이동 방향·조준 방향·슬롯 번호뿐이다. `Match.Input`이 순번 역행·중복, 비유한수, 범위 초과를 거르고 이동 벡터를 정규화한다. `x`/`hp`/`mana`/`damage` 같은 필드로 상태를 정할 수 없다.
 - 맵 구조, 벽 파괴, 시설, 보급, 목표 진행은 공개 정보다.
 - 서드파티 클라이언트를 허용하므로 공식 클라이언트에서만 동작하는 장치로 규칙을 강제하지 않는다.
+- **보이지 않는 곳에서 일어나는 사건에 공개 순번을 쓰지 않는다.** 효과와 행동의 id는 `Match._nextId` 순번이다. 안개 속 생성처럼 숨은 사건이 같은 순번을 쓰면, 보이는 id 사이의 빈 번호로 그 횟수가 드러난다. 그래서 적 id는 `NewEnemyId`가 무작위로 정한다.
 - WebSocket 압축(permessage-deflate)을 켜 두었다. **서버가 보내는 메시지에 토큰 같은 비밀을 넣지 않는다.** 비밀이 플레이어 이름처럼 다른 사람이 정할 수 있는 값과 같은 압축 문맥에 들어가면 압축된 크기로 비밀을 추측할 수 있다(CRIME/BREACH). 지금은 숨겨진 적이 직렬화 전에 빠지고 토큰은 HTTP 응답으로만 나가므로 안전하다.
 
 `client/tests/game.spec.ts`의 위조 상태·잘못된 장비·순번 재생·신원 탈취 검사가 이 경계를 지킨다.
