@@ -15,6 +15,7 @@ interface TestWorld {
   pending: unknown[];
   mePosition(): Position | undefined;
   labelsById: Map<string, Text>;
+  spareLabels: Text[];
   labels: Container;
 }
 
@@ -88,19 +89,18 @@ function elite(id: number): Snapshot['enemies'][number] {
     tiers: [2, 1, 1], action: null };
 }
 
-test('120 enemy replacements release labels, including when changing rooms', async ({ page }) => {
+test('120 enemy replacements reuse labels and keep a bounded spare pool, including when changing rooms', async ({ page }) => {
   const state = snapshot();
   const result = await page.evaluate(({ state, enemy }) => {
     const world = window.testWorld;
     world.update(structuredClone(state)); world.draw(1 / 60);
     const baseline = world.labelsById.size;
-    const oldPlayerLabel = world.labelsById.get('player-pilot')!;
-    const labels: Text[] = [];
+    const used = new Set<Text>();
     let maximum = baseline;
     for (let i = 0; i < 120; i++) {
       state.enemies = [{ ...enemy, id: 1000 + i }];
       world.update(structuredClone(state)); world.draw(1 / 60);
-      labels.push(world.labelsById.get(`enemy-type-${1000 + i}`)!);
+      used.add(world.labelsById.get(`enemy-type-${1000 + i}`)!);
       maximum = Math.max(maximum, world.labelsById.size);
     }
     state.enemies = [];
@@ -108,16 +108,27 @@ test('120 enemy replacements release labels, including when changing rooms', asy
     const afterRemoval = world.labelsById.size;
     state.room = 'ROOM02'; state.you = 'new-pilot'; state.players[0].id = state.you;
     world.update(structuredClone(state)); world.draw(1 / 60);
-    return { baseline, maximum, afterRemoval, afterRoomChange: world.labelsById.size,
-      children: world.labels.children.length, destroyed: labels.every(label => label.destroyed && label.parent === null),
-      oldPlayerDestroyed: oldPlayerLabel.destroyed && oldPlayerLabel.parent === null };
+    const afterRoomChange = world.labelsById.size;
+    // 한꺼번에 많은 라벨이 생겼다 사라져도 숨겨 두는 라벨은 상한까지만 남는다.
+    state.effects = Array.from({ length: 200 }, (_, i) => ({ id: 5000 + i, x: 400, y: 700, kind: 'hit', until: state.now + 1 }));
+    world.update(structuredClone(state)); world.draw(1 / 60);
+    const burst = world.labelsById.size;
+    state.effects = [];
+    world.update(structuredClone(state)); world.draw(1 / 60);
+    return { baseline, maximum, afterRemoval, afterRoomChange, distinct: used.size, burst,
+      spares: world.spareLabels.length, children: world.labels.children.length,
+      visible: world.labels.children.filter(child => child.visible).length };
   }, { state, enemy: elite(1000) });
   expect(result.maximum).toBe(result.baseline + 1);
   expect(result.afterRemoval).toBe(result.baseline);
   expect(result.afterRoomChange).toBe(result.baseline);
-  expect(result.children).toBe(result.baseline);
-  expect(result.destroyed).toBe(true);
-  expect(result.oldPlayerDestroyed).toBe(true);
+  // 120번 바꾸는 동안 라벨 객체를 새로 만들지 않고 숨겨 둔 것을 다시 쓴다.
+  expect(result.distinct).toBeLessThanOrEqual(2);
+  expect(result.burst).toBe(result.baseline + 200);
+  // 숨겨 둔 라벨은 상한(64)까지만 남고 나머지는 해제된다. 화면에 보이는 것은 지금 쓰는 라벨뿐이다.
+  expect(result.spares).toBe(64);
+  expect(result.children).toBe(result.baseline + 64);
+  expect(result.visible).toBe(result.baseline);
 });
 
 test('enemy tells refresh color and disappear immediately with lost visibility', async ({ page }) => {
@@ -136,11 +147,12 @@ test('enemy tells refresh color and disappear immediately with lost visibility',
     const changed = { text: label.text, color: label.style.fill };
     state.enemies = [];
     world.update(structuredClone(state)); world.draw(1 / 60);
-    return { first, changed, removed: !world.labelsById.has('enemy-action-900'), destroyed: label.destroyed };
+    // 라벨은 재사용을 위해 파괴하지 않고 숨겨 둔다. 사라진 적의 예고가 화면에 남지 않으면 된다.
+    return { first, changed, removed: !world.labelsById.has('enemy-action-900'), hidden: !label.visible };
   }, state);
   expect(result.first).toEqual({ text: '타격 Ⅱ · 대응 2', color: 0xf28068 });
   expect(result.changed).toEqual({ text: '잡기 Ⅰ', color: 0xc0a1f5 });
-  expect(result.removed).toBe(true); expect(result.destroyed).toBe(true);
+  expect(result.removed).toBe(true); expect(result.hidden).toBe(true);
 });
 
 test('prediction blocks enemy bodies while allowing teammate overlap', async ({ page }) => {

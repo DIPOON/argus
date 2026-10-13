@@ -16,6 +16,9 @@ export class World {
   private units = new Graphics();
   private labels = new Container();
   private labelsById = new Map<string, Text>();
+  // 쓰지 않게 된 라벨을 바로 해제하지 않고 숨겨 두었다가 새 라벨에 다시 쓴다. 상한을 넘는 것만 해제한다.
+  private spareLabels: Text[] = [];
+  private static readonly spareLimit = 64;
   private snapshot?: Snapshot;
   private previous?: Snapshot;
   private received = 0;
@@ -195,25 +198,33 @@ export class World {
   private label(key: string, text: string, x: number, y: number, color: number, size = 12) {
     let label = this.labelsById.get(key);
     if (!label) {
-      label = new Text({ text, style: { fontFamily: 'sans-serif', fontSize: size, fontWeight: '600', fill: color } });
-      label.anchor.set(.5, .5);
+      label = this.spareLabels.pop();
+      if (!label) {
+        label = new Text({ text, style: { fontFamily: 'sans-serif', fontSize: size, fontWeight: '600', fill: color } });
+        label.anchor.set(.5, .5);
+        this.labels.addChild(label);
+      }
       this.labelsById.set(key, label);
-      this.labels.addChild(label);
     }
     label.text = text;
     label.style.fill = color;
+    label.style.fontSize = size;
     label.position.set(x, y);
     label.visible = true;
   }
 
   private removeUnusedLabels() {
-    // 이번 프레임에 사용하지 않은 라벨은 맵과 Pixi 양쪽에서 제거한다.
-    // 적의 사망·시야 이탈과 방 전환으로 사라진 라벨도 함께 정리된다.
+    // 이번 프레임에 쓰지 않은 라벨은 목록에서 뺀다. 적의 사망·시야 이탈과 방 전환으로 사라진 라벨도 여기서 정리된다.
+    // 상한까지는 숨긴 채 모아 두었다가 다시 쓰고, 넘는 것은 Pixi에서 떼어 해제해 라벨 수가 끝없이 늘지 않게 한다.
     for (const [key, label] of this.labelsById) {
       if (label.visible) continue;
+      this.labelsById.delete(key);
+      if (this.spareLabels.length < World.spareLimit) {
+        this.spareLabels.push(label);
+        continue;
+      }
       this.labels.removeChild(label);
       label.destroy({ style: true });
-      this.labelsById.delete(key);
     }
   }
 
