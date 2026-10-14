@@ -181,44 +181,27 @@ internal static class Program
             // 입력 수신과 상태 전송을 함께 시작하고, 어느 한쪽이 끝나면 연결을 정리한다.
             Task receive = Receive(socket, room, player, peer, lifetime.Token);
             Task send = peer.Send(socket, lifetime.Token);
-            await Task.WhenAny(receive, send);
-            if (peer.Replaced)
-            {
-                // 수신 취소 시 소켓이 즉시 중단될 수 있으므로 연결 교체 코드부터 보낸다.
-                using CancellationTokenSource closeTimeout =
-                    CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-                closeTimeout.CancelAfter(TimeSpan.FromSeconds(1));
-                try
-                {
-                    await send.WaitAsync(closeTimeout.Token);
-                    if (socket.State == WebSocketState.Open)
-                    {
-                        await socket.CloseOutputAsync((WebSocketCloseStatus)4001,
-                            "다른 연결로 교체됨", closeTimeout.Token);
-                        // 수신을 바로 취소하면 소켓이 중단되어 4001 대신 비정상 종료로 보일 수 있다.
-                        // 상대의 종료 응답까지 받은 뒤 송수신 작업을 정리한다.
-                        await receive.WaitAsync(closeTimeout.Token);
-                        if (socket.State == WebSocketState.CloseSent)
-                        {
-                            await socket.CloseAsync((WebSocketCloseStatus)4001,
-                                "다른 연결로 교체됨", closeTimeout.Token);
-                        }
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    // 종료 메시지 전송이 늦어져도 연결 정리는 계속한다.
-                }
-            }
-
-            await lifetime.CancelAsync();
             try
             {
-                await Task.WhenAll(receive, send);
+                await Task.WhenAny(receive, send);
+                if (peer.Replaced)
+                {
+                    await CloseReplaced(socket, receive, send, lifetime.Token);
+                }
             }
-            catch (OperationCanceledException)
+            finally
             {
-                // 위에서 취소한 송수신 작업이 끝날 때 발생할 수 있다.
+                // 어느 길로 나가든 송수신 작업을 멈추고 끝날 때까지 기다린다. 기다리지 않고 나가면 소켓이 해제된 뒤에도
+                // 수신 작업이 남아 있다가 아무도 받지 않는 예외로 끝난다.
+                await lifetime.CancelAsync();
+                try
+                {
+                    await Task.WhenAll(receive, send);
+                }
+                catch (Exception error) when (IsConnectionError(error))
+                {
+                    // 위에서 취소한 송수신 작업이 끝날 때 발생할 수 있다.
+                }
             }
         }
         catch (Exception error) when (IsConnectionError(error))
@@ -250,8 +233,8 @@ internal static class Program
                 string reason = "연결 종료";
                 if (peer != null && peer.Replaced)
                 {
-                    status = (WebSocketCloseStatus)4001;
-                    reason = "다른 연결로 교체됨";
+                    status = ReplacedStatus;
+                    reason = ReplacedReason;
                 }
                 try
                 {
@@ -262,6 +245,43 @@ internal static class Program
                     // 이미 끊어진 소켓에는 종료 메시지를 보낼 수 없다.
                 }
             }
+        }
+    }
+
+    // 다른 연결로 교체된 연결을 닫을 때의 종료 코드와 이유다. 클라이언트는 4001을 받으면 다시 접속하지 않는다.
+    private const WebSocketCloseStatus ReplacedStatus = (WebSocketCloseStatus)4001;
+    private const string ReplacedReason = "다른 연결로 교체됨";
+
+    // 교체된 연결에 종료 코드를 보낸다. 수신을 먼저 취소하면 소켓이 바로 중단되어 4001 대신 비정상 종료로
+    // 보일 수 있으므로, 남은 전송을 마치고 4001을 보낸 뒤 상대의 종료 응답까지 기다린다. 1초 안에 끝나지 않으면 그만둔다.
+    private static async Task CloseReplaced(WebSocket socket, Task receive, Task send, CancellationToken token)
+    {
+        using CancellationTokenSource closeTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        closeTimeout.CancelAfter(TimeSpan.FromSeconds(1));
+        try
+        {
+            try
+            {
+                await send.WaitAsync(closeTimeout.Token);
+            }
+            catch (WebSocketException)
+            {
+                // 마지막 전송이 실패해도 소켓이 아직 열려 있으면 아래에서 종료 코드를 보내 본다.
+            }
+            if (socket.State != WebSocketState.Open)
+            {
+                return;
+            }
+            await socket.CloseOutputAsync(ReplacedStatus, ReplacedReason, closeTimeout.Token);
+            await receive.WaitAsync(closeTimeout.Token);
+            if (socket.State == WebSocketState.CloseSent)
+            {
+                await socket.CloseAsync(ReplacedStatus, ReplacedReason, closeTimeout.Token);
+            }
+        }
+        catch (Exception error) when (IsConnectionError(error))
+        {
+            // 종료 메시지가 늦어지거나 연결이 이미 끊겼어도 연결 정리는 계속한다.
         }
     }
 
