@@ -76,11 +76,11 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 
 ### 실행 구조
 
-`RoomHost`(`Networking/RoomHost.cs`)는 싱글턴 `BackgroundService`이고 모든 방을 `ConcurrentDictionary`로 들고 있다. `ExecuteAsync`의 `PeriodicTimer` 하나가 `Rules.Step`(1/30초)마다 깨어나 이번 틱의 방 목록을 만든 뒤 `StepRoom`으로 각 방을 진행하고, 0.1초마다 스냅샷을 보낸다. 방이 둘 이상이면 `Parallel.For`로 **동시에** 진행한다. 방마다 상태와 잠금이 독립이라 가능한 것이며, 아직 부하를 측정한 적은 없다. 한 틱에 진행하는 시간은 0.25초(`MaxTickSeconds`)로 자른다. 서버가 절전 등으로 오래 멈췄다 깨어났을 때 밀린 시간을 한꺼번에 따라잡으면, 아무도 보지 못하는 사이에 대원이 죽고 작전이 끝나기 때문이다. 방은 마지막 연결이 끊긴 뒤 15분이 지나면 사라진다(`Room.Expired`). `Detach`가 `LastVisit`를 갱신하므로 기준은 마지막 연결이 끊긴 시각이다. 대원이 아무도 남지 않은 방은 30초 뒤에 지운다. 빈 방으로 방 32개 상한을 막아 두지 못하게 하기 위해서다.
+`RoomHost`(`Networking/RoomHost.cs`)는 싱글턴 `BackgroundService`이고 모든 방을 `ConcurrentDictionary`로 들고 있다. `ExecuteAsync`의 `PeriodicTimer` 하나가 `Rules.Step`(1/30초)마다 깨어나 이번 틱의 방 목록을 만든 뒤 `StepRoom`으로 각 방을 진행하고, 0.1초마다 스냅샷을 보낸다(`PublishSchedule`). 다음 방송 시각은 실제로 깨어난 시각이 아니라 예정 시각에서 0.1초 뒤로 잡는다. 깨어난 시각에서 잡으면 타이머 주기(1/30초를 100ns 단위로 바꾼 값) 세 번이 0.1초에 못 미쳐 방송이 자주 한 틱씩 밀리고 8Hz 안팎이 된다. 방이 둘 이상이면 `Parallel.For`로 **동시에** 진행한다. 방마다 상태와 잠금이 독립이라 가능한 것이며, 아직 부하를 측정한 적은 없다. 한 틱에 진행하는 시간은 0.25초(`MaxTickSeconds`)로 자른다. 서버가 절전 등으로 오래 멈췄다 깨어났을 때 밀린 시간을 한꺼번에 따라잡으면, 아무도 보지 못하는 사이에 대원이 죽고 작전이 끝나기 때문이다. 방은 마지막 연결이 끊긴 뒤 15분이 지나면 사라진다(`Room.Expired`). `Detach`가 `LastVisit`를 갱신하므로 기준은 마지막 연결이 끊긴 시각이다. 대원이 아무도 남지 않은 방은 30초 뒤에 지운다. 빈 방으로 방 32개 상한을 막아 두지 못하게 하기 위해서다.
 
 방 상태를 건드리는 모든 경로가 `lock (room.Gate)`를 잡는다. HTTP 참가, WebSocket 접속·입력, 시뮬레이션 루프가 같은 자료구조를 공유하므로 **새 경로를 추가할 때도 이 잠금 안에서 `Match`를 만진다.** 방 삭제(`StepRoom`)도 그 방의 잠금 안에서 일어난다. 그래서 방을 찾은 뒤 잠금을 잡는 경로는 잠금 안에서 `IsRegistered`로 방이 아직 등록되어 있는지 다시 확인한다. `Join`과 `Attach`가 그렇게 한다. `StepRoom`은 진행 중 예외를 잡아 연속 실패를 센다. 30번(약 1초) 연속 실패하면 방을 닫고 연결도 닫는다. 오류는 연속 실패의 첫 번째만 기록한다. 토큰 정리는 대원이 실제로 빠져 `Match.Departures`가 바뀌었을 때만 한다. 연결마다 용량 2의 `BoundedChannel`(`DropOldest`)을 두어 느린 수신자에게는 오래된 스냅샷을 버린다. 오류 안내와 pong은 버려지면 안 되므로 따로 `Peer.Control` 통로(용량 32, 차면 새 메시지를 버림)로 보내고, `Peer.Send`가 스냅샷보다 먼저 보낸다. `Peer.Send`는 두 통로를 함께 기다릴 때 끝나지 않은 기다림을 다음 차례에 다시 쓴다. 차례마다 새로 기다리면 ping을 보내지 않는 연결에서 제어 통로의 기다림이 스냅샷마다 하나씩 쌓인다. 취소되면 기다림의 예외로 끝낸다. 취소된 기다림은 곧바로 끝나므로 넘어가면 헛돈다.
 
-`Program.cs`가 `/health`, `POST /api/rooms`, `POST /api/rooms/{code}/join`, `/ws`를 연결하고 요청 본문 4096바이트 상한과 IP당 분당 30회 참가 제한을 건다.
+`Program.cs`가 `/health`, `POST /api/rooms`, `POST /api/rooms/{code}/join`, `/ws`를 연결하고 요청 본문 4096바이트 상한과 IP당 분당 30회 참가 제한을 건다. WebSocket 처리(`HandleWebSocket`)는 연결 오류(`WebSocketException`·`OperationCanceledException`·`JsonException`)만 기록 없이 정리하고, 그 밖의 예외는 결함으로 보고 방 코드와 함께 기록한다. `InvalidOperationException`·`ArgumentException`을 연결 오류로 치면 목록 범위 초과 같은 게임 로직 결함이 기록 없이 사라진다. 그래서 클라이언트가 보낸 JSON 값은 `ValueKind`를 확인한 뒤 읽어, 잘못된 메시지가 이런 예외를 내지 않게 한다.
 
 ### Match — 한 방의 전체 상태
 
@@ -109,7 +109,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 - 적의 예고(telegraph)에는 이미 상성이 있고 회복(recovery) 중에는 없다.
 - 받아치기는 전방 `Rules.GuardHalfAngle`를 방어한 뒤 상성 없는(`kind: "none"`) 일반 반격을 낸다. 빈 방어 뒤에도 반격하고, 상성 패배 시에는 취소한다.
 - 적 행동의 상성은 그 행동이 향한 범위 안의 대원에게만 적용한다(`InActionArea`: 타격·잡기는 공격 범위, 방어는 밀어치기 범위와 전방 120°). 범위 밖에서 친 측면 공격은 상성 없이 일반 피해 1이고, 그 피해로 적이 쓰러지면 행동이 무효가 된다. 전방 120° 계산은 대원 방어·적 방어의 반격 차단·측면 판정이 모두 `Faces` 하나를 쓴다.
-- 잡기 대상은 접촉 순간 가장 가까운 적이다. 준비 동작 중에는 바뀔 수 있고 접촉하거나 판정을 받으면 고정된다. 비김 피해로 쓰러뜨린 처치는 비긴 대원이 가져간다.
+- 잡기 대상은 접촉하는 틱에 가장 가까운 적이다. 준비 동작 중에는 매 틱 다시 고르고 범위에 아무도 없으면 비운다. 접촉한 뒤 대상을 고르거나 판정을 받으면 `TargetLocked`로 고정한다. 비김 피해로 쓰러뜨린 처치는 비긴 대원이 가져간다.
 
 수치와 정의의 위치: `Game/Rules.cs`(기술 비용·유효 시간, `AllowEliteEnemies`, `EnemyWindupMultiplier`, 체력·마나·시야), `Game/SkillDefinition.cs`(`Affinity`, `EnemySkill`, `EnemyDefinition`의 Grunt/Breaker/Warden), `Game/Model.cs`(`Player`·`Enemy`·`PlayerAction`·`EnemyAction` 상태와 중복 판정 기록용 `HashSet`).
 
@@ -133,13 +133,13 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 
 통신 형식은 [docs/protocol.md](docs/protocol.md)의 protocol v3다. `/health`의 `protocol`과 스냅샷의 `version`이 모두 3이다. `Game/Snapshot.cs`(공개 상태 선별)와 `Game/SnapshotMessage.cs`(전송 자료구조)가 서버 쪽이고, `client/src/types.ts`가 같은 모양을 TypeScript로 옮겨 둔 것이다.
 
-방송할 때 `RoomHost.PublishSnapshots`는 `Snapshot.CreateShared`로 팀 공통 부분(시야 계산 포함)을 한 번만 만들고, 수신자마다 `Snapshot.CreatePersonal`로 `you`, 보급 `cooldown`, 그리고 `walls`·`rules`·`map`을 담을지를 정한다. `walls`는 그 연결이 아직 받지 못한 판일 때만, `rules`·`map`은 아직 받지 못했을 때만 담는다. 받았는지는 **보낸 뒤에** `Peer.MarkSent`가 기록한다(`Peer.Send`). 만들 때 기록하면, 느린 연결에서 그 스냅샷이 버려졌을 때 클라이언트가 바뀐 벽을 영영 받지 못한다. 클라이언트(`main.ts`)와 임무 검사 봇은 빠진 값을 같은 방의 이전 스냅샷에서 이어 쓴다. 직렬화도 공통 부분은 방송마다 한 번만 한다. `Snapshot.SharedBody`가 공통 부분을 직렬화해 바깥 중괄호를 뗀 몸통을 만들고, `Snapshot.Combine`이 수신자별 `PersonalSnapshot`의 몸통과 쉼표로 이어 붙인다. 수신자별 필드는 공통 부분에서 비워 두므로 공통 몸통에 수신자별 값이 섞일 수 없다. **수신자별 값을 새로 추가하면 `PersonalSnapshot`에 넣는다.** `SnapshotMessage`에 넣으면 모든 수신자에게 같은 값이 간다. `LifecycleTests`의 `SharedSnapshot`이 이어 붙인 결과가 한 명용 `Snapshot.Create`와 같은지 확인한다.
+방송할 때 `RoomHost.PublishSnapshots`는 `Snapshot.CreateShared`로 팀 공통 부분(시야 계산 포함)을 한 번만 만들고, 수신자마다 `Snapshot.CreatePersonal`로 `you`, 보급 `cooldown`, 그리고 `walls`·`rules`·`map`을 담을지를 정한다. `walls`는 그 연결이 아직 받지 못한 판일 때만, `rules`·`map`은 아직 받지 못했을 때만 담는다. 받았는지는 **보낸 뒤에** `Peer.MarkSent`가 기록한다(`Peer.Send`). 만들 때 기록하면, 느린 연결에서 그 스냅샷이 버려졌을 때 클라이언트가 바뀐 벽을 영영 받지 못한다. 클라이언트(`main.ts`)와 임무 검사 봇은 빠진 값을 같은 방의 이전 스냅샷에서 이어 쓴다. 직렬화도 공통 부분은 방송마다 한 번만 한다. `Snapshot.SharedBody`가 공통 부분을 직렬화해 바깥 중괄호를 뗀 몸통을 만들고, `Snapshot.Combine`이 수신자별 `PersonalSnapshot`의 몸통과 쉼표로 이어 붙인다. `SnapshotMessage`에는 수신자별 속성이 없으므로 공통 몸통에 수신자별 값이 섞일 수 없다. 연결 직후 한 명에게 보내는 `Snapshot.Create`도 같은 방식으로 만든다. **수신자별 값을 새로 추가하면 `PersonalSnapshot`에 넣는다.** `SnapshotMessage`에 넣으면 모든 수신자에게 같은 값이 간다. `LifecycleTests`의 `SharedSnapshot`이 수신자별 값을 확인하고, 그 값을 뺀 나머지가 공통 몸통과 같은지 확인한다.
 
 **전송 형식을 바꾸면 세 곳을 함께 갱신한다**: `SnapshotMessage.cs`, `client/src/types.ts`, `docs/protocol.md`. 이전 버전과는 호환되지 않으므로 서버와 브라우저 빌드를 같이 배포한다. 통신 형식을 깨는 변경은 버전을 올린다.
 
 ### 클라이언트
 
-- `client/src/main.ts`: 로비, 방 생성·참가, 네 슬롯 입력, HUD, 재접속. 마우스 버튼 상태는 `pointerdown`·`pointermove`·`pointerup`의 `event.buttons`로 다시 맞춘다(`syncButtons`). **버튼을 겹쳐 누르거나 뗄 때 브라우저는 `pointerdown`/`pointerup` 대신 `pointermove`만 보낸다.** `event.button`만 보면 두 번째 버튼이 빠지고 놓은 버튼이 눌린 채로 남는다. 입력 정리(`clearInput`)는 작전 중 살아 있을 때만 서버에 멈춤 입력을 보낸다. 복구 토큰을 탭별 `sessionStorage`에 둔다.
+- `client/src/main.ts`: 로비, 방 생성·참가, 네 슬롯 입력, HUD, 재접속. 마우스 버튼 상태는 `pointerdown`·`pointermove`·`pointerup`의 `event.buttons`로 다시 맞춘다(`syncButtons`). **버튼을 겹쳐 누르거나 뗄 때 브라우저는 `pointerdown`/`pointerup` 대신 `pointermove`만 보낸다.** `event.button`만 보면 두 번째 버튼이 빠지고 놓은 버튼이 눌린 채로 남는다. 입력 정리(`clearInput`)는 작전 중 살아 있을 때만 서버에 멈춤 입력을 보낸다. 살아 있지 않을 때 누른 기술 키와, 살아 있는 상태를 벗어날 때 눌려 있던 기술 입력은 떼었다 다시 눌러야 나간다(`staleKeys`, `releaseSkills`). 그대로 두면 투입을 기다리며 쥔 키가 착지 뒤 마나가 차는 순간부터 기술을 계속 낸다. 복구 토큰을 탭별 `sessionStorage`에 둔다.
 - `client/src/world.ts`: PixiJS 렌더링, 스냅샷 보간, 이동 예측과 서버 재조정. 하드웨어 WebGL이 없으면 Canvas 렌더러로 내려간다(Playwright는 `--disable-webgl`로 이 경로를 검사한다). 라벨(`Text`)은 쓰지 않게 되면 숨겨 두었다가 다시 쓰고, 64개를 넘는 것만 해제한다. 매번 새로 만드는 비용이 Canvas에서 라벨 하나에 약 30µs였다.
 - 서버 재조정: `main.ts`의 `sendInput`이 실제로 보낸 입력만 `World.recordInput`으로 기록하고, `update`가 스냅샷의 `ack` 이하를 버린다. `draw`는 서버 위치 위에 남은 입력을 `replay`로 다시 적용한 곳을 보정 목표로 삼는다. **입력을 보내는 새 경로를 만들면 반드시 `sendInput`을 거친다.** 기록되지 않은 입력은 예측에서 빠져 화면이 서버와 어긋난다. 서버는 이 과정에 관여하지 않고, 클라이언트 시각은 화면 계산에만 쓴다.
 - 클라이언트는 모양·진행률·예고만 그린다. 판정 결과를 결정하지 않는다.
