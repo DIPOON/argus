@@ -6,6 +6,8 @@
 
 v2 → v3(2026-10-14): `walls`는 수신자가 아직 받지 못한 판일 때만, `rules`와 `map`은 수신자가 아직 받지 못했을 때만 스냅샷에 담긴다. 빠진 값은 같은 방의 이전 스냅샷 값을 그대로 쓴다. `rules.skills`에 기술별 동작(`guardsFront`, `hasFollowup`, `singleTarget`, `breaksStructures`)이 추가되었고, 적 `id`는 무작위가 되었다.
 
+v3 안에서 추가(2026-10-15): `rules.skills`에 `followupBreaksStructures`가 늘었다. 값이 하나 추가되기만 해서 버전은 그대로 3이다.
+
 v1 → v2: 총기·탄창·재장전·보조 장비·패시브 필드를 제거하고 네 슬롯의 근접 기술과 마나로 전환했다.
 
 버전 정책: 하위 버전 호환은 유지하지 않는다. 프로토콜 버전이 올라가면 공식 클라이언트를 함께 갱신해 배포한다. 서드파티 클라이언트는 `/health`의 `protocol`과 스냅샷의 `version`을 확인하고, 지원 버전과 다르면 접속을 멈추고 갱신해야 한다. 현재 공식 클라이언트는 `version`이 3이 아니면 접속을 끊고 새로고침을 안내한다.
@@ -18,7 +20,7 @@ v1 → v2: 총기·탄창·재장전·보조 장비·패시브 필드를 제거�
 {"name":"대원","slots":["strike","parry","grab","parry"]}
 ```
 
-slots를 생략하면 `["strike","parry","grab","strike"]`. 길이는 정확히 4다. 앞의 세 슬롯은 현재 출시된 해당 계열 기본기로 고정하며 자유 슬롯은 strike / parry / grab 중 하나다. 잘못된 조합은 HTTP 400이다. 이름은 최대 16 UTF-16 문자, 방당 최대 4명, 진행 중 난입 가능, 종료된 방에는 새 참가 불가.
+slots를 생략하면 `["strike","parry","grab","strike"]`. 길이는 정확히 4다. 앞의 세 슬롯은 현재 출시된 해당 계열 기본기로 고정하며 자유 슬롯은 strike / parry / grab 중 하나다. 잘못된 조합은 HTTP 400이다. 이름은 최대 16 UTF-16 문자, 방당 최대 4명, 진행 중 난입 가능, 종료된 방에는 새 참가 불가. 방은 서버 전체에 32개까지이며 가득 차면 방 생성이 HTTP 503이다. 한 주소가 동시에 가질 수 있는 방은 4개이고 넘으면 HTTP 429다. 같은 기계에서 온 접속(127.0.0.1, ::1)은 이 상한에서 뺀다. 오류 응답 본문은 `{"error":"…"}`다.
 
 ```json
 {"room":"ABC234","id":"public-player-id","token":"private-recovery-token"}
@@ -83,7 +85,7 @@ slots를 생략하면 `["strike","parry","grab","strike"]`. 길이는 정확히 
 | extraction | x, y, progress, duration, unlocked |
 | notices | 최근 안내 최대 6개: at, text |
 
-`rules.skills`는 기본기별 `id, kind, mana, contactAfter, activeSeconds, duration, range, halfWidth, guardsFront, hasFollowup, singleTarget, breaksStructures`를 제공한다. kind는 strike / block / channel이다. 뒤의 네 값은 기술별 동작이다. `guardsFront`는 먼저 치지 않고 앞에서 들어오는 공격에만 반응함, `hasFollowup`은 유효 시간 뒤 상성 없는 반격, `singleTarget`은 가장 가까운 한 명만 판정, `breaksStructures`는 시설과 벽을 부숨을 뜻한다. 동작은 id가 아니라 이 값으로 정해진다. 이 수치를 클라이언트가 돌려보내도 서버 설정을 바꾸지 않는다.
+`rules.skills`는 기본기별 `id, kind, mana, contactAfter, activeSeconds, duration, range, halfWidth, guardsFront, hasFollowup, singleTarget, breaksStructures, followupBreaksStructures`를 제공한다. kind는 strike / block / channel이다. 뒤의 다섯 값은 기술별 동작이다. `guardsFront`는 먼저 치지 않고 앞에서 들어오는 공격에만 반응함, `hasFollowup`은 유효 시간 뒤 상성 없는 반격, `singleTarget`은 가장 가까운 한 명만 판정, `breaksStructures`는 접촉 중에 시설과 벽을 부숨, `followupBreaksStructures`는 반격이 시설과 벽을 부숨을 뜻한다. 동작은 id가 아니라 이 값으로 정해진다. 이 수치를 클라이언트가 돌려보내도 서버 설정을 바꾸지 않는다.
 
 대원:
 
