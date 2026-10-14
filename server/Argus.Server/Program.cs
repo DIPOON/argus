@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.WebSockets;
 using System.Text.Json;
 using System.Threading.RateLimiting;
@@ -52,12 +53,31 @@ internal static class Program
 
     private static RateLimitPartition<string> GetEntryPartition(HttpContext context)
     {
-        string address = "local";
-        if (context.Connection.RemoteIpAddress != null)
+        return RateLimitPartition.GetFixedWindowLimiter(ClientAddress(context), CreateEntryLimiterOptions);
+    }
+
+    // 참가 제한이 쓰는 접속 주소다. 역방향 프록시 뒤에 두면 모든 사용자가 프록시 주소 하나로 보이므로,
+    // 그때는 전달 헤더(X-Forwarded-For)를 처리하도록 설정해야 한다.
+    private static string ClientAddress(HttpContext context)
+    {
+        if (context.Connection.RemoteIpAddress == null)
         {
-            address = context.Connection.RemoteIpAddress.ToString();
+            return "local";
         }
-        return RateLimitPartition.GetFixedWindowLimiter(address, CreateEntryLimiterOptions);
+        return context.Connection.RemoteIpAddress.ToString();
+    }
+
+    // 주소별 방 수 상한을 적용할 주소다. 같은 기계에서 온 접속(127.0.0.1, ::1)은 상한에서 빼고 null을 돌려준다.
+    // 개발과 브라우저 검사는 한 주소에서 방을 계속 만들고, 끝난 방도 재접속 유예 동안 2분쯤 남기 때문이다.
+    // 같은 기계의 역방향 프록시 뒤에 두면 모든 사용자가 이 주소로 보이므로 전달 헤더를 처리해야 상한이 적용된다.
+    private static string? LimitedAddress(HttpContext context)
+    {
+        IPAddress? address = context.Connection.RemoteIpAddress;
+        if (address == null || IPAddress.IsLoopback(address))
+        {
+            return null;
+        }
+        return address.ToString();
     }
 
     private static FixedWindowRateLimiterOptions CreateEntryLimiterOptions(string address)
@@ -74,14 +94,19 @@ internal static class Program
         return Results.Ok(new { status = "ok", protocol = 3 });
     }
 
-    private static IResult CreateRoom(EntryRequest request, RoomHost host)
+    private static IResult CreateRoom(EntryRequest request, RoomHost host, HttpContext context)
     {
         if (!request.Valid)
         {
             return Results.Json(new { error = "선택할 수 없는 장비입니다." }, statusCode: 400);
         }
 
-        Guest? guest = host.Create(request);
+        bool addressFull;
+        Guest? guest = host.Create(request, LimitedAddress(context), out addressFull);
+        if (guest == null && addressFull)
+        {
+            return Results.Json(new { error = "이 주소에서 연 작전이 너무 많습니다. 이전 작전이 정리된 뒤 다시 시도하세요." }, statusCode: 429);
+        }
         if (guest == null)
         {
             return Results.Json(new { error = "서버의 작전 공간이 가득 찼습니다." }, statusCode: 503);

@@ -30,6 +30,7 @@ internal static class LifecycleTests
         tests.Add(new TestCase("A slot that never connects is released quickly while a dropped member keeps the long grace", FirstConnectGrace));
         tests.Add(new TestCase("A long session keeps its room for the full retention time after the last disconnect", RoomRetention));
         tests.Add(new TestCase("A room with nobody left is released soon instead of holding a slot for fifteen minutes", EmptyRoomExpiry));
+        tests.Add(new TestCase("One address cannot hold more than a few rooms at once", RoomsPerAddress));
         tests.Add(new TestCase("Hidden spawns do not advance the id sequence that player actions reveal", HiddenIdGaps));
         tests.Add(new TestCase("Walls, rules and map are resent until delivered and walls again after they change", StaticParts));
         tests.Add(new TestCase("Tokens of removed players are cleaned when a room steps", TokenCleanup));
@@ -366,15 +367,19 @@ internal static class LifecycleTests
     private static void EmptyRoomExpiry()
     {
         // HTTP로 방을 만들고 참가만 한 뒤 한 번도 접속하지 않은 방이다.
-        Room squatted = new Room("SQUAT1");
+        Room squatted = new Room("SQUAT1", "local");
         Player squatter = squatted.Match.Join("q", "squatter")!;
         squatter.DisconnectedAt = squatted.Match.Now;
         squatter.AwaitingFirstConnection = true;
         Check(!squatted.Expired(DateTime.UtcNow), "막 만든 방이 바로 삭제 대상입니다");
         Advance(squatted.Match, squatted.Match.Rules.FirstConnectSeconds + 0.1);
         Equal(squatted.Match.Players.Count, 0);
-        // 대원이 아무도 남지 않은 방은 15분을 기다리지 않는다. 기다리면 빈 방 32개로 방 생성을 막을 수 있다.
-        Check(squatted.Expired(DateTime.UtcNow + TimeSpan.FromSeconds(31)), "빈 방이 15분 동안 자리를 차지합니다");
+        // 접속 없이 참가만 한 자리가 풀린 방은 바로 지운다. 만든 지 15초 남짓 지난 때다.
+        // 오래 남기면 분당 30번 만들 수 있는 방으로 32개 상한을 채울 수 있다.
+        Check(squatted.Expired(DateTime.UtcNow + TimeSpan.FromSeconds(16)), "접속 없이 자리가 풀린 방이 남아 방 생성을 막습니다");
+        // 방을 만들고 첫 대원을 넣기 전의 짧은 틈에는 지우지 않는다.
+        Room fresh = new Room("FRESH1", "local");
+        Check(!fresh.Expired(DateTime.UtcNow), "막 만든 빈 방이 첫 대원을 넣기 전에 지워집니다");
 
         // 연결이 끊겼지만 복구 유예 중인 대원이 있는 방은 그대로 남는다.
         using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
@@ -382,6 +387,34 @@ internal static class LifecycleTests
         (Room room, Player player, Peer peer) = host.Attach(guest.Room, guest.Token)!.Value;
         host.Detach(room, player, peer);
         Check(!room.Expired(DateTime.UtcNow + TimeSpan.FromSeconds(31)), "복구를 기다리는 대원이 있는 방이 지워집니다");
+    }
+
+    private static void RoomsPerAddress()
+    {
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        // 한 주소에서 만든 방은 동시에 상한만큼만 둔다. 방을 만들고 접속을 붙잡아 두는 방법으로
+        // 몇 개 주소만으로 방 32개 상한을 채우지 못하게 한다.
+        for (int i = 0; i < RoomHost.MaxRoomsPerAddress; i++)
+        {
+            bool full;
+            Guest? guest = host.Create(new EntryRequest("a"), "203.0.113.1", out full);
+            Check(guest != null && !full, "상한보다 적은 방을 만들지 못했습니다");
+        }
+        bool capped;
+        Guest? extra = host.Create(new EntryRequest("a"), "203.0.113.1", out capped);
+        Check(extra == null, "한 주소에서 상한보다 많은 방을 만들었습니다");
+        Check(capped, "주소별 상한에 걸렸다고 알리지 않았습니다");
+        // 다른 주소는 따로 센다.
+        bool otherFull;
+        Guest? other = host.Create(new EntryRequest("b"), "203.0.113.2", out otherFull);
+        Check(other != null && !otherFull, "다른 주소의 방 생성이 막혔습니다");
+        // 상한에서 뺀 주소(같은 기계)는 상한보다 많이 만들 수 있다.
+        for (int i = 0; i <= RoomHost.MaxRoomsPerAddress; i++)
+        {
+            bool local;
+            Guest? guest = host.Create(new EntryRequest("c"), null, out local);
+            Check(guest != null && !local, "상한에서 뺀 주소의 방 생성이 막혔습니다");
+        }
     }
 
     private static void HiddenIdGaps()

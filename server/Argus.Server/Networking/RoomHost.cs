@@ -158,19 +158,23 @@ public sealed class Room
     public Dictionary<string, Player> Tokens { get; } = new Dictionary<string, Player>();
     public Dictionary<string, Peer> Peers { get; } = new Dictionary<string, Peer>();
     public DateTime LastVisit { get; set; } = DateTime.UtcNow;
+    // 방을 만든 접속 주소다. 한 주소가 동시에 가질 수 있는 방 수를 셀 때 쓴다. 상한에서 뺀 주소면 null이다.
+    public string? Address { get; }
     // 토큰을 마지막으로 정리했을 때의 Match.Departures 값이다.
     public int SeenDepartures { get; set; }
     // 진행에 연속해서 실패한 횟수다.
     public int Failures { get; set; }
 
-    public Room(string code)
+    public Room(string code, string? address)
     {
         Match = new Match(code);
+        Address = address;
     }
 
-    // 대원이 모두 떠난 방에는 복구할 자리가 없다. 오래 남기면 빈 방으로 방 생성을 막을 수 있으므로 짧게 둔다.
-    // 막 만든 방이 첫 참가 전에 지워지지 않도록, 첫 접속 유예(15초)보다 긴 30초는 기다린다.
-    private static readonly TimeSpan EmptyRoomGrace = TimeSpan.FromSeconds(30);
+    // 대원이 모두 떠난 방에는 복구할 자리가 없으므로 곧바로 지운다. 오래 남기면 빈 방으로 방 생성을 막을 수 있다.
+    // 방을 만들고 첫 대원을 넣기 전의 짧은 틈에 지워지지 않도록 2초만 기다린다.
+    // 접속 없이 참가만 한 자리는 15초 뒤에 풀리므로 그런 방은 만든 지 15초 남짓이면 사라진다.
+    private static readonly TimeSpan EmptyRoomGrace = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan IdleRoomGrace = TimeSpan.FromMinutes(15);
 
     // 연결이 모두 끊긴 방을 지울지 정한다. 기준은 마지막 참가·접속·연결 해제 시각이다.
@@ -233,6 +237,10 @@ public sealed class RoomHost : BackgroundService
     private const double MaxTickSeconds = 0.25;
     // 연속해서 이만큼 진행에 실패한 방은 닫는다. 30번이면 약 1초다.
     private const int MaxRoomFailures = 30;
+    // 한 주소가 동시에 가질 수 있는 방 수다. 방을 만들고 접속을 붙잡아 두는 방법으로 몇 개 주소만으로
+    // 방 32개 상한을 채우지 못하게 한다. 끝난 방도 마지막 대원이 나간 뒤 약 2분(재접속 유예) 동안 남으므로
+    // 혼자 여러 판을 연달아 해도 걸리지 않을 만큼은 둔다.
+    public const int MaxRoomsPerAddress = 4;
     // 방 수 확인과 추가가 따로 일어나면 동시 요청으로 상한을 넘을 수 있으므로 함께 잠근다.
     private readonly object _createGate = new object();
 
@@ -241,8 +249,18 @@ public sealed class RoomHost : BackgroundService
         _logger = logger;
     }
 
+    // 주소별 상한을 적용하지 않고 만든다. 검사처럼 접속 주소가 없을 때 쓴다.
     public Guest? Create(EntryRequest request)
     {
+        bool addressFull;
+        return Create(request, null, out addressFull);
+    }
+
+    // address가 null이면 주소별 상한을 적용하지 않는다.
+    // addressFull은 이 주소가 만든 방이 이미 상한만큼 있어서 거절했을 때 켠다.
+    public Guest? Create(EntryRequest request, string? address, out bool addressFull)
+    {
+        addressFull = false;
         if (!request.Valid)
         {
             return null;
@@ -255,6 +273,11 @@ public sealed class RoomHost : BackgroundService
             {
                 return null;
             }
+            if (address != null && CountRooms(address) >= MaxRoomsPerAddress)
+            {
+                addressFull = true;
+                return null;
+            }
             do
             {
                 byte[] bytes = RandomNumberGenerator.GetBytes(6);
@@ -265,11 +288,25 @@ public sealed class RoomHost : BackgroundService
                     letters[i] = alphabet[bytes[i] % alphabet.Length];
                 }
                 string code = new string(letters);
-                room = new Room(code);
+                room = new Room(code, address);
             } while (!_rooms.TryAdd(room.Match.Code, room));
         }
 
         return Join(room.Match.Code, request);
+    }
+
+    // 이 주소가 만든 방 가운데 아직 남아 있는 방의 수다.
+    private int CountRooms(string address)
+    {
+        int count = 0;
+        foreach (KeyValuePair<string, Room> entry in _rooms)
+        {
+            if (entry.Value.Address == address)
+            {
+                count++;
+            }
+        }
+        return count;
     }
 
     // 방 삭제는 그 방의 잠금 안에서만 일어난다. 그래서 잠금을 잡은 뒤 확인하면
