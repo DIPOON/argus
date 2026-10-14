@@ -175,7 +175,6 @@ public sealed partial class Match
         }
     }
 
-    // 흐름장에서 다음으로 갈 방향을 찾는다. 갈 곳이 없으면 0 벡터를 돌려준다.
     // 흐름장에서 다음으로 갈 방향을 찾는다. 자기 칸보다 비용이 낮은 이웃이 없으면(대원이 있는 출발점 칸)
     // 0 벡터를 돌려주어 부르는 쪽이 대원에게 직진하게 한다. 이웃 칸(비용 1)으로 향하면 오히려 멀어진다.
     public Vector2 FlowHeading(Vector2 position)

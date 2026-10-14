@@ -27,6 +27,10 @@ internal static class CombatTests
         tests.Add(new TestCase("Player-enemy and enemy-enemy bodies block movement while skills allow walking", Bodies));
         tests.Add(new TestCase("Long server steps preserve short active windows and prevent body tunneling", LongStep));
         tests.Add(new TestCase("A new skill id with guard flags still guards and follows up like a parry", SkillFlags));
+        tests.Add(new TestCase("A flank outside an enemy action's area deals ordinary damage without its affinity", Flank));
+        tests.Add(new TestCase("A player the shield shove reaches answers it with affinity even beside the shield", ShoveReach));
+        tests.Add(new TestCase("A draw kill is credited to the drawing player, not a partial responder", DrawCredit));
+        tests.Add(new TestCase("A grab takes the nearest enemy at contact, including one that came closer during windup", GrabRetarget));
     }
 
     private static void OrdinaryMatrix()
@@ -423,6 +427,104 @@ internal static class CombatTests
         Use(breaker, smash, 30014);
         Advance(breaker.Match, 0.25);
         Near(facility.Hp, facility.MaxHp - 1);
+    }
+
+    private static void Flank()
+    {
+        // B를 향해 방어를 예고하는 적을 A가 뒤에서 친다. 방패가 A를 향하지 않으므로 상성 없이 일반 피해만 준다.
+        Fixture shielded = new Fixture();
+        Player front = Ally(shielded, "front");
+        Enemy blocker = Target(shielded);
+        blocker.Position = new Vector2(420, 730);
+        front.Position = new Vector2(380, 730);
+        shielded.Player.Position = new Vector2(460, 730);
+        shielded.Player.Aim = Math.PI;
+        blocker.Action = new EnemyAction(30050, new EnemySkill("block", 1, 0, 1, 62, 15), Math.PI, shielded.Match.Now);
+        PlayerAction behind = Prepare(shielded, shielded.Player, "strike", 0.2);
+        Advance(shielded.Match, Rules.Step);
+        Near(blocker.Hp, 0);
+        Near(shielded.Player.Hp, 6);
+        Check(!behind.Cancelled, "측면 공격이 패배로 취소되었습니다");
+
+        // B를 향한 타격이 닿는 같은 틱에 A가 측면에서 쓰러뜨리면 그 공격은 무효가 되어 B도 다치지 않는다.
+        Fixture flanked = new Fixture();
+        Player target = Ally(flanked, "target");
+        Enemy striker = Target(flanked);
+        striker.Position = new Vector2(420, 730);
+        target.Position = new Vector2(380, 730);
+        flanked.Player.Position = new Vector2(460, 730);
+        flanked.Player.Aim = Math.PI;
+        striker.Action = new EnemyAction(30051, new EnemySkill("strike", 1, 0, 0.05, 85, 25), Math.PI, flanked.Match.Now - 0.05);
+        Prepare(flanked, flanked.Player, "strike", 0.2);
+        Advance(flanked.Match, Rules.Step);
+        Near(striker.Hp, 0);
+        Near(flanked.Player.Hp, 6);
+        Near(target.Hp, 6);
+    }
+
+    private static void ShoveReach()
+    {
+        // 방패는 왼쪽(π)을 향하고 대원은 적 몸 옆 70° 자리에 붙어 있다. 방패의 전방 120° 밖이지만 밀어치기는 닿는다.
+        Vector2 beside = new Vector2((float)(Math.Cos(Math.PI + 1.22) * 27), (float)(Math.Sin(Math.PI + 1.22) * 27));
+        double aim = Math.Atan2(-beside.Y, -beside.X);
+
+        // 밀어치기가 닿는 대원은 준비 중인 잡기로도 받아칠 수 있어야 한다. 잡기는 방어를 이긴다.
+        Fixture grabbing = new Fixture();
+        Enemy shover = Target(grabbing);
+        shover.Position = new Vector2(420, 730);
+        grabbing.Player.Position = shover.Position + beside;
+        grabbing.Player.Aim = aim;
+        shover.Action = new EnemyAction(30052, new EnemySkill("block", 1, 0, 0.05, 62, 15), Math.PI, grabbing.Match.Now - 0.05);
+        PlayerAction grab = Prepare(grabbing, grabbing.Player, "grab");
+        Advance(grabbing.Match, Rules.Step);
+        Check(grabbing.Match.Now < grab.ContactAt, "잡기가 준비 동작을 마쳤습니다");
+        Near(shover.Hp, 0);
+        Near(grabbing.Player.Hp, 6);
+
+        // 같은 자리에서 친 타격은 측면 공격이 아니다. 방어가 타격을 이긴다.
+        Fixture striking = new Fixture();
+        Enemy guard = Target(striking);
+        guard.Position = new Vector2(420, 730);
+        striking.Player.Position = guard.Position + beside;
+        striking.Player.Aim = aim;
+        guard.Action = new EnemyAction(30053, new EnemySkill("block", 1, 0, 0.05, 62, 15), Math.PI, striking.Match.Now - 0.05);
+        PlayerAction strike = Prepare(striking, striking.Player, "strike", 0.2);
+        Advance(striking.Match, Rules.Step);
+        Near(guard.Hp, 1);
+        Near(striking.Player.Hp, 5);
+        Check(strike.Cancelled, "방어에 진 타격이 취소되지 않았습니다");
+    }
+
+    private static void DrawCredit()
+    {
+        // 같은 2티어 공격에 한 명은 비기고 다른 한 명은 부분 대응했다. 비김 피해로 쓰러뜨린 대원이 처치를 가져간다.
+        Fixture f = new Fixture();
+        Player partner = Ally(f, "partner");
+        Enemy elite = Threat(f, "strike", 2);
+        elite.Hp = 1;
+        Prepare(f, f.Player, "strike");
+        Prepare(f, partner, "parry");
+        Advance(f.Match, 0.08);
+        Near(elite.Hp, 0);
+        Equal(f.Player.Kills, 1);
+        Equal(partner.Kills, 0);
+    }
+
+    private static void GrabRetarget()
+    {
+        // 처음에는 먼 적 하나만 잡기 범위에 있다.
+        Fixture f = new Fixture();
+        Enemy far = Target(f);
+        far.Position = f.Player.Position + new Vector2(45, 0);
+        Enemy near = Target(f);
+        near.Position = f.Player.Position + new Vector2(200, 0);
+        Prepare(f, f.Player, "grab");
+        Advance(f.Match, Rules.Step);
+        // 준비 동작(0.12초) 중에 더 가까운 적이 들어온다. 접촉하는 순간 가장 가까운 적을 잡아야 한다.
+        near.Position = f.Player.Position + new Vector2(28, 0);
+        Advance(f.Match, 0.15);
+        Near(near.Hp, 0);
+        Near(far.Hp, 1);
     }
 
     private static void LongStep()
