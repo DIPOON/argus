@@ -78,7 +78,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 
 `RoomHost`(`Networking/RoomHost.cs`)는 싱글턴 `BackgroundService`이고 모든 방을 `ConcurrentDictionary`로 들고 있다. `ExecuteAsync`의 `PeriodicTimer` 하나가 `Rules.Step`(1/30초)마다 깨어나 이번 틱의 방 목록을 만든 뒤 `StepRoom`으로 각 방을 진행하고, 0.1초마다 스냅샷을 보낸다. 방이 둘 이상이면 `Parallel.For`로 **동시에** 진행한다. 방마다 상태와 잠금이 독립이라 가능한 것이며, 아직 부하를 측정한 적은 없다. 한 틱에 진행하는 시간은 0.25초(`MaxTickSeconds`)로 자른다. 서버가 절전 등으로 오래 멈췄다 깨어났을 때 밀린 시간을 한꺼번에 따라잡으면, 아무도 보지 못하는 사이에 대원이 죽고 작전이 끝나기 때문이다. 방은 마지막 연결이 끊긴 뒤 15분이 지나면 사라진다(`Room.Expired`). `Detach`가 `LastVisit`를 갱신하므로 기준은 마지막 연결이 끊긴 시각이다. 대원이 아무도 남지 않은 방은 30초 뒤에 지운다. 빈 방으로 방 32개 상한을 막아 두지 못하게 하기 위해서다.
 
-방 상태를 건드리는 모든 경로가 `lock (room.Gate)`를 잡는다. HTTP 참가, WebSocket 접속·입력, 시뮬레이션 루프가 같은 자료구조를 공유하므로 **새 경로를 추가할 때도 이 잠금 안에서 `Match`를 만진다.** 방 삭제(`StepRoom`)도 그 방의 잠금 안에서 일어난다. 그래서 방을 찾은 뒤 잠금을 잡는 경로는 잠금 안에서 `IsRegistered`로 방이 아직 등록되어 있는지 다시 확인한다. `Join`과 `Attach`가 그렇게 한다. `StepRoom`은 진행 중 예외를 잡아 연속 실패를 센다. 30번(약 1초) 연속 실패하면 방을 닫고 연결도 닫는다. 오류는 연속 실패의 첫 번째만 기록한다. 토큰 정리는 대원이 실제로 빠져 `Match.Departures`가 바뀌었을 때만 한다. 연결마다 용량 2의 `BoundedChannel`(`DropOldest`)을 두어 느린 수신자에게는 오래된 스냅샷을 버린다.
+방 상태를 건드리는 모든 경로가 `lock (room.Gate)`를 잡는다. HTTP 참가, WebSocket 접속·입력, 시뮬레이션 루프가 같은 자료구조를 공유하므로 **새 경로를 추가할 때도 이 잠금 안에서 `Match`를 만진다.** 방 삭제(`StepRoom`)도 그 방의 잠금 안에서 일어난다. 그래서 방을 찾은 뒤 잠금을 잡는 경로는 잠금 안에서 `IsRegistered`로 방이 아직 등록되어 있는지 다시 확인한다. `Join`과 `Attach`가 그렇게 한다. `StepRoom`은 진행 중 예외를 잡아 연속 실패를 센다. 30번(약 1초) 연속 실패하면 방을 닫고 연결도 닫는다. 오류는 연속 실패의 첫 번째만 기록한다. 토큰 정리는 대원이 실제로 빠져 `Match.Departures`가 바뀌었을 때만 한다. 연결마다 용량 2의 `BoundedChannel`(`DropOldest`)을 두어 느린 수신자에게는 오래된 스냅샷을 버린다. 오류 안내와 pong은 버려지면 안 되므로 따로 `Peer.Control` 통로(용량 32, 차면 새 메시지를 버림)로 보내고, `Peer.Send`가 스냅샷보다 먼저 보낸다. `Peer.Send`는 두 통로를 함께 기다릴 때 끝나지 않은 기다림을 다음 차례에 다시 쓴다. 차례마다 새로 기다리면 ping을 보내지 않는 연결에서 제어 통로의 기다림이 스냅샷마다 하나씩 쌓인다. 취소되면 기다림의 예외로 끝낸다. 취소된 기다림은 곧바로 끝나므로 넘어가면 헛돈다.
 
 `Program.cs`가 `/health`, `POST /api/rooms`, `POST /api/rooms/{code}/join`, `/ws`를 연결하고 요청 본문 4096바이트 상한과 IP당 분당 30회 참가 제한을 건다.
 
@@ -108,6 +108,8 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 - 2티어 엘리트 행동은 동시에 유효한 대응 **두 개**가 필요하고 동료의 대응과 합산된다. 완전 파훼는 체력과 무관한 처치이며 같은 공격 범위의 무행동 동료까지 보호한다.
 - 적의 예고(telegraph)에는 이미 상성이 있고 회복(recovery) 중에는 없다.
 - 받아치기는 전방 `Rules.GuardHalfAngle`를 방어한 뒤 상성 없는(`kind: "none"`) 일반 반격을 낸다. 빈 방어 뒤에도 반격하고, 상성 패배 시에는 취소한다.
+- 적 행동의 상성은 그 행동이 향한 범위 안의 대원에게만 적용한다(`InActionArea`: 타격·잡기는 공격 범위, 방어는 밀어치기 범위와 전방 120°). 범위 밖에서 친 측면 공격은 상성 없이 일반 피해 1이고, 그 피해로 적이 쓰러지면 행동이 무효가 된다. 전방 120° 계산은 대원 방어·적 방어의 반격 차단·측면 판정이 모두 `Faces` 하나를 쓴다.
+- 잡기 대상은 접촉 순간 가장 가까운 적이다. 준비 동작 중에는 바뀔 수 있고 접촉하거나 판정을 받으면 고정된다. 비김 피해로 쓰러뜨린 처치는 비긴 대원이 가져간다.
 
 수치와 정의의 위치: `Game/Rules.cs`(기술 비용·유효 시간, `AllowEliteEnemies`, `EnemyWindupMultiplier`, 체력·마나·시야), `Game/SkillDefinition.cs`(`Affinity`, `EnemySkill`, `EnemyDefinition`의 Grunt/Breaker/Warden), `Game/Model.cs`(`Player`·`Enemy`·`PlayerAction`·`EnemyAction` 상태와 중복 판정 기록용 `HashSet`).
 
@@ -118,7 +120,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 이 저장소는 게임 서버의 권위와 치트 방지를 핵심 목표로 삼는다. 아래는 깨뜨리면 안 되는 규칙이다.
 
 - `Snapshot.CreateShared(match)`가 **직렬화 전에** 시야 밖 적과 예고, 효과를 제외한다. 팀 시야는 캠프 반경과 살아 있는 대원의 시야를 합친 것이며 `Match.Visible`에 벽 가림까지 포함된다. 대기·사망 대원은 시야를 주지 않는다. 적 관련 필드를 추가할 때 이 필터를 우회하지 않는다.
-- `Match.Deploy`는 **공개된 벽만** 검사한다. 즉시 응답으로 숨은 적의 위치를 탐색할 수 없게 하려는 의도이며, 적과의 겹침은 5초 뒤 실제 도착 직전에 검사한다. 도착 때 막혀 있어도 실패시키지 않고 `Match.FindLanding`이 원래 지점이 보이는 가장 가까운 빈 자리를 고른다. **결과가 숨은 적에 따라 달라지는 동작은 실패나 거절로 알리지 않는다.** 그 결과가 곧 안개 속을 엿보는 수단이 된다.
+- `Match.Deploy`는 **공개된 벽만** 검사한다. 즉시 응답으로 숨은 적의 위치를 탐색할 수 없게 하려는 의도이며, 적과의 겹침은 5초 뒤 실제 도착 직전에 검사한다. 도착 때 막혀 있어도 실패시키지 않고 `Match.FindLanding`이 원래 지점이 보이는 가장 가까운 빈 자리를 고른다. 근처와 캠프가 모두 막히면 반지름 640까지 넓혀 찾아 대원이 투입 중 상태에 갇히지 않게 한다. **결과가 숨은 적에 따라 달라지는 동작은 실패나 거절로 알리지 않는다.** 그 결과가 곧 안개 속을 엿보는 수단이 된다.
 - 클라이언트가 보내는 것은 이동 방향·조준 방향·슬롯 번호뿐이다. `Match.Input`이 순번 역행·중복, 비유한수, 범위 초과를 거르고 이동 벡터를 정규화한다. `x`/`hp`/`mana`/`damage` 같은 필드로 상태를 정할 수 없다.
 - 맵 구조, 벽 파괴, 시설, 보급, 목표 진행은 공개 정보다.
 - 서드파티 클라이언트를 허용하므로 공식 클라이언트에서만 동작하는 장치로 규칙을 강제하지 않는다.
@@ -131,7 +133,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 
 통신 형식은 [docs/protocol.md](docs/protocol.md)의 protocol v3다. `/health`의 `protocol`과 스냅샷의 `version`이 모두 3이다. `Game/Snapshot.cs`(공개 상태 선별)와 `Game/SnapshotMessage.cs`(전송 자료구조)가 서버 쪽이고, `client/src/types.ts`가 같은 모양을 TypeScript로 옮겨 둔 것이다.
 
-방송할 때 `RoomHost.PublishSnapshots`는 `Snapshot.CreateShared`로 팀 공통 부분(시야 계산 포함)을 한 번만 만들고, 수신자마다 `Snapshot.Personalize`로 `you`, 보급 `cooldown`, 그리고 `walls`·`rules`·`map`을 담을지를 정한 뒤 직렬화한다. `walls`는 그 연결이 아직 받지 못한 판일 때만, `rules`·`map`은 아직 받지 못했을 때만 담는다. 받았는지는 **보낸 뒤에** `Peer.MarkSent`가 기록한다(`Program.Send`). 만들 때 기록하면, 느린 연결에서 그 스냅샷이 버려졌을 때 클라이언트가 바뀐 벽을 영영 받지 못한다. 클라이언트(`main.ts`)와 임무 검사 봇은 빠진 값을 같은 방의 이전 스냅샷에서 이어 쓴다. **수신자별 값을 새로 추가하면 반드시 `Personalize`에서 매번 덮어쓴다.** 같은 메시지 객체를 다음 수신자에게 재사용하므로, 빠뜨리면 앞 수신자의 값이 그대로 전송된다. `LifecycleTests`의 `SharedSnapshot`이 이를 검사한다.
+방송할 때 `RoomHost.PublishSnapshots`는 `Snapshot.CreateShared`로 팀 공통 부분(시야 계산 포함)을 한 번만 만들고, 수신자마다 `Snapshot.CreatePersonal`로 `you`, 보급 `cooldown`, 그리고 `walls`·`rules`·`map`을 담을지를 정한다. `walls`는 그 연결이 아직 받지 못한 판일 때만, `rules`·`map`은 아직 받지 못했을 때만 담는다. 받았는지는 **보낸 뒤에** `Peer.MarkSent`가 기록한다(`Peer.Send`). 만들 때 기록하면, 느린 연결에서 그 스냅샷이 버려졌을 때 클라이언트가 바뀐 벽을 영영 받지 못한다. 클라이언트(`main.ts`)와 임무 검사 봇은 빠진 값을 같은 방의 이전 스냅샷에서 이어 쓴다. 직렬화도 공통 부분은 방송마다 한 번만 한다. `Snapshot.SharedBody`가 공통 부분을 직렬화해 바깥 중괄호를 뗀 몸통을 만들고, `Snapshot.Combine`이 수신자별 `PersonalSnapshot`의 몸통과 쉼표로 이어 붙인다. 수신자별 필드는 공통 부분에서 비워 두므로 공통 몸통에 수신자별 값이 섞일 수 없다. **수신자별 값을 새로 추가하면 `PersonalSnapshot`에 넣는다.** `SnapshotMessage`에 넣으면 모든 수신자에게 같은 값이 간다. `LifecycleTests`의 `SharedSnapshot`이 이어 붙인 결과가 한 명용 `Snapshot.Create`와 같은지 확인한다.
 
 **전송 형식을 바꾸면 세 곳을 함께 갱신한다**: `SnapshotMessage.cs`, `client/src/types.ts`, `docs/protocol.md`. 이전 버전과는 호환되지 않으므로 서버와 브라우저 빌드를 같이 배포한다. 통신 형식을 깨는 변경은 버전을 올린다.
 
