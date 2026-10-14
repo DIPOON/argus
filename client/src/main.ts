@@ -114,6 +114,14 @@ function pressSlot(slot: number) {
   if (index >= 0) slotOrder.splice(index, 1);
   slotOrder.push(slot);
 }
+// 살아 있지 않을 때 누른 기술 키와, 살아 있는 상태를 벗어날 때 눌려 있던 기술 키다. 떼었다 다시 눌러야 기술이 나간다.
+// 그대로 두면 투입을 기다리며 쥔 키가 착지 뒤 마나가 차는 순간부터 기술을 계속 낸다.
+const staleKeys = new Set<string>();
+// 사망 등으로 살아 있는 상태를 벗어날 때 부른다. 마우스는 syncButtons가 새로 눌린 버튼만 받으므로 비우기만 하면 된다.
+function releaseSkills() {
+  mouseButtons.clear(); slotOrder.length = 0;
+  for (const code of keys) if (slotFromCode(code) > 0) staleKeys.add(code);
+}
 // 버튼을 겹쳐 누르거나 뗄 때 브라우저는 pointerdown·pointerup 대신 pointermove로만 알린다.
 // 그래서 세 이벤트 모두에서 event.buttons(지금 눌린 버튼 비트)로 상태를 다시 맞춘다.
 // 직전 이벤트와 비교해 새로 눌린 버튼만 누름으로 본다. 투입 클릭을 쥔 채 살아난 순간 타격이 나가지 않게 한다.
@@ -223,7 +231,9 @@ function connect() {
     const walls = wire.walls ?? previous?.walls, rules = wire.rules ?? previous?.rules, map = wire.map ?? previous?.map;
     // 서버는 실제로 보낼 때까지 다시 담으므로 처음 받은 스냅샷에는 모두 있다. 그래도 빠졌으면 다음 것을 기다린다.
     if (walls === undefined || rules === undefined || map === undefined) return;
+    const wasAlive = me()?.state === 'alive';
     snapshot = { ...wire, walls, rules, map };
+    if (wasAlive && me()?.state !== 'alive') releaseSkills();
     sequence = Math.max(sequence, (me()?.ack ?? -1) + 1);
     status('분대 연결됨', true);
     world!.update(snapshot);
@@ -340,13 +350,16 @@ window.addEventListener('keydown', event => {
   if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyQ', 'KeyM', 'Space', 'Digit1', 'Digit2', 'Digit3', 'Digit4'].includes(event.code)) event.preventDefault();
   keys.add(event.code);
   const pressed = slotFromCode(event.code);
+  // 살아 있지 않을 때 누른 기술 키는 다시 눌러야 한다. 살아 있을 때 새로 누르면(자동 반복이 아니면) 다시 쓸 수 있다.
+  if (pressed > 0 && me()?.state !== 'alive') staleKeys.add(event.code);
+  else if (pressed > 0 && !event.repeat) staleKeys.delete(event.code);
   // 자동 반복은 누름 순서를 바꾸지 않는다. 다만 창이 포커스를 잃어 순서가 비워진 뒤에도
   // 계속 누르고 있던 키는 자동 반복으로만 들어오므로, 순서에 없을 때는 다시 넣는다.
-  if (pressed > 0 && (!event.repeat || !slotOrder.includes(pressed))) pressSlot(pressed);
+  if (pressed > 0 && !staleKeys.has(event.code) && (!event.repeat || !slotOrder.includes(pressed))) pressSlot(pressed);
   if (event.repeat) return;
   if (event.code === 'KeyM' && world) world.overview = !world.overview;
 });
-window.addEventListener('keyup', event => keys.delete(event.code));
+window.addEventListener('keyup', event => { keys.delete(event.code); staleKeys.delete(event.code); });
 window.setInterval(() => {
   if (!world || !snapshot || me()?.state !== 'alive' || snapshot.phase !== 'active') return;
   let x = Number(keys.has('KeyD') || keys.has('ArrowRight')) - Number(keys.has('KeyA') || keys.has('ArrowLeft'));

@@ -135,6 +135,33 @@ test('all four input bindings use slots, consume mana on whiffs and keep the fre
   expect(me.errors).toEqual([]);
 });
 
+test('a skill key held through deployment does not cast after landing until it is pressed again', async ({ page }) => {
+  const me = observe(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: '새 작전 시작' }).click();
+  await expect.poll(() => me.player?.state).toBe('waiting');
+  await page.getByRole('button', { name: '캠프 선택' }).click();
+  await page.locator('#deploy').click();
+  await expect.poll(() => me.player?.state).toBe('deploying');
+  // 투입을 기다리며 잡기 키를 누르고 있는다. 살아 있지 않을 때 누른 기술 키는 다시 눌러야 나간다.
+  await page.keyboard.down('Space');
+  await expect.poll(() => me.player?.state, { timeout: 8000 }).toBe('alive');
+  // 착지 직후에는 마나가 0이다. 키를 쥔 채 보급 상자로 가서 마나를 채워도 잡기가 나가면 안 된다.
+  await page.keyboard.down('KeyD'); await page.keyboard.down('KeyS');
+  await page.waitForTimeout(470);
+  await page.keyboard.up('KeyD'); await page.keyboard.up('KeyS');
+  await expect.poll(() => me.player?.mana).toBe(24);
+  await page.waitForTimeout(600);
+  expect(me.player!.mana).toBe(24);
+  expect(me.player!.actions).toHaveLength(0);
+  // 떼었다가 다시 누르면 나간다.
+  await page.keyboard.up('Space');
+  await page.keyboard.down('Space');
+  await expect.poll(() => me.player?.mana).toBe(23);
+  await page.keyboard.up('Space');
+  expect(me.errors).toEqual([]);
+});
+
 test('wire protocol rejects forged state, invalid slots, replay and stolen identity; late join works', async ({ request }) => {
   const response = await request.post('/api/rooms', { data: { name: 'Wire test' } });
   const guest = await response.json();
