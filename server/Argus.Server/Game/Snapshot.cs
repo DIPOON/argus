@@ -5,18 +5,13 @@ namespace Argus.Server.Game;
 
 public static class Snapshot
 {
-    // 연결 직후처럼 수신자 한 명에게만 보낼 때 쓴다. 공통 부분과 수신자별 부분을 한 객체로 합친다.
-    public static SnapshotMessage Create(Match match, Player recipient)
+    // 연결 직후처럼 수신자 한 명에게만 보낼 JSON을 만든다. 방송과 같은 방식으로 공통 부분과
+    // 수신자별 부분을 따로 직렬화해 이어 붙인다. 한 명에게 따로 보낼 때는 벽·규칙·맵을 모두 담는다.
+    public static byte[] Create(Match match, Player recipient, JsonSerializerOptions options)
     {
-        SnapshotMessage message = CreateShared(match);
-        // 한 명에게 따로 보낼 때는 벽·규칙·맵을 모두 담는다.
+        byte[] sharedBody = SharedBody(CreateShared(match), options);
         PersonalSnapshot personal = CreatePersonal(match, recipient, true, true);
-        message.You = personal.You;
-        message.Supplies = personal.Supplies;
-        message.Walls = personal.Walls;
-        message.Map = personal.Map;
-        message.Rules = personal.Rules;
-        return message;
+        return Combine(sharedBody, personal, options);
     }
 
     // 공통 부분을 JSON으로 직렬화하고 바깥 중괄호를 뗀 몸통을 돌려준다. 방송마다 한 번만 부르고,
@@ -95,18 +90,10 @@ public static class Snapshot
             if (enemy.Action != null)
             {
                 EnemyAction action = enemy.Action;
-                ActionSnapshot display = new ActionSnapshot();
-                display.Id = action.Id;
-                display.Skill = action.Skill.Kind;
-                display.Kind = action.Skill.Kind;
+                // 적 기술은 이름이 따로 없어 상성 종류를 이름으로도 보낸다.
+                ActionSnapshot display = CreateAction(action, action.Skill.Kind, action.Skill.Kind, action.Aim,
+                    action.Skill.Range, action.Skill.HalfWidth);
                 display.Tier = action.Skill.Tier;
-                display.Aim = action.Aim;
-                display.StartedAt = action.StartedAt;
-                display.ContactAt = action.ContactAt;
-                display.ActiveUntil = action.ActiveUntil;
-                display.EndsAt = action.EndsAt;
-                display.Range = action.Skill.Range;
-                display.HalfWidth = action.Skill.HalfWidth;
                 display.Phase = "recovery";
                 if (match.Now < action.ContactAt)
                 {
@@ -215,18 +202,10 @@ public static class Snapshot
         for (int i = 0; i < player.Actions.Count; i++)
         {
             PlayerAction action = player.Actions[i];
-            ActionSnapshot display = new ActionSnapshot();
-            display.Id = action.Id;
-            display.Skill = action.Skill.Id;
-            display.Kind = action.Skill.Kind;
+            // 대원의 기술 방향은 사용 중에도 조준을 따라 바뀐다.
+            ActionSnapshot display = CreateAction(action, action.Skill.Id, action.Skill.Kind, player.Aim,
+                action.Skill.Range, action.Skill.HalfWidth);
             display.Slot = action.Slot;
-            display.Aim = player.Aim;
-            display.StartedAt = action.StartedAt;
-            display.ContactAt = action.ContactAt;
-            display.ActiveUntil = action.ActiveUntil;
-            display.EndsAt = action.EndsAt;
-            display.Range = action.Skill.Range;
-            display.HalfWidth = action.Skill.HalfWidth;
             display.Phase = "recovery";
             if (action.Cancelled)
             {
@@ -253,6 +232,24 @@ public static class Snapshot
         entry.LandingX = Round(player.Landing.X);
         entry.LandingY = Round(player.Landing.Y);
         return entry;
+    }
+
+    // 적과 대원의 행동에 공통인 값(id, 기술, 상성, 방향, 시각, 범위)을 담는다. 단계·티어·슬롯은 부르는 쪽이 채운다.
+    private static ActionSnapshot CreateAction(ITimedAction action, string skill, string kind, double aim,
+        double range, double halfWidth)
+    {
+        ActionSnapshot display = new ActionSnapshot();
+        display.Id = action.Id;
+        display.Skill = skill;
+        display.Kind = kind;
+        display.Aim = aim;
+        display.StartedAt = action.StartedAt;
+        display.ContactAt = action.ContactAt;
+        display.ActiveUntil = action.ActiveUntil;
+        display.EndsAt = action.EndsAt;
+        display.Range = range;
+        display.HalfWidth = halfWidth;
+        return display;
     }
 
     private static int[] CreateSightPolygon(Match match, Vector2 origin, double radius)

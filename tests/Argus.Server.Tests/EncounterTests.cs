@@ -189,7 +189,7 @@ internal static class EncounterTests
                 EnemyAction action = enemy.Action!;
                 double expected = skill.Windup * rules.EnemyWindupMultiplier;
                 Near(action.ContactAt - action.StartedAt, expected);
-                SnapshotMessage snapshot = Snapshot.Create(f.Match, f.Player);
+                SnapshotMessage snapshot = Snapshot.CreateShared(f.Match);
                 ActionSnapshot tell = snapshot.Enemies[0].Action!;
                 Near(tell.ContactAt - tell.StartedAt, expected);
                 Equal(tell.Phase, "telegraph");

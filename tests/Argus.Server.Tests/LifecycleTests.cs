@@ -263,16 +263,16 @@ internal static class LifecycleTests
         hidden.Action = new EnemyAction(9002, hidden.Definition.Skills[1], 1, f.Match.Now);
         f.Match.Enemies.Add(hidden);
         f.Match.Effects.Add(new Effect(9003, 1300, 1100, "break", f.Match.Now + 1));
-        string serialized = JsonSerializer.Serialize(Snapshot.Create(f.Match, f.Player), RoomHost.Json);
+        string serialized = Encoding.UTF8.GetString(Snapshot.Create(f.Match, f.Player, RoomHost.Json));
         using JsonDocument json = JsonDocument.Parse(serialized);
         Equal(json.RootElement.GetProperty("version").GetInt32(), 3);
         Equal(json.RootElement.GetProperty("enemies").GetArrayLength(), 1);
         Check(!serialized.Contains("9001") && !serialized.Contains("9002") && !serialized.Contains("9003"));
         Player ally = Ally(f, "scout");
         ally.Position = new Vector2(1260, 1120);
-        Equal(Snapshot.Create(f.Match, f.Player).Enemies.Count, 2);
+        Equal(Snapshot.CreateShared(f.Match).Enemies.Count, 2);
         ally.State = "waiting";
-        Equal(Snapshot.Create(f.Match, f.Player).Enemies.Count, 1);
+        Equal(Snapshot.CreateShared(f.Match).Enemies.Count, 1);
         Check(visible.Hp > 0);
     }
 
@@ -283,21 +283,43 @@ internal static class LifecycleTests
         // 한 대원만 보급 대기 중이게 해서 수신자마다 값이 달라지게 한다.
         f.Match.Supplies[0].ReadyAt[f.Player.Id] = f.Match.Now + 10;
         byte[] body = Snapshot.SharedBody(Snapshot.CreateShared(f.Match), RoomHost.Json);
+        JsonObject shared = JsonNode.Parse("{" + Encoding.UTF8.GetString(body) + "}")!.AsObject();
+        // 공통 몸통에는 수신자별 값이 들어가지 않는다. SnapshotMessage에 그런 속성이 없다.
+        string[] personalKeys = new string[] { "you", "supplies", "walls", "map", "rules" };
+        for (int i = 0; i < personalKeys.Length; i++)
+        {
+            Check(!shared.ContainsKey(personalKeys[i]), $"공통 부분에 수신자별 값 {personalKeys[i]}이 섞였습니다");
+        }
+
+        // 수신자마다 공통 몸통에 자기 값만 이어 붙인다. 조종사는 벽·규칙·맵을 아직 받지 못했고 정찰병은 받았다.
         byte[] pilotBytes = Snapshot.Combine(body, Snapshot.CreatePersonal(f.Match, f.Player, true, true), RoomHost.Json);
-        byte[] scoutBytes = Snapshot.Combine(body, Snapshot.CreatePersonal(f.Match, ally, true, true), RoomHost.Json);
-        string forPilot = System.Text.Encoding.UTF8.GetString(pilotBytes);
-        string forScout = System.Text.Encoding.UTF8.GetString(scoutBytes);
-        // 공통 부분을 한 번만 직렬화해 이어 붙여도 한 명에게 따로 만든 스냅샷과 내용이 같아야 한다.
-        string alonePilot = JsonSerializer.Serialize(Snapshot.Create(f.Match, f.Player), RoomHost.Json);
-        string aloneScout = JsonSerializer.Serialize(Snapshot.Create(f.Match, ally), RoomHost.Json);
-        Check(JsonNode.DeepEquals(JsonNode.Parse(forPilot), JsonNode.Parse(alonePilot)), "이어 붙인 스냅샷이 따로 만든 것과 다릅니다");
-        Check(JsonNode.DeepEquals(JsonNode.Parse(forScout), JsonNode.Parse(aloneScout)), "이어 붙인 스냅샷이 따로 만든 것과 다릅니다");
-        Check(forPilot != forScout, "수신자별 값이 달라야 합니다");
-        // 공통 몸통에는 수신자별 값이 들어가지 않는다.
-        string shared = System.Text.Encoding.UTF8.GetString(body);
-        Check(!shared.Contains("\"you\"") && !shared.Contains("\"supplies\""), "공통 부분에 수신자별 값이 섞였습니다");
+        byte[] scoutBytes = Snapshot.Combine(body, Snapshot.CreatePersonal(f.Match, ally, false, false), RoomHost.Json);
+        JsonObject pilot = JsonNode.Parse(pilotBytes)!.AsObject();
+        JsonObject scout = JsonNode.Parse(scoutBytes)!.AsObject();
+        Equal((string)pilot["you"]!, f.Player.Id);
+        Equal((string)scout["you"]!, ally.Id);
+        double pilotCooldown = (double)pilot["supplies"]![0]!["cooldown"]!;
+        double scoutCooldown = (double)scout["supplies"]![0]!["cooldown"]!;
+        Check(pilotCooldown > 9, "조종사의 보급 대기 시간이 빠졌습니다");
+        Near(scoutCooldown, 0);
+        Check(pilot.ContainsKey("walls") && pilot.ContainsKey("map") && pilot.ContainsKey("rules"), "조종사에게 벽·규칙·맵이 빠졌습니다");
+        Check(!scout.ContainsKey("walls") && !scout.ContainsKey("map") && !scout.ContainsKey("rules"), "정찰병에게 이미 받은 값을 다시 보냈습니다");
+        // 수신자별 값을 빼면 두 스냅샷 모두 공통 몸통과 같아야 한다.
+        for (int i = 0; i < personalKeys.Length; i++)
+        {
+            pilot.Remove(personalKeys[i]);
+            scout.Remove(personalKeys[i]);
+        }
+        Check(JsonNode.DeepEquals(pilot, shared), "조종사의 스냅샷에서 공통 부분이 달라졌습니다");
+        Check(JsonNode.DeepEquals(scout, shared), "정찰병의 스냅샷에서 공통 부분이 달라졌습니다");
+
+        // 연결 직후 한 명에게 보내는 스냅샷도 같은 방식으로 만들고 벽·규칙·맵을 모두 담는다.
+        JsonObject alone = JsonNode.Parse(Snapshot.Create(f.Match, ally, RoomHost.Json))!.AsObject();
+        Equal((string)alone["you"]!, ally.Id);
+        Check(alone.ContainsKey("walls") && alone.ContainsKey("map") && alone.ContainsKey("rules"), "연결 직후 스냅샷에 벽·규칙·맵이 빠졌습니다");
+
         // 시야 다각형은 그리기 전용이라 정수로 보낸다. 실제 전송되는 JSON에서 확인한다.
-        using JsonDocument json = JsonDocument.Parse(forScout);
+        using JsonDocument json = JsonDocument.Parse(scoutBytes);
         JsonElement sight = json.RootElement.GetProperty("sight");
         Check(sight.GetArrayLength() > 0);
         foreach (JsonElement polygon in sight.EnumerateArray())

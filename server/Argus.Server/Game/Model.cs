@@ -38,7 +38,17 @@ public sealed class Player
     }
 }
 
-public sealed class PlayerAction
+// 적과 대원의 행동이 함께 가진 id와 시각이다. 스냅샷이 둘을 같은 모양으로 담을 때 쓴다.
+public interface ITimedAction
+{
+    int Id { get; }
+    double StartedAt { get; }
+    double ContactAt { get; }
+    double ActiveUntil { get; }
+    double EndsAt { get; }
+}
+
+public sealed class PlayerAction : ITimedAction
 {
     public int Id { get; }
     public SkillDefinition Skill { get; }
@@ -78,7 +88,7 @@ public sealed class PlayerAction
     }
 }
 
-public sealed class EnemyAction
+public sealed class EnemyAction : ITimedAction
 {
     public int Id { get; }
     public EnemySkill Skill { get; }

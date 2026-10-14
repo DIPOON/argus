@@ -3,6 +3,8 @@ using System.Text.Json.Serialization;
 namespace Argus.Server.Game;
 
 // 모든 위치·피해·기술 시간은 서버가 계산한 값이다. JSON 속성명은 camelCase다.
+// 팀 전체가 똑같이 받는 부분만 담는다. 수신자별 값(you, 보급, 벽·규칙·맵)은 PersonalSnapshot에 있고
+// 직렬화한 뒤 이어 붙이므로, 이 클래스에는 수신자별 속성을 두지 않는다.
 public sealed class SnapshotMessage
 {
     public string Type { get; set; } = "snapshot";
@@ -12,15 +14,9 @@ public sealed class SnapshotMessage
     public double Elapsed { get; set; }
     public string Phase { get; set; } = "";
     public string? Result { get; set; }
-    // 수신자별 값이다. 방송할 때는 공통 부분에서 비워 두고 PersonalSnapshot으로 따로 이어 붙인다.
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? You { get; set; }
     public int Pulse { get; set; }
     public double NextPulse { get; set; }
     public ExtractionSnapshot Extraction { get; set; } = new ExtractionSnapshot();
-    // 벽은 수신자가 아직 받지 못한 판일 때만 담는다. 비어 있으면 JSON에서 빠진다.
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public byte[]? Walls { get; set; }
     public int MapRevision { get; set; }
     public List<PlayerSnapshot> Players { get; set; } = new List<PlayerSnapshot>();
     public List<EnemySnapshot> Enemies { get; set; } = new List<EnemySnapshot>();
@@ -28,22 +24,15 @@ public sealed class SnapshotMessage
     // 정수 좌표라 double보다 직렬화가 빠르다. 전송되는 JSON은 같다.
     public List<int[]> Sight { get; set; } = new List<int[]>();
     public List<FacilitySnapshot> Facilities { get; set; } = new List<FacilitySnapshot>();
-    // 보급 대기 시간이 대원마다 달라 수신자별 값으로 다룬다.
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public List<SupplySnapshot>? Supplies { get; set; }
     public List<Notice> Notices { get; set; } = new List<Notice>();
-    // 맵과 규칙은 작전 중 바뀌지 않으므로 수신자가 아직 받지 못했을 때만 담는다.
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public MapSnapshot? Map { get; set; }
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public RulesSnapshot? Rules { get; set; }
 }
 
-// 수신자마다 다른 값만 담는다. 방송할 때 공통 부분과 따로 직렬화해 앞에 이어 붙인다.
+// 수신자마다 다른 값만 담는다. 공통 부분과 따로 직렬화해 앞에 이어 붙인다.
 // 수신자별 값을 새로 추가하면 여기에 둔다. 공통 부분(SnapshotMessage)에 두면 모든 수신자에게 같은 값이 간다.
 public sealed class PersonalSnapshot
 {
     public string You { get; set; } = "";
+    // 보급 대기 시간이 대원마다 달라 보급 목록 전체를 수신자별 값으로 다룬다.
     public List<SupplySnapshot> Supplies { get; set; } = new List<SupplySnapshot>();
     // 벽은 수신자가 아직 받지 못한 판일 때만, 맵과 규칙은 아직 받지 못했을 때만 담는다.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

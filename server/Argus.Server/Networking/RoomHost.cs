@@ -378,7 +378,7 @@ public sealed class RoomHost : BackgroundService
             player.DisconnectedAt = null;
             player.AwaitingFirstConnection = false;
             room.LastVisit = DateTime.UtcNow;
-            byte[] snapshot = JsonSerializer.SerializeToUtf8Bytes(Snapshot.Create(room.Match, player), Json);
+            byte[] snapshot = Snapshot.Create(room.Match, player, Json);
             peer.Outgoing.Writer.TryWrite(new OutgoingMessage(snapshot, room.Match.Map.Revision, true));
             return (room, player, peer);
         }
