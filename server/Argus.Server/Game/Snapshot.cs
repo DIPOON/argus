@@ -9,41 +9,35 @@ public static class Snapshot
     // 수신자별 부분을 따로 직렬화해 이어 붙인다. 한 명에게 따로 보낼 때는 벽·규칙·맵을 모두 담는다.
     public static byte[] Create(Match match, Player recipient, JsonSerializerOptions options)
     {
-        byte[] sharedBody = SharedBody(CreateShared(match), options);
+        byte[] sharedJson = SerializeShared(CreateShared(match), options);
         PersonalSnapshot personal = CreatePersonal(match, recipient, true, true);
-        return Combine(sharedBody, personal, options);
+        return Combine(sharedJson, personal, options);
     }
 
-    // 공통 부분을 JSON으로 직렬화하고 바깥 중괄호를 뗀 몸통을 돌려준다. 방송마다 한 번만 부르고,
-    // 수신자마다 Combine으로 이어 붙인다.
-    public static byte[] SharedBody(SnapshotMessage shared, JsonSerializerOptions options)
+    // 공통 부분을 JSON으로 직렬화한다. 방송마다 한 번만 부르고, 수신자마다 Combine으로 이어 붙인다.
+    public static byte[] SerializeShared(SnapshotMessage shared, JsonSerializerOptions options)
     {
-        return Body(JsonSerializer.SerializeToUtf8Bytes(shared, options));
+        return JsonSerializer.SerializeToUtf8Bytes(shared, options);
     }
 
-    // 수신자별 부분과 공통 몸통을 이어 스냅샷 JSON 하나를 만든다. 두 몸통 모두 속성이 하나 이상이라 쉼표로 이으면 된다.
-    public static byte[] Combine(byte[] sharedBody, PersonalSnapshot personal, JsonSerializerOptions options)
+    // 수신자별 부분과 공통 부분을 이어 스냅샷 JSON 하나를 만든다. 두 JSON 모두 {...} 형태이고 속성이 하나 이상이라,
+    // 바깥 중괄호를 뺀 안쪽을 원본 배열에서 바로 옮겨 쉼표로 이으면 된다. 중괄호를 떼려고 따로 복사하지 않는다.
+    public static byte[] Combine(byte[] sharedJson, PersonalSnapshot personal, JsonSerializerOptions options)
     {
-        byte[] personalBody = Body(JsonSerializer.SerializeToUtf8Bytes(personal, options));
-        byte[] result = new byte[personalBody.Length + sharedBody.Length + 3];
+        byte[] personalJson = JsonSerializer.SerializeToUtf8Bytes(personal, options);
+        int personalLength = personalJson.Length - 2;
+        int sharedLength = sharedJson.Length - 2;
+        byte[] result = new byte[personalLength + sharedLength + 3];
         result[0] = (byte)'{';
-        personalBody.CopyTo(result, 1);
-        result[1 + personalBody.Length] = (byte)',';
-        sharedBody.CopyTo(result, 2 + personalBody.Length);
+        Array.Copy(personalJson, 1, result, 1, personalLength);
+        result[1 + personalLength] = (byte)',';
+        Array.Copy(sharedJson, 1, result, 2 + personalLength, sharedLength);
         result[result.Length - 1] = (byte)'}';
         return result;
     }
 
-    // {...} 형태의 JSON에서 바깥 중괄호를 뗀다.
-    private static byte[] Body(byte[] json)
-    {
-        byte[] body = new byte[json.Length - 2];
-        Array.Copy(json, 1, body, 0, body.Length);
-        return body;
-    }
-
     // 팀 전체가 똑같이 받는 부분을 만든다. 시야 계산이 대부분의 비용이므로 방송할 때는 한 번만 부른다.
-    // 수신자를 받지 않으므로 수신자별 정보가 여기에 섞일 수 없다. you·보급·벽·규칙·맵은 비워 둔다.
+    // 수신자를 받지 않고 SnapshotMessage에 수신자별 속성도 없으므로 수신자별 정보가 여기에 섞일 수 없다.
     public static SnapshotMessage CreateShared(Match match)
     {
         SnapshotMessage message = new SnapshotMessage();

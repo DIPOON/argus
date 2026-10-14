@@ -559,7 +559,7 @@ public sealed class RoomHost : BackgroundService
         // 공통 부분(시야 계산 포함)은 방송마다 한 번만 만들고 한 번만 직렬화한다. 수신자마다 다른 값
         // (you, 보급 대기 시간, 아직 받지 못한 벽·규칙·맵)만 따로 직렬화해 앞에 이어 붙인다.
         SnapshotMessage shared = Snapshot.CreateShared(room.Match);
-        byte[] sharedBody = Snapshot.SharedBody(shared, Json);
+        byte[] sharedJson = Snapshot.SerializeShared(shared, Json);
         int revision = room.Match.Map.Revision;
         for (int i = 0; i < room.Match.Players.Count; i++)
         {
@@ -572,7 +572,7 @@ public sealed class RoomHost : BackgroundService
             bool includeWalls = peer.SentWallRevision != revision;
             bool includeStatic = !peer.SentStatic;
             PersonalSnapshot personal = Snapshot.CreatePersonal(room.Match, player, includeWalls, includeStatic);
-            byte[] snapshot = Snapshot.Combine(sharedBody, personal, Json);
+            byte[] snapshot = Snapshot.Combine(sharedJson, personal, Json);
             int wallRevision = -1;
             if (includeWalls)
             {

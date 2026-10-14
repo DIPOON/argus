@@ -283,8 +283,8 @@ internal static class LifecycleTests
         Player ally = Ally(f, "scout");
         // 한 대원만 보급 대기 중이게 해서 수신자마다 값이 달라지게 한다.
         f.Match.Supplies[0].ReadyAt[f.Player.Id] = f.Match.Now + 10;
-        byte[] body = Snapshot.SharedBody(Snapshot.CreateShared(f.Match), RoomHost.Json);
-        JsonObject shared = JsonNode.Parse("{" + Encoding.UTF8.GetString(body) + "}")!.AsObject();
+        byte[] body = Snapshot.SerializeShared(Snapshot.CreateShared(f.Match), RoomHost.Json);
+        JsonObject shared = JsonNode.Parse(body)!.AsObject();
         // 공통 몸통에는 수신자별 값이 들어가지 않는다. SnapshotMessage에 그런 속성이 없다.
         string[] personalKeys = new string[] { "you", "supplies", "walls", "map", "rules" };
         for (int i = 0; i < personalKeys.Length; i++)
