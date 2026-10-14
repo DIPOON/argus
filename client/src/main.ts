@@ -92,15 +92,20 @@ let ping = 0;
 const mouseButtons = new Set<number>();
 let lastNotice = '';
 let toastTimer = 0;
+// 투입 요청을 보내고 서버의 답(투입 중 상태나 오류 안내)을 기다리는 중이다. 그동안 투입 버튼을 막아 두 번 보내지 않는다.
+let deployRequested = false;
 const keys = new Set<string>();
 let mouse = { x: 0, y: 0, known: false };
 // 동시에 눌린 슬롯 중 가장 나중에 누른 것이 나가도록 누름 순서를 유지한다.
 const slotOrder: number[] = [];
+// 다시 눌러야 하는 키(staleKeys)는 쥐고 있어도 누른 것으로 치지 않는다. 같은 슬롯의 다른 입력을
+// 새로 눌렀다 떼었을 때 쥐고 있던 키로 기술이 이어지지 않게 한다.
+const keyHeld = (code: string) => keys.has(code) && !staleKeys.has(code);
 function slotHeld(slot: number) {
-  if (slot === 1) return mouseButtons.has(0) || keys.has('Digit1');
-  if (slot === 2) return mouseButtons.has(2) || keys.has('Digit2');
-  if (slot === 3) return keys.has('Space') || keys.has('Digit3');
-  return keys.has('KeyQ') || keys.has('Digit4');
+  if (slot === 1) return mouseButtons.has(0) || keyHeld('Digit1');
+  if (slot === 2) return mouseButtons.has(2) || keyHeld('Digit2');
+  if (slot === 3) return keyHeld('Space') || keyHeld('Digit3');
+  return keyHeld('KeyQ') || keyHeld('Digit4');
 }
 function slotFromCode(code: string) {
   if (code === 'Digit1') return 1;
@@ -222,7 +227,7 @@ function connect() {
     if (socket !== ws) return;
     const message = JSON.parse(event.data);
     if (message.type === 'pong') { ping = Math.round(performance.now() - message.sent); return; }
-    if (message.type === 'error') { toast(message.message); return; }
+    if (message.type === 'error') { deployRequested = false; toast(message.message); updateUi(); return; }
     if (message.type !== 'snapshot') return;
     if (message.version !== 3) { leave(); $('lobby-error').textContent = '서버와 클라이언트 버전이 다릅니다. 새로고침 후 다시 접속하세요.'; return; }
     // 벽은 바뀔 때만, 규칙과 맵은 접속 직후에만 온다. 빠진 값은 같은 방의 이전 스냅샷에서 이어 쓴다.
@@ -233,6 +238,7 @@ function connect() {
     if (walls === undefined || rules === undefined || map === undefined) return;
     const wasAlive = me()?.state === 'alive';
     snapshot = { ...wire, walls, rules, map };
+    if (me()?.state !== 'waiting') deployRequested = false;
     if (wasAlive && me()?.state !== 'alive') releaseSkills();
     sequence = Math.max(sequence, (me()?.ack ?? -1) + 1);
     status('분대 연결됨', true);
@@ -244,6 +250,7 @@ function connect() {
   });
   ws.addEventListener('close', event => {
     if (socket !== ws || !guest) return;
+    deployRequested = false;
     clearInput();
     if (event.code === 1008) { leave(); $('lobby-error').textContent = '참가 정보가 만료되었습니다. 새 작전에 참가해 주세요.'; return; }
     if (event.code === 4001) { leave(); $('lobby-error').textContent = '같은 대원이 다른 창에서 접속했습니다. 이 창에서는 별도 대원으로 참가할 수 있습니다.'; return; }
@@ -290,8 +297,8 @@ function updateUi() {
     $('deploy-title').textContent = preparing ? `${p.deploy.toFixed(1)}초 후 투입합니다` : p.hasDeployed ? '증원할 위치를 선택하세요' : '투입할 위치를 선택하세요';
     $('deploy-description').textContent = preparing ? '투입이 완료될 때까지 해당 위치의 시야는 열리지 않습니다.' : '빈 지면을 클릭하세요. 어두운 곳의 안전은 보장되지 않습니다.';
     $<HTMLButtonElement>('camp').disabled = preparing;
-    $<HTMLButtonElement>('deploy').disabled = preparing || !world?.landing;
-    $('deploy').textContent = preparing ? '투입 준비 중…' : world?.landing ? '5초 후 투입 ↗' : '위치 선택 필요';
+    $<HTMLButtonElement>('deploy').disabled = preparing || deployRequested || !world?.landing;
+    $('deploy').textContent = preparing || deployRequested ? '투입 준비 중…' : world?.landing ? '5초 후 투입 ↗' : '위치 선택 필요';
   }
   if (alive) {
     $('my-name').textContent = p.name;
@@ -337,7 +344,11 @@ $('camp').addEventListener('click', () => {
   world.landing = { x: snapshot.map.campX, y: snapshot.map.campY };
   updateUi();
 });
-$('deploy').addEventListener('click', () => { if (world?.landing) send({ type: 'deploy', ...world.landing }); });
+// 요청을 보내는 즉시 버튼을 막는다. 다음 스냅샷이 오기 전에 다시 눌러도 요청이 두 번 나가지 않는다.
+$('deploy').addEventListener('click', () => {
+  if (!world?.landing || deployRequested) return;
+  if (send({ type: 'deploy', ...world.landing })) { deployRequested = true; updateUi(); }
+});
 $('leave').addEventListener('click', leave);
 $('again').addEventListener('click', leave);
 // 캔버스 밖에서 떼거나 움직여도 놓은 버튼은 반영한다. 새로 누르는 것은 캔버스 위에서만 받는다.

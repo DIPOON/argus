@@ -154,11 +154,34 @@ test('a skill key held through deployment does not cast after landing until it i
   await page.waitForTimeout(600);
   expect(me.player!.mana).toBe(24);
   expect(me.player!.actions).toHaveLength(0);
-  // 떼었다가 다시 누르면 나간다.
+  // 같은 슬롯의 다른 키(Digit3)를 새로 눌렀다 떼면 잡기는 한 번만 나간다. 아직 쥐고 있는 Space로 이어지면 안 된다.
+  await page.keyboard.down('Digit3');
+  await expect.poll(() => me.player?.mana).toBe(23);
+  await page.keyboard.up('Digit3');
+  await page.waitForTimeout(1500);
+  expect(me.player!.mana).toBe(23);
+  // Space를 떼었다가 다시 누르면 나간다.
+  await expect.poll(() => me.player?.busy).toBe(0);
   await page.keyboard.up('Space');
   await page.keyboard.down('Space');
-  await expect.poll(() => me.player?.mana).toBe(23);
+  await expect.poll(() => me.player?.mana).toBe(22);
   await page.keyboard.up('Space');
+  expect(me.errors).toEqual([]);
+});
+
+test('the deploy button sends one request even when it is clicked twice quickly', async ({ page }) => {
+  const me = observe(page);
+  const sent: string[] = [];
+  page.on('websocket', ws => ws.on('framesent', frame => sent.push(String(frame.payload))));
+  await page.goto('/');
+  await page.getByRole('button', { name: '새 작전 시작' }).click();
+  await expect.poll(() => me.player?.state).toBe('waiting');
+  await page.getByRole('button', { name: '캠프 선택' }).click();
+  // 다음 스냅샷이 오기 전에 두 번 누른다. 첫 요청을 보내는 즉시 버튼을 막아야 한다.
+  await page.locator('#deploy').dblclick();
+  await expect.poll(() => me.player?.state).toBe('deploying');
+  expect(sent.filter(text => text.includes('"deploy"'))).toHaveLength(1);
+  await expect(page.locator('#toast')).toBeHidden();
   expect(me.errors).toEqual([]);
 });
 
