@@ -325,7 +325,7 @@ public sealed partial class Match
             Vector2? landing = FindLanding(player.Landing);
             if (!landing.HasValue)
             {
-                // 주변과 캠프가 모두 막힌 드문 경우다. 대기로 되돌리지 않고 다음 틱에 다시 찾는다.
+                // 반지름 640 안이 모두 막힌, 맵 대부분이 막힌 경우다. 대기로 되돌리지 않고 다음 틱에 다시 찾는다.
                 continue;
             }
             player.Position = landing.Value;
@@ -350,7 +350,7 @@ public sealed partial class Match
 
     // 투입 지점이 비어 있으면 그대로 쓴다. 막혀 있으면 16단위 간격의 고리를 넓혀 가며 가장 가까운 빈 자리를 찾는다.
     // 후보는 원래 투입 지점이 보이는 곳으로 제한한다. 벽 너머로 옮겨지면 옮겨졌다는 사실만으로
-    // 보이지 않는 곳에 무언가 있다는 것을 알게 되기 때문이다. 128단위 안에 없으면 캠프, 캠프도 막혔으면 null이다.
+    // 보이지 않는 곳에 무언가 있다는 것을 알게 되기 때문이다. 128단위 안에 없으면 캠프, 캠프도 막혔으면 반지름 640까지 넓혀 찾고, 그래도 없으면 null이다.
     private Vector2? FindLanding(Vector2 landing)
     {
         if (CanOccupy(landing, Rules.PlayerRadius, null))
@@ -373,6 +373,23 @@ public sealed partial class Match
         if (CanOccupy(BattleMap.Camp, Rules.PlayerRadius, null))
         {
             return BattleMap.Camp;
+        }
+        // 근처와 캠프가 모두 막힌 드문 경우다. 투입 중 상태에 묶어 두지 않도록 원래 지점에서 점점 넓혀 빈 자리를 찾는다.
+        // 여기서는 원래 지점이 보이는지 따지지 않는다. 이만큼 막힌 곳이라면 옮겨진 사실로 새로 알게 되는 것이 거의 없다.
+        // 반지름이 커질수록 고리 둘레에 맞춰 후보를 늘려, 후보 사이 간격이 16을 넘지 않게 한다.
+        for (int ring = 9; ring <= 40; ring++)
+        {
+            float radius = ring * 16;
+            int samples = Math.Max(16, (int)(Math.Tau * radius / 16));
+            for (int i = 0; i < samples; i++)
+            {
+                double angle = i * Math.Tau / samples;
+                Vector2 candidate = landing + new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * radius;
+                if (CanOccupy(candidate, Rules.PlayerRadius, null))
+                {
+                    return candidate;
+                }
+            }
         }
         return null;
     }

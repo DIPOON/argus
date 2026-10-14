@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -29,6 +30,10 @@ public sealed class Peer
     public long Connection { get; }
     public bool Replaced { get; set; }
     public Channel<OutgoingMessage> Outgoing { get; }
+    // 오류 안내와 pong을 보내는 통로다. 스냅샷은 느린 연결에서 오래된 것부터 버려도 되지만 이 메시지들은
+    // 버려지면 안 되므로 따로 둔다. 읽지 않는 연결이 ping만 쏟아 서버 메모리를 늘리지 못하도록 용량은 둔다.
+    // 이 통로가 차면 새 메시지를 버리며, 그 피해는 스스로 넘치게 만든 연결만 입는다.
+    public Channel<OutgoingMessage> Control { get; }
     // 실제로 보낸 벽 판 번호와 규칙·맵 전송 여부다. 느린 수신자에게 쌓인 메시지는 버려질 수 있으므로
     // 만들 때가 아니라 보낸 뒤에 기록한다. 보내는 작업과 방송이 다른 스레드에서 쓰고 읽으므로 volatile로 둔다.
     private volatile int _sentWallRevision = -1;
@@ -58,6 +63,11 @@ public sealed class Peer
         options.SingleReader = true;
         options.SingleWriter = false;
         Outgoing = Channel.CreateBounded<OutgoingMessage>(options);
+        BoundedChannelOptions controlOptions = new BoundedChannelOptions(32);
+        controlOptions.FullMode = BoundedChannelFullMode.DropWrite;
+        controlOptions.SingleReader = true;
+        controlOptions.SingleWriter = false;
+        Control = Channel.CreateBounded<OutgoingMessage>(controlOptions);
     }
 
     // 메시지를 실제로 보낸 뒤에 부른다.
@@ -70,6 +80,47 @@ public sealed class Peer
         if (message.HasStatic)
         {
             _sentStatic = true;
+        }
+    }
+
+    // 두 통로의 메시지를 소켓으로 보낸다. 오류 안내와 pong을 스냅샷보다 먼저 보낸다.
+    // 스냅샷 통로가 닫히면(연결 교체·해제·방 닫힘) 끝나고, 취소되면 OperationCanceledException으로 끝난다.
+    public async Task Send(WebSocket socket, CancellationToken token)
+    {
+        // 끝나지 않은 기다림은 다음 차례에도 그대로 쓴다. 차례마다 새로 기다리면, 메시지가 드문 제어 통로에
+        // 끝나지 않은 기다림이 스냅샷마다 하나씩 쌓인다. ping을 보내지 않는 연결에서는 끝없이 쌓인다.
+        Task<bool>? controlReady = null;
+        Task<bool>? snapshotReady = null;
+        while (true)
+        {
+            // 오류 안내와 pong을 먼저 모두 보낸다. 이 통로의 메시지는 스냅샷과 달리 버려지지 않는다.
+            while (Control.Reader.TryRead(out OutgoingMessage? control))
+            {
+                await socket.SendAsync(control.Bytes.AsMemory(), WebSocketMessageType.Text, true, token);
+            }
+            if (Outgoing.Reader.TryRead(out OutgoingMessage? message))
+            {
+                await socket.SendAsync(message.Bytes.AsMemory(), WebSocketMessageType.Text, true, token);
+                // 실제로 보낸 뒤에야 이 연결이 바뀌지 않는 정보를 받았다고 본다.
+                MarkSent(message);
+                continue;
+            }
+            // 둘 다 비었으면 어느 쪽이든 새 메시지가 올 때까지 기다린다.
+            if (controlReady == null || controlReady.IsCompleted)
+            {
+                controlReady = Control.Reader.WaitToReadAsync(token).AsTask();
+            }
+            if (snapshotReady == null || snapshotReady.IsCompleted)
+            {
+                snapshotReady = Outgoing.Reader.WaitToReadAsync(token).AsTask();
+            }
+            Task<bool> first = await Task.WhenAny(controlReady, snapshotReady);
+            // 취소되었으면 여기서 예외로 끝난다. 취소된 기다림은 곧바로 끝나므로, 넘어가면 같은 자리를 헛돈다.
+            bool open = await first;
+            if (!open)
+            {
+                return;
+            }
         }
     }
 }
@@ -446,8 +497,11 @@ public sealed class RoomHost : BackgroundService
         {
             return;
         }
-        // 수신자마다 다른 것은 you와 보급 대기 시간뿐이다. 시야 계산을 포함한 공통 부분은 한 번만 만든다.
-        SnapshotMessage message = Snapshot.CreateShared(room.Match);
+        // 공통 부분(시야 계산 포함)은 방송마다 한 번만 만들고 한 번만 직렬화한다. 수신자마다 다른 값
+        // (you, 보급 대기 시간, 아직 받지 못한 벽·규칙·맵)만 따로 직렬화해 앞에 이어 붙인다.
+        SnapshotMessage shared = Snapshot.CreateShared(room.Match);
+        byte[] sharedBody = Snapshot.SharedBody(shared, Json);
+        int revision = room.Match.Map.Revision;
         for (int i = 0; i < room.Match.Players.Count; i++)
         {
             Player player = room.Match.Players[i];
@@ -456,12 +510,10 @@ public sealed class RoomHost : BackgroundService
                 continue;
             }
             // 벽은 이 연결이 아직 받지 못한 판일 때만, 규칙과 맵은 아직 받지 못했을 때만 담는다.
-            int revision = room.Match.Map.Revision;
             bool includeWalls = peer.SentWallRevision != revision;
             bool includeStatic = !peer.SentStatic;
-            // 같은 메시지에 수신자별 값만 바꿔 넣고 바로 직렬화한다.
-            Snapshot.Personalize(message, room.Match, player, includeWalls, includeStatic);
-            byte[] snapshot = JsonSerializer.SerializeToUtf8Bytes(message, Json);
+            PersonalSnapshot personal = Snapshot.CreatePersonal(room.Match, player, includeWalls, includeStatic);
+            byte[] snapshot = Snapshot.Combine(sharedBody, personal, Json);
             int wallRevision = -1;
             if (includeWalls)
             {

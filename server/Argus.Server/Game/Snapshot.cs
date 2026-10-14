@@ -1,20 +1,54 @@
 using System.Numerics;
+using System.Text.Json;
 
 namespace Argus.Server.Game;
 
 public static class Snapshot
 {
-    // 연결 직후처럼 수신자 한 명에게만 보낼 때 사용한다.
+    // 연결 직후처럼 수신자 한 명에게만 보낼 때 쓴다. 공통 부분과 수신자별 부분을 한 객체로 합친다.
     public static SnapshotMessage Create(Match match, Player recipient)
     {
         SnapshotMessage message = CreateShared(match);
         // 한 명에게 따로 보낼 때는 벽·규칙·맵을 모두 담는다.
-        Personalize(message, match, recipient, true, true);
+        PersonalSnapshot personal = CreatePersonal(match, recipient, true, true);
+        message.You = personal.You;
+        message.Supplies = personal.Supplies;
+        message.Walls = personal.Walls;
+        message.Map = personal.Map;
+        message.Rules = personal.Rules;
         return message;
     }
 
+    // 공통 부분을 JSON으로 직렬화하고 바깥 중괄호를 뗀 몸통을 돌려준다. 방송마다 한 번만 부르고,
+    // 수신자마다 Combine으로 이어 붙인다.
+    public static byte[] SharedBody(SnapshotMessage shared, JsonSerializerOptions options)
+    {
+        return Body(JsonSerializer.SerializeToUtf8Bytes(shared, options));
+    }
+
+    // 수신자별 부분과 공통 몸통을 이어 스냅샷 JSON 하나를 만든다. 두 몸통 모두 속성이 하나 이상이라 쉼표로 이으면 된다.
+    public static byte[] Combine(byte[] sharedBody, PersonalSnapshot personal, JsonSerializerOptions options)
+    {
+        byte[] personalBody = Body(JsonSerializer.SerializeToUtf8Bytes(personal, options));
+        byte[] result = new byte[personalBody.Length + sharedBody.Length + 3];
+        result[0] = (byte)'{';
+        personalBody.CopyTo(result, 1);
+        result[1 + personalBody.Length] = (byte)',';
+        sharedBody.CopyTo(result, 2 + personalBody.Length);
+        result[result.Length - 1] = (byte)'}';
+        return result;
+    }
+
+    // {...} 형태의 JSON에서 바깥 중괄호를 뗀다.
+    private static byte[] Body(byte[] json)
+    {
+        byte[] body = new byte[json.Length - 2];
+        Array.Copy(json, 1, body, 0, body.Length);
+        return body;
+    }
+
     // 팀 전체가 똑같이 받는 부분을 만든다. 시야 계산이 대부분의 비용이므로 방송할 때는 한 번만 부른다.
-    // 수신자를 받지 않으므로 수신자별 정보가 여기에 섞일 수 없다.
+    // 수신자를 받지 않으므로 수신자별 정보가 여기에 섞일 수 없다. you·보급·벽·규칙·맵은 비워 둔다.
     public static SnapshotMessage CreateShared(Match match)
     {
         SnapshotMessage message = new SnapshotMessage();
@@ -30,7 +64,7 @@ public static class Snapshot
         message.Extraction.Progress = Round(match.ExtractionProgress);
         message.Extraction.Duration = match.Rules.ExtractionSeconds;
         message.Extraction.Unlocked = match.ObjectivesComplete;
-        // 벽 자체는 수신자별로 Personalize가 담는다. 판 번호는 매번 보내 클라이언트가 바뀐 것을 알게 한다.
+        // 벽 자체는 수신자별 부분이 담는다. 판 번호는 매번 보내 클라이언트가 바뀐 것을 알게 한다.
         message.MapRevision = match.Map.Revision;
         for (int i = 0; i < match.Players.Count; i++)
         {
@@ -113,18 +147,6 @@ public static class Snapshot
             entry.MaxHp = facility.MaxHp;
             message.Facilities.Add(entry);
         }
-        for (int i = 0; i < match.Supplies.Count; i++)
-        {
-            Supply supply = match.Supplies[i];
-            SupplySnapshot entry = new SupplySnapshot();
-            entry.Id = supply.Id;
-            entry.X = supply.Position.X;
-            entry.Y = supply.Position.Y;
-            entry.Objective = supply.Objective;
-            entry.Collected = supply.Collected;
-            // 보급 대기 시간은 대원마다 다르므로 Personalize에서 정한다.
-            message.Supplies.Add(entry);
-        }
         message.Notices = match.Notices;
         return message;
     }
@@ -142,31 +164,35 @@ public static class Snapshot
         return rules;
     }
 
-    // 수신자마다 다른 값만 덮어쓴다. 같은 메시지를 다음 수신자에게 다시 쓰므로
-    // 수신자별 값은 빠짐없이 모두 여기서 정해야 앞 수신자의 값이 남지 않는다.
-    // includeWalls는 이 수신자가 아직 지금 판의 벽을 받지 못했을 때, includeStatic은 규칙과 맵을 아직 받지 못했을 때 켠다.
-    public static void Personalize(SnapshotMessage message, Match match, Player recipient, bool includeWalls, bool includeStatic)
+    // 수신자마다 다른 값만 만든다. includeWalls는 이 수신자가 지금 판의 벽을 아직 받지 못했을 때,
+    // includeStatic은 규칙과 맵을 아직 받지 못했을 때 켠다.
+    public static PersonalSnapshot CreatePersonal(Match match, Player recipient, bool includeWalls, bool includeStatic)
     {
-        message.You = recipient.Id;
-        // 담지 않을 때는 null로 비워 JSON에서 빠지게 한다. 앞 수신자에게 담았던 값이 남지 않도록 매번 정한다.
-        message.Walls = null;
-        if (includeWalls)
-        {
-            message.Walls = match.Map.Tiles;
-        }
-        message.Map = null;
-        message.Rules = null;
-        if (includeStatic)
-        {
-            message.Map = new MapSnapshot();
-            message.Rules = CreateRules(match);
-        }
-        // CreateShared가 match.Supplies와 같은 순서로 보급을 넣었으므로 번호가 일치한다.
+        PersonalSnapshot personal = new PersonalSnapshot();
+        personal.You = recipient.Id;
         for (int i = 0; i < match.Supplies.Count; i++)
         {
             Supply supply = match.Supplies[i];
-            message.Supplies[i].Cooldown = Round(Math.Max(0, supply.AvailableAt(recipient) - match.Now));
+            SupplySnapshot entry = new SupplySnapshot();
+            entry.Id = supply.Id;
+            entry.X = supply.Position.X;
+            entry.Y = supply.Position.Y;
+            entry.Objective = supply.Objective;
+            entry.Collected = supply.Collected;
+            // 보급 대기 시간은 대원마다 다르다.
+            entry.Cooldown = Round(Math.Max(0, supply.AvailableAt(recipient) - match.Now));
+            personal.Supplies.Add(entry);
         }
+        if (includeWalls)
+        {
+            personal.Walls = match.Map.Tiles;
+        }
+        if (includeStatic)
+        {
+            personal.Map = new MapSnapshot();
+            personal.Rules = CreateRules(match);
+        }
+        return personal;
     }
 
     private static PlayerSnapshot CreatePlayer(Match match, Player player)

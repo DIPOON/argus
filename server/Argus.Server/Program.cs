@@ -155,7 +155,7 @@ internal static class Program
 
             // 입력 수신과 상태 전송을 함께 시작하고, 어느 한쪽이 끝나면 연결을 정리한다.
             Task receive = Receive(socket, room, player, peer, lifetime.Token);
-            Task send = Send(socket, peer, lifetime.Token);
+            Task send = peer.Send(socket, lifetime.Token);
             await Task.WhenAny(receive, send);
             if (peer.Replaced)
             {
@@ -322,7 +322,7 @@ internal static class Program
                             type = "error",
                             message = "해당 위치에는 투입할 수 없습니다. 빈 지면을 선택하세요."
                         }, RoomHost.Json);
-                        peer.Outgoing.Writer.TryWrite(new OutgoingMessage(message, -1, false));
+                        peer.Control.Writer.TryWrite(new OutgoingMessage(message, -1, false));
                     }
                 }
                 else if (type == "loadout")
@@ -336,7 +336,7 @@ internal static class Program
                         type = "pong",
                         sent = Number(root, "sent")
                     }, RoomHost.Json);
-                    peer.Outgoing.Writer.TryWrite(new OutgoingMessage(message, -1, false));
+                    peer.Control.Writer.TryWrite(new OutgoingMessage(message, -1, false));
                 }
             }
         }
@@ -358,17 +358,6 @@ internal static class Program
             selected[i] = slots[i].GetString() ?? "";
         }
         room.Match.SetLoadout(player, selected);
-    }
-
-    private static async Task Send(WebSocket socket, Peer peer, CancellationToken token)
-    {
-        // await foreach는 다음 전송 메시지가 들어올 때까지 비동기로 기다린다.
-        await foreach (OutgoingMessage message in peer.Outgoing.Reader.ReadAllAsync(token))
-        {
-            await socket.SendAsync(message.Bytes.AsMemory(), WebSocketMessageType.Text, true, token);
-            // 실제로 보낸 뒤에야 이 연결이 바뀌지 않는 정보를 받았다고 본다.
-            peer.MarkSent(message);
-        }
     }
 
     private static string Text(JsonElement element, string name)

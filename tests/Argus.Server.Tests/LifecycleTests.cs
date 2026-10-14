@@ -1,5 +1,9 @@
+using System.Diagnostics;
+using System.Net.WebSockets;
 using System.Numerics;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Argus.Server.Game;
 using Argus.Server.Networking;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -21,7 +25,7 @@ internal static class LifecycleTests
         tests.Add(new TestCase("Disconnected slots expire and cannot keep a solo mission alive", Expiry));
         tests.Add(new TestCase("Snapshots omit hidden enemy actions and effects and share teammate sight", Visibility));
         tests.Add(new TestCase("Deployment never discloses hidden occupancy; a blocked arrival lands nearby without overlap", BlockedDeployment));
-        tests.Add(new TestCase("A reused broadcast snapshot keeps no previous recipient data and sends integer sight", SharedSnapshot));
+        tests.Add(new TestCase("A broadcast serializes the shared part once and matches a snapshot built for one recipient", SharedSnapshot));
         tests.Add(new TestCase("A slot that never connects is released quickly while a dropped member keeps the long grace", FirstConnectGrace));
         tests.Add(new TestCase("A long session keeps its room for the full retention time after the last disconnect", RoomRetention));
         tests.Add(new TestCase("A room with nobody left is released soon instead of holding a slot for fifteen minutes", EmptyRoomExpiry));
@@ -29,6 +33,11 @@ internal static class LifecycleTests
         tests.Add(new TestCase("Walls, rules and map are resent until delivered and walls again after they change", StaticParts));
         tests.Add(new TestCase("Tokens of removed players are cleaned when a room steps", TokenCleanup));
         tests.Add(new TestCase("A room whose simulation keeps throwing is closed instead of holding its slot", FailingRoom));
+        tests.Add(new TestCase("A deployment whose surroundings and camp are blocked still lands somewhere", CrowdedLanding));
+        tests.Add(new TestCase("Error and pong messages use their own channel and are never dropped behind snapshots", ControlChannel));
+        tests.Add(new TestCase("Sending puts error and pong ahead of snapshots, wakes for them and ends when snapshots close", SendOrder));
+        tests.Add(new TestCase("Sending ends on cancellation instead of spinning on a cancelled wait", SendCancel));
+        tests.Add(new TestCase("Sending snapshots alone does not pile up unfinished waits on the control channel", SendWaits));
     }
 
     private static void Deployment()
@@ -251,16 +260,20 @@ internal static class LifecycleTests
         Player ally = Ally(f, "scout");
         // 한 대원만 보급 대기 중이게 해서 수신자마다 값이 달라지게 한다.
         f.Match.Supplies[0].ReadyAt[f.Player.Id] = f.Match.Now + 10;
-        SnapshotMessage shared = Snapshot.CreateShared(f.Match);
-        Snapshot.Personalize(shared, f.Match, f.Player, true, true);
-        string forPilot = JsonSerializer.Serialize(shared, RoomHost.Json);
-        Snapshot.Personalize(shared, f.Match, ally, true, true);
-        string forScout = JsonSerializer.Serialize(shared, RoomHost.Json);
-        // 같은 메시지를 다음 수신자에게 다시 써도 따로 만든 스냅샷과 같아야 한다.
-        Equal(forPilot, JsonSerializer.Serialize(Snapshot.Create(f.Match, f.Player), RoomHost.Json));
-        Equal(forScout, JsonSerializer.Serialize(Snapshot.Create(f.Match, ally), RoomHost.Json));
+        byte[] body = Snapshot.SharedBody(Snapshot.CreateShared(f.Match), RoomHost.Json);
+        byte[] pilotBytes = Snapshot.Combine(body, Snapshot.CreatePersonal(f.Match, f.Player, true, true), RoomHost.Json);
+        byte[] scoutBytes = Snapshot.Combine(body, Snapshot.CreatePersonal(f.Match, ally, true, true), RoomHost.Json);
+        string forPilot = System.Text.Encoding.UTF8.GetString(pilotBytes);
+        string forScout = System.Text.Encoding.UTF8.GetString(scoutBytes);
+        // 공통 부분을 한 번만 직렬화해 이어 붙여도 한 명에게 따로 만든 스냅샷과 내용이 같아야 한다.
+        string alonePilot = JsonSerializer.Serialize(Snapshot.Create(f.Match, f.Player), RoomHost.Json);
+        string aloneScout = JsonSerializer.Serialize(Snapshot.Create(f.Match, ally), RoomHost.Json);
+        Check(JsonNode.DeepEquals(JsonNode.Parse(forPilot), JsonNode.Parse(alonePilot)), "이어 붙인 스냅샷이 따로 만든 것과 다릅니다");
+        Check(JsonNode.DeepEquals(JsonNode.Parse(forScout), JsonNode.Parse(aloneScout)), "이어 붙인 스냅샷이 따로 만든 것과 다릅니다");
         Check(forPilot != forScout, "수신자별 값이 달라야 합니다");
-        Near(shared.Supplies[0].Cooldown, 0);
+        // 공통 몸통에는 수신자별 값이 들어가지 않는다.
+        string shared = System.Text.Encoding.UTF8.GetString(body);
+        Check(!shared.Contains("\"you\"") && !shared.Contains("\"supplies\""), "공통 부분에 수신자별 값이 섞였습니다");
         // 시야 다각형은 그리기 전용이라 정수로 보낸다. 실제 전송되는 JSON에서 확인한다.
         using JsonDocument json = JsonDocument.Parse(forScout);
         JsonElement sight = json.RootElement.GetProperty("sight");
@@ -441,6 +454,156 @@ internal static class LifecycleTests
         Check(!peer.Outgoing.Writer.TryWrite(new OutgoingMessage(new byte[0], -1, false)), "닫힌 방의 연결이 열려 있습니다");
     }
 
+    private static void CrowdedLanding()
+    {
+        Fixture f = new Fixture();
+        Player late = f.Match.Join("late", "late")!;
+        // 움직이지도 행동하지도 않는 적으로 투입 지점 주변 반경 150을 간격 30으로 채운다. 어느 점이든 적과 26보다 가깝다.
+        EnemyDefinition still = new EnemyDefinition("still", "정지", 13, 1, 0, EnemyDefinition.Grunt.Skills);
+        Vector2 landing = new Vector2(1400, 1250);
+        int id = 31000;
+        for (int x = -5; x <= 5; x++)
+        {
+            for (int y = -5; y <= 5; y++)
+            {
+                Vector2 at = landing + new Vector2(x * 30, y * 30);
+                if (Vector2.Distance(at, landing) > 150 || !f.Match.Map.CanStand(at, 13))
+                {
+                    continue;
+                }
+                id++;
+                Enemy blocker = new Enemy(id, at, still);
+                blocker.NextActionAt = double.MaxValue;
+                f.Match.Enemies.Add(blocker);
+            }
+        }
+        // 캠프도 막는다.
+        Enemy guard = new Enemy(id + 1, BattleMap.Camp, still);
+        guard.NextActionAt = double.MaxValue;
+        f.Match.Enemies.Add(guard);
+        Check(f.Match.Deploy(late, landing.X, landing.Y));
+        Advance(f.Match, f.Match.Rules.DeploySeconds + 0.1);
+        // 근처와 캠프가 모두 막혀도 더 넓게 찾아 투입한다. deploying에 묶여 "0.0초 후 투입"이 계속 표시되면 안 된다.
+        Equal(late.State, "alive");
+        Check(Vector2.Distance(late.Position, landing) > 128, "막힌 범위 안에 투입되었습니다");
+        for (int i = 0; i < f.Match.Enemies.Count; i++)
+        {
+            Check(Vector2.Distance(late.Position, f.Match.Enemies[i].Position) >= 26 - 0.01, "적과 겹쳐 투입되었습니다");
+        }
+    }
+
+    private static void ControlChannel()
+    {
+        Peer peer = new Peer(1);
+        byte[] error = System.Text.Encoding.UTF8.GetBytes("{\"type\":\"error\"}");
+        Check(peer.Control.Writer.TryWrite(new OutgoingMessage(error, -1, false)));
+        // 스냅샷 통로는 용량 2에서 오래된 것부터 버린다. 스냅샷이 몰려도 오류 안내는 따로 남아 있어야 한다.
+        for (int i = 0; i < 3; i++)
+        {
+            peer.Outgoing.Writer.TryWrite(new OutgoingMessage(new byte[] { (byte)i }, -1, false));
+        }
+        Check(peer.Control.Reader.TryRead(out OutgoingMessage? kept), "오류 안내가 버려졌습니다");
+        Equal(kept!.Bytes.Length, error.Length);
+    }
+
+    private static OutgoingMessage Text(string text)
+    {
+        return new OutgoingMessage(Encoding.UTF8.GetBytes(text), -1, false);
+    }
+
+    // 보내기 작업이 끝났는지 본다. 취소나 오류로 끝나도 끝난 것이다.
+    private static bool Finishes(Task task)
+    {
+        try
+        {
+            return task.Wait(2000);
+        }
+        catch (AggregateException)
+        {
+            return true;
+        }
+    }
+
+    private static void SendOrder()
+    {
+        // 스냅샷이 먼저 들어와 있어도 오류 안내를 먼저 보낸다.
+        Peer peer = new Peer(1);
+        RecordingSocket socket = new RecordingSocket();
+        peer.Outgoing.Writer.TryWrite(Text("snapshot"));
+        peer.Control.Writer.TryWrite(Text("error"));
+        using CancellationTokenSource stop = new CancellationTokenSource();
+        Task send = Task.Run(() => peer.Send(socket, stop.Token));
+        socket.WaitSent(2);
+        Equal(socket.Message(0), "error");
+        Equal(socket.Message(1), "snapshot");
+        // 보낼 것이 없어 기다리는 중에 들어온 pong도 곧바로 보낸다.
+        peer.Control.Writer.TryWrite(Text("pong"));
+        socket.WaitSent(3);
+        Equal(socket.Message(2), "pong");
+        // 스냅샷 통로가 닫히면(연결 교체·해제·방 닫힘) 보내기를 끝낸다.
+        peer.Outgoing.Writer.TryComplete();
+        Check(Finishes(send), "스냅샷 통로가 닫혔는데 보내기가 끝나지 않았습니다");
+        Check(send.IsCompletedSuccessfully, "스냅샷 통로가 닫혔을 때 보내기가 오류로 끝났습니다");
+    }
+
+    private static void SendCancel()
+    {
+        // 이미 취소된 채로 기다림에 들어가도 곧바로 끝나야 한다. 취소된 기다림은 바로 끝나므로 다시 기다리면 헛돈다.
+        Peer idle = new Peer(1);
+        using CancellationTokenSource cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        Task first = Task.Run(() => idle.Send(new RecordingSocket(), cancelled.Token));
+        Check(Finishes(first), "취소된 보내기가 끝나지 않고 헛돌았습니다");
+        Check(first.IsCanceled, "취소된 보내기가 취소로 끝나지 않았습니다");
+
+        // 스냅샷을 보낸 뒤 기다리는 중에 취소해도 끝나야 한다. 연결을 끊을 때 이 순서로 취소한다.
+        Peer busy = new Peer(2);
+        RecordingSocket socket = new RecordingSocket();
+        using CancellationTokenSource stop = new CancellationTokenSource();
+        Task second = Task.Run(() => busy.Send(socket, stop.Token));
+        busy.Outgoing.Writer.TryWrite(Text("snapshot"));
+        socket.WaitSent(1);
+        stop.Cancel();
+        Check(Finishes(second), "기다리는 중에 취소된 보내기가 끝나지 않았습니다");
+        Check(second.IsCanceled, "기다리는 중에 취소된 보내기가 취소로 끝나지 않았습니다");
+    }
+
+    private static void SendWaits()
+    {
+        Peer peer = new Peer(1);
+        RecordingSocket socket = new RecordingSocket();
+        using CancellationTokenSource stop = new CancellationTokenSource();
+        Task send = Task.Run(() => peer.Send(socket, stop.Token));
+        // 처음 몇백 번은 지연 컴파일이나 작업 스레드 추가로 메모리가 한 번 늘 수 있으므로 측정에서 뺀다.
+        PumpSnapshots(peer, socket, 300);
+        long before = GC.GetTotalMemory(true);
+        PumpSnapshots(peer, socket, 2000);
+        long after = GC.GetTotalMemory(true);
+        stop.Cancel();
+        Finishes(send);
+        long grown = after - before;
+        // 스냅샷마다 제어 통로에 끝나지 않은 기다림이 하나씩 남으면 하나에 약 340 B, 2000번에 600 KB 넘게 늘어난다.
+        Check(grown < 200000, $"제어 메시지 없이 스냅샷 2000개를 보내는 동안 메모리가 {grown} B 늘었습니다");
+    }
+
+    // 스냅샷을 하나씩 넣고, 보내기 작업이 보낸 뒤 다시 기다림에 들어갈 때까지 0.1 ms 쉰다.
+    // 기다림에 들어가기 전에 다음 스냅샷을 넣으면 기다리지 않고 바로 읽으므로 검사할 상황이 생기지 않는다.
+    private static void PumpSnapshots(Peer peer, RecordingSocket socket, int count)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes("snapshot");
+        for (int i = 0; i < count; i++)
+        {
+            int sent = socket.Sent;
+            peer.Outgoing.Writer.TryWrite(new OutgoingMessage(bytes, -1, false));
+            socket.WaitSent(sent + 1);
+            long until = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 10000;
+            while (Stopwatch.GetTimestamp() < until)
+            {
+                Thread.SpinWait(20);
+            }
+        }
+    }
+
     private static void BlockedDeployment()
     {
         Fixture f = new Fixture();
@@ -460,5 +623,115 @@ internal static class LifecycleTests
         Check(f.Match.Map.LineOfSight(late.Position, enemy.Position), "원래 투입 지점이 보이지 않는 곳으로 옮겨졌습니다");
         // 투입된 뒤에는 자기 시야로 적을 정상적으로 본다.
         Check(f.Match.Visible(enemy.Position));
+    }
+}
+
+// 보낸 메시지를 세는 가짜 소켓이다. 보내기 작업을 실제 네트워크 없이 검사한다.
+internal sealed class RecordingSocket : WebSocket
+{
+    private readonly List<string> _messages = new List<string>();
+    private int _sent;
+
+    public int Sent
+    {
+        get
+        {
+            return Volatile.Read(ref _sent);
+        }
+    }
+
+    public override WebSocketCloseStatus? CloseStatus
+    {
+        get
+        {
+            return null;
+        }
+    }
+
+    public override string? CloseStatusDescription
+    {
+        get
+        {
+            return null;
+        }
+    }
+
+    public override WebSocketState State
+    {
+        get
+        {
+            return WebSocketState.Open;
+        }
+    }
+
+    public override string? SubProtocol
+    {
+        get
+        {
+            return null;
+        }
+    }
+
+    public string Message(int index)
+    {
+        lock (_messages)
+        {
+            return _messages[index];
+        }
+    }
+
+    // 보낸 메시지가 count개가 될 때까지 기다린다. 처음에는 돌면서 기다리고 길어지면 양보한다.
+    public void WaitSent(int count)
+    {
+        long limit = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 2;
+        SpinWait spinner = new SpinWait();
+        while (Sent < count)
+        {
+            if (Stopwatch.GetTimestamp() > limit)
+            {
+                throw new Exception($"메시지 {count}개를 기다렸지만 {Sent}개만 보냈습니다");
+            }
+            spinner.SpinOnce();
+        }
+    }
+
+    public override Task SendAsync(ArraySegment<byte> buffer, WebSocketMessageType messageType, bool endOfMessage,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_messages)
+        {
+            // 메모리 검사에서 기록이 늘지 않도록 앞의 몇 개만 남긴다.
+            if (_messages.Count < 16)
+            {
+                _messages.Add(Encoding.UTF8.GetString(buffer));
+            }
+        }
+        Interlocked.Increment(ref _sent);
+        return Task.CompletedTask;
+    }
+
+    public override Task<WebSocketReceiveResult> ReceiveAsync(ArraySegment<byte> buffer, CancellationToken cancellationToken)
+    {
+        throw new NotSupportedException();
+    }
+
+    public override Task CloseAsync(WebSocketCloseStatus closeStatus, string? statusDescription, CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
+    public override Task CloseOutputAsync(WebSocketCloseStatus closeStatus, string? statusDescription,
+        CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
+    public override void Abort()
+    {
+    }
+
+    public override void Dispose()
+    {
     }
 }
