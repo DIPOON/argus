@@ -19,10 +19,12 @@ public sealed class SkillDefinition
     public bool SingleTarget { get; }
     // 접촉 중에 시설과 파괴 가능한 벽을 부순다.
     public bool BreaksStructures { get; }
+    // 유효 시간 뒤의 반격이 시설과 파괴 가능한 벽을 부순다. HasFollowup인 기술에만 의미가 있다.
+    public bool FollowupBreaksStructures { get; }
 
     public SkillDefinition(string id, string kind, int mana, double contactAfter,
         double activeSeconds, double duration, double range, double halfWidth,
-        bool guardsFront, bool hasFollowup, bool singleTarget, bool breaksStructures)
+        bool guardsFront, bool hasFollowup, bool singleTarget, bool breaksStructures, bool followupBreaksStructures)
     {
         Id = id;
         Kind = kind;
@@ -36,6 +38,7 @@ public sealed class SkillDefinition
         HasFollowup = hasFollowup;
         SingleTarget = singleTarget;
         BreaksStructures = breaksStructures;
+        FollowupBreaksStructures = followupBreaksStructures;
     }
 }
 

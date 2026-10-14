@@ -371,7 +371,7 @@ internal static class CombatTests
     {
         return new SkillDefinition(id, skill.Kind, skill.Mana, skill.ContactAfter, skill.ActiveSeconds,
             skill.Duration, skill.Range, skill.HalfWidth, skill.GuardsFront, skill.HasFollowup,
-            skill.SingleTarget, skill.BreaksStructures);
+            skill.SingleTarget, skill.BreaksStructures, skill.FollowupBreaksStructures);
     }
 
     private static PlayerAction Use(Fixture f, SkillDefinition skill, int id)
@@ -428,6 +428,25 @@ internal static class CombatTests
         Use(breaker, smash, 30014);
         Advance(breaker.Match, 0.25);
         Near(facility.Hp, facility.MaxHp - 1);
+
+        // 반격의 구조물 파괴도 속성으로 정한다. 받아치기를 본뜬 기술의 반격은 시설을 부순다.
+        Fixture countering = new Fixture();
+        Facility struck = countering.Match.Facilities[0];
+        countering.Player.Position = struck.Position - new Vector2(40, 0);
+        Use(countering, shield, 30015);
+        Advance(countering.Match, shield.ActiveSeconds + 0.1);
+        Near(struck.Hp, struck.MaxHp - 1);
+
+        // 반격은 있지만 구조물은 부수지 않는 기술은 시설을 그대로 둔다.
+        SkillDefinition deflect = new SkillDefinition("deflect", rules.Parry.Kind, rules.Parry.Mana, rules.Parry.ContactAfter,
+            rules.Parry.ActiveSeconds, rules.Parry.Duration, rules.Parry.Range, rules.Parry.HalfWidth,
+            true, true, false, false, false);
+        Fixture deflecting = new Fixture();
+        Facility kept = deflecting.Match.Facilities[0];
+        deflecting.Player.Position = kept.Position - new Vector2(40, 0);
+        Use(deflecting, deflect, 30016);
+        Advance(deflecting.Match, deflect.ActiveSeconds + 0.1);
+        Near(kept.Hp, kept.MaxHp);
     }
 
     private static void Flank()

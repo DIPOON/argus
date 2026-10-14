@@ -430,7 +430,9 @@ public sealed partial class Match
             {
                 PlayerAction action = player.Actions[j];
                 bool contact = action.Skill.BreaksStructures && action.IsActive(Now) && Now >= action.ContactAt;
-                if (!contact && !action.IsFollowup(Now, Rules.ParryFollowupSeconds))
+                // 반격이 구조물을 부수는지도 기술 속성으로 정한다. 공개되는 속성만 보고도 동작을 알 수 있어야 한다.
+                bool followup = action.Skill.FollowupBreaksStructures && action.IsFollowup(Now, Rules.ParryFollowupSeconds);
+                if (!contact && !followup)
                 {
                     continue;
                 }

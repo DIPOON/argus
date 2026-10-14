@@ -28,15 +28,18 @@ public sealed class Rules
     // 근접 타격: 범위에 닿은 적을 한 번씩 치고 시설과 벽을 부순다.
     public SkillDefinition Strike { get; } =
         new SkillDefinition("strike", "strike", 1, 0.18, 0.42, 0.66, 54, 10,
-            guardsFront: false, hasFollowup: false, singleTarget: false, breaksStructures: true);
+            guardsFront: false, hasFollowup: false, singleTarget: false, breaksStructures: true,
+            followupBreaksStructures: false);
     // 받아치기: 전방 방어 뒤 일반 반격. 반격은 시설과 벽도 부순다.
     public SkillDefinition Parry { get; } =
         new SkillDefinition("parry", "block", 1, 0, 0.55, 0.98, 54, 10,
-            guardsFront: true, hasFollowup: true, singleTarget: false, breaksStructures: false);
+            guardsFront: true, hasFollowup: true, singleTarget: false, breaksStructures: false,
+            followupBreaksStructures: true);
     // 잡기: 가장 가까운 한 명을 붙잡고 동작 내내 그 대상만 판정한다.
     public SkillDefinition Grab { get; } =
         new SkillDefinition("grab", "channel", 1, 0.12, 0.65, 0.85, 48, 8,
-            guardsFront: false, hasFollowup: false, singleTarget: true, breaksStructures: false);
+            guardsFront: false, hasFollowup: false, singleTarget: true, breaksStructures: false,
+            followupBreaksStructures: false);
     public double ParryFollowupSeconds { get; init; } = 0.18;
 
     public SkillDefinition Skill(string id)

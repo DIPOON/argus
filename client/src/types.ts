@@ -8,6 +8,7 @@ export interface SkillDefinition {
   duration: number; range: number; halfWidth: number;
   // 기술별 동작. 그림도 id가 아니라 이 속성으로 정한다.
   guardsFront: boolean; hasFollowup: boolean; singleTarget: boolean; breaksStructures: boolean;
+  followupBreaksStructures: boolean;
 }
 export interface CombatAction {
   id: number; skill: string; kind: Affinity; slot: number; tier: number;
