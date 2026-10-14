@@ -14,6 +14,7 @@ internal static class LifecycleTests
     public static void Register(List<TestCase> tests)
     {
         tests.Add(new TestCase("Entry waits for selection and five seconds without revealing the landing", Deployment));
+        tests.Add(new TestCase("A repeated deploy request while deploying is accepted without moving the landing or the timer", RepeatedDeploy));
         tests.Add(new TestCase("Movement rejects invalid/replayed input and normalizes diagonals", InputAuthority));
         tests.Add(new TestCase("Stale input and disconnect stop movement and further casts", InputExpiry));
         tests.Add(new TestCase("Solo death and all-dead squads fail before pending deployment", Wipe));
@@ -38,6 +39,7 @@ internal static class LifecycleTests
         tests.Add(new TestCase("Sending puts error and pong ahead of snapshots, wakes for them and ends when snapshots close", SendOrder));
         tests.Add(new TestCase("Sending ends on cancellation instead of spinning on a cancelled wait", SendCancel));
         tests.Add(new TestCase("Sending snapshots alone does not pile up unfinished waits on the control channel", SendWaits));
+        tests.Add(new TestCase("Snapshots go out ten times a second on the real timer period and do not burst after a stall", PublishRate));
     }
 
     private static void Deployment()
@@ -58,6 +60,26 @@ internal static class LifecycleTests
         Equal(player.State, "alive");
         Equal(player.Mana, 0);
         Check(match.Visible(new Vector2(1200, 500)));
+    }
+
+    private static void RepeatedDeploy()
+    {
+        Match match = new Match("TEST01", new Rules { MaxEnemies = 0 });
+        Player player = match.Join("p", "pilot")!;
+        Check(match.Deploy(player, 1200, 500));
+        Vector2 landing = player.Landing;
+        double arrives = player.DeployAt;
+        Advance(match, 1);
+        // 투입 버튼을 두 번 눌러도 거절로 답하지 않는다. 자리와 도착 시각은 처음 요청대로다.
+        Check(match.Deploy(player, 1100, 520), "투입 중인 대원의 재요청을 거절했습니다");
+        Equal(player.State, "deploying");
+        Near(player.Landing.X, landing.X);
+        Near(player.Landing.Y, landing.Y);
+        Near(player.DeployAt, arrives);
+        Advance(match, match.Rules.DeploySeconds);
+        Equal(player.State, "alive");
+        // 살아 있는 대원의 투입 요청은 여전히 거절한다.
+        Check(!match.Deploy(player, 1100, 520));
     }
 
     private static void InputAuthority()
@@ -504,6 +526,38 @@ internal static class LifecycleTests
         }
         Check(peer.Control.Reader.TryRead(out OutgoingMessage? kept), "오류 안내가 버려졌습니다");
         Equal(kept!.Bytes.Length, error.Length);
+    }
+
+    private static void PublishRate()
+    {
+        // 서버의 PeriodicTimer와 같은 주기로 깨어난다. 1/30초를 100ns 단위로 바꾼 값이라 세 번이 0.1초에 조금 못 미친다.
+        // 깨어나는 시각은 예정보다 0~2ms 늦을 수 있다. 10초 동안 방송은 100번 안팎이어야 한다.
+        double period = TimeSpan.FromSeconds(Rules.Step).TotalSeconds;
+        Random random = new Random(7);
+        PublishSchedule schedule = new PublishSchedule();
+        int published = 0;
+        double current = 0;
+        for (int tick = 1; tick <= 300; tick++)
+        {
+            current = tick * period + random.NextDouble() * 0.002;
+            if (schedule.Due(current))
+            {
+                published++;
+            }
+        }
+        Check(published >= 100 && published <= 101, $"10초 동안 방송이 {published}번이었습니다");
+
+        // 서버가 5초 멈췄다 깨어나도 밀린 방송을 몰아서 보내지 않는다.
+        double resume = current + 5;
+        int burst = 0;
+        for (int tick = 0; tick < 3; tick++)
+        {
+            if (schedule.Due(resume + tick * period))
+            {
+                burst++;
+            }
+        }
+        Equal(burst, 1);
     }
 
     private static OutgoingMessage Text(string text)

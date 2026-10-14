@@ -31,6 +31,7 @@ internal static class CombatTests
         tests.Add(new TestCase("A player the shield shove reaches answers it with affinity even beside the shield", ShoveReach));
         tests.Add(new TestCase("A draw kill is credited to the drawing player, not a partial responder", DrawCredit));
         tests.Add(new TestCase("A grab takes the nearest enemy at contact, including one that came closer during windup", GrabRetarget));
+        tests.Add(new TestCase("A grab picks its target on the contact tick itself and forgets one that left its reach", GrabContactTarget));
     }
 
     private static void OrdinaryMatrix()
@@ -525,6 +526,40 @@ internal static class CombatTests
         Advance(f.Match, 0.15);
         Near(near.Hp, 0);
         Near(far.Hp, 1);
+    }
+
+    private static void GrabContactTarget()
+    {
+        // 접촉 바로 전 틱까지는 first만 잡기 범위에 있다.
+        Fixture f = new Fixture();
+        Enemy first = Target(f);
+        first.Position = f.Player.Position + new Vector2(58, 0);
+        Enemy second = Target(f);
+        second.Position = f.Player.Position + new Vector2(200, 0);
+        PlayerAction grab = Prepare(f, f.Player, "grab");
+        Advance(f.Match, 0.1);
+        Check(f.Match.Now < grab.ContactAt, "접촉 전 틱이 아닙니다");
+        // 접촉하는 틱 직전에 second가 더 가까이 들어온다. 접촉하는 틱에 가장 가까운 second를 잡아야 한다.
+        second.Position = f.Player.Position + new Vector2(30, 15);
+        Advance(f.Match, Rules.Step);
+        Check(f.Match.Now >= grab.ContactAt, "접촉 틱이 아닙니다");
+        Near(second.Hp, 0);
+        Near(first.Hp, 1);
+
+        // 준비 동작 중에 대상이 범위를 벗어나면 대상을 비운다. 그 뒤 범위에 들어온 적을 잡아야 한다.
+        Fixture g = new Fixture();
+        Enemy leaving = Target(g);
+        leaving.Position = g.Player.Position + new Vector2(45, 0);
+        PlayerAction hold = Prepare(g, g.Player, "grab");
+        Advance(g.Match, Rules.Step);
+        leaving.Position = g.Player.Position + new Vector2(300, 0);
+        Advance(g.Match, 0.15);
+        Check(g.Match.Now >= hold.ContactAt && g.Match.Now < hold.ActiveUntil, "잡기 유효 시간이 아닙니다");
+        Enemy arriving = Target(g);
+        arriving.Position = g.Player.Position + new Vector2(30, 0);
+        Advance(g.Match, Rules.Step);
+        Near(arriving.Hp, 0);
+        Near(leaving.Hp, 1);
     }
 
     private static void LongStep()

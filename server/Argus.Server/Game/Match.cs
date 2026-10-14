@@ -135,6 +135,12 @@ public sealed partial class Match
 
     public bool Deploy(Player player, double x, double y)
     {
+        // 이미 투입 중이면 처음 고른 자리와 도착 시각대로 진행한다. 투입 버튼을 두 번 눌러도 거절 안내가 뜨지 않도록
+        // 받아들인 것으로 답한다. 답은 공개된 상태(투입 중인지)에만 달려 있어 숨은 정보를 드러내지 않는다.
+        if (Phase != "ended" && player.State == "deploying")
+        {
+            return true;
+        }
         if (Phase == "ended" || player.State != "waiting" || !double.IsFinite(x) || !double.IsFinite(y))
         {
             return false;

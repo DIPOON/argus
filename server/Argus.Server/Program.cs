@@ -108,7 +108,7 @@ internal static class Program
         return Results.Json(guest);
     }
 
-    private static async Task HandleWebSocket(HttpContext context, RoomHost host)
+    private static async Task HandleWebSocket(HttpContext context, RoomHost host, ILoggerFactory loggers)
     {
         if (!context.WebSockets.IsWebSocketRequest)
         {
@@ -200,6 +200,18 @@ internal static class Program
         {
             // 잘못된 메시지나 끊어진 연결은 아래 finally에서 정리한다.
         }
+        catch (Exception error)
+        {
+            // 연결 문제가 아닌 예외는 입력 처리나 게임 로직의 결함이다. 기록한 뒤 아래 finally에서 연결을 정리한다.
+            // 클라이언트가 보낸 값은 종류를 확인한 뒤 읽으므로, 잘못된 메시지로는 여기까지 오지 않는다.
+            string code = "-";
+            if (room != null)
+            {
+                code = room.Match.Code;
+            }
+            ILogger logger = loggers.CreateLogger("Argus.Server.WebSocket");
+            logger.LogError(error, "WebSocket connection failed: {Room}", code);
+        }
         finally
         {
             if (room != null && player != null && peer != null)
@@ -228,13 +240,14 @@ internal static class Program
         }
     }
 
+    // 연결이 끊겼거나 클라이언트가 잘못된 메시지를 보낸 경우다. 기록하지 않고 연결만 정리한다.
+    // InvalidOperationException과 ArgumentException은 넣지 않는다. 목록 범위 초과처럼 게임 로직의 결함도
+    // 이 종류로 나오므로, 넣으면 결함이 기록 없이 사라진다.
     private static bool IsConnectionError(Exception error)
     {
         return error is WebSocketException ||
             error is OperationCanceledException ||
-            error is JsonException ||
-            error is InvalidOperationException ||
-            error is ArgumentException;
+            error is JsonException;
     }
 
     private static async Task<JsonDocument?> ReadMessage(WebSocket socket, CancellationToken token)
@@ -299,7 +312,9 @@ internal static class Program
                 string type = Text(root, "type");
                 if (type == "input")
                 {
-                    if (root.TryGetProperty("seq", out JsonElement sequence) && sequence.TryGetInt64(out long seq))
+                    // 숫자가 아닌 값에 TryGetInt64를 부르면 예외가 나므로 종류부터 확인한다.
+                    if (root.TryGetProperty("seq", out JsonElement sequence) && sequence.ValueKind == JsonValueKind.Number &&
+                        sequence.TryGetInt64(out long seq))
                     {
                         int slot = 0;
                         if (root.TryGetProperty("slot", out JsonElement requestedSlot) &&

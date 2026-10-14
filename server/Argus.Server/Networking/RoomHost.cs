@@ -125,6 +125,32 @@ public sealed class Peer
     }
 }
 
+// 스냅샷을 방송할 시각을 정한다. 방송 간격은 0.1초다.
+public sealed class PublishSchedule
+{
+    public const double Interval = 0.1;
+    private double _next;
+
+    // 이번 틱에 방송할지 정하고, 방송하면 다음 방송 시각을 정한다.
+    public bool Due(double current)
+    {
+        if (current < _next)
+        {
+            return false;
+        }
+        // 다음 방송 시각은 실제로 깨어난 시각이 아니라 이번 방송의 예정 시각에서 잡는다.
+        // 깨어난 시각에서 잡으면, 타이머 주기(1/30초를 100ns 단위로 바꾼 값) 세 번이 0.1초에 조금 못 미치거나
+        // 조금만 늦게 깨어나도 방송이 한 틱씩 밀려 실제로는 8Hz 안팎이 된다.
+        _next += Interval;
+        // 서버가 오래 멈췄다 깨어나 방송을 한 번 이상 건너뛰었으면, 밀린 방송을 몰아서 보내지 않고 지금부터 다시 센다.
+        if (_next <= current)
+        {
+            _next = current + Interval;
+        }
+        return true;
+    }
+}
+
 public sealed class Room
 {
     public object Gate { get; } = new object();
@@ -381,7 +407,7 @@ public sealed class RoomHost : BackgroundService
         using PeriodicTimer timer = new PeriodicTimer(TimeSpan.FromSeconds(Rules.Step));
         Stopwatch watch = Stopwatch.StartNew();
         double previous = watch.Elapsed.TotalSeconds;
-        double publishAt = 0;
+        PublishSchedule schedule = new PublishSchedule();
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
             double current = watch.Elapsed.TotalSeconds;
@@ -394,11 +420,7 @@ public sealed class RoomHost : BackgroundService
             {
                 delta = MaxTickSeconds;
             }
-            bool publish = current >= publishAt;
-            if (publish)
-            {
-                publishAt = current + 0.1;
-            }
+            bool publish = schedule.Due(current);
 
             // 순회 중 방이 추가·삭제되어도 이번 틱의 대상이 바뀌지 않도록 한 시점의 복사본을 쓴다.
             // ToArray는 LINQ가 아니라 ConcurrentDictionary 자체의 메서드다.

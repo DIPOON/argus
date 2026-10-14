@@ -53,14 +53,14 @@ public sealed partial class Match
             for (int j = 0; j < player.Actions.Count; j++)
             {
                 PlayerAction action = player.Actions[j];
-                if (!action.IsActive(Now) || !action.Skill.SingleTarget)
+                if (!action.IsActive(Now) || !action.Skill.SingleTarget || action.TargetLocked)
                 {
                     continue;
                 }
-                // 접촉 순간 가장 가까운 적을 잡도록 접촉 전까지는 대상을 고친다.
-                // 접촉했거나 이미 판정을 받았으면 대상을 고정해 같은 시전에서 다시 고르지 않는다.
-                if (action.Target.HasValue && (Now >= action.ContactAt || action.JudgedEnemies.Count > 0))
+                // 판정을 받았으면 그 대상으로 정한다. 대상이 처치되어도 같은 시전에서 다시 고르지 않는다.
+                if (action.JudgedEnemies.Count > 0)
                 {
+                    action.TargetLocked = true;
                     continue;
                 }
                 Enemy? nearest = null;
@@ -79,9 +79,19 @@ public sealed partial class Match
                         nearest = enemy;
                     }
                 }
-                if (nearest != null)
+                // 준비 동작 중에는 매 틱 가장 가까운 적으로 고친다. 범위 안에 아무도 없으면 대상을 비워
+                // 범위를 벗어난 적이 대상으로 남지 않게 한다.
+                if (nearest == null)
                 {
-                    action.Target = nearest.Id;
+                    action.Target = null;
+                    continue;
+                }
+                action.Target = nearest.Id;
+                // 접촉하는 틱이나 그 뒤에 고른 대상으로 정한다. 접촉 틱에도 다시 고르므로 접촉 순간 가장 가까운 적이 된다.
+                // 접촉 순간 범위에 아무도 없었으면 유효 시간 안에 처음 들어온 적이 대상이 된다.
+                if (Now >= action.ContactAt)
+                {
+                    action.TargetLocked = true;
                 }
             }
         }

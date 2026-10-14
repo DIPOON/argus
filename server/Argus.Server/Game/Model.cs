@@ -49,6 +49,8 @@ public sealed class PlayerAction
     public double EndsAt { get; }
     public bool Cancelled;
     public int? Target;
+    // 잡기처럼 한 명만 판정하는 기술의 대상이 정해졌는지 나타낸다. 정해진 뒤에는 같은 시전에서 바꾸지 않는다.
+    public bool TargetLocked;
     public HashSet<int> JudgedEnemies { get; } = new HashSet<int>();
     public HashSet<int> FollowupHits { get; } = new HashSet<int>();
     public HashSet<int> HitFacilities { get; } = new HashSet<int>();
