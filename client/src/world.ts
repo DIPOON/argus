@@ -6,6 +6,13 @@ const affinityColors: Record<Affinity, number> = { strike: 0xf28068, block: 0x77
 const team = [colors.lime, colors.teal, 0xaeb5fa, 0xf2c981];
 const unitOutline = { color: 0x111a1a, width: 2.5 };
 
+// 원호는 이 함수로만 그린다. Pixi는 fill·stroke 뒤의 다음 경로를 직전 경로의 마지막 점에서 시작한다.
+// 그런데 직전 경로가 원·사각형·다각형 같은 도형으로 끝나면 마지막 점을 계산하지 않고, 읽을 때마다 0으로 되돌리는
+// 임시 점(Point.shared)을 그대로 쓴다. 그러면 원호가 지도 원점(왼쪽 위)에서부터 직선으로 이어져 그려진다.
+// beginPath로 새 경로를 열면 시작점 없이 원호만 그려진다.
+const arcOnNewPath = (g: Graphics, x: number, y: number, radius: number, start: number, end: number) =>
+  g.beginPath().arc(x, y, radius, start, end);
+
 export class World {
   readonly app = new Application();
   private root = new Container();
@@ -153,7 +160,7 @@ export class World {
     const f = { x: Math.cos(aim), y: Math.sin(aim) };
     if (definition?.guardsFront && !followup) {
       const half = this.snapshot!.rules.guardHalfAngle;
-      g.arc(p.x, p.y, 28, aim - half, aim + half).stroke({ color, width: 5 });
+      arcOnNewPath(g, p.x, p.y, 28, aim - half, aim + half).stroke({ color, width: 5 });
       g.moveTo(p.x, p.y).lineTo(p.x + Math.cos(aim - half) * 28, p.y + Math.sin(aim - half) * 28)
         .moveTo(p.x, p.y).lineTo(p.x + Math.cos(aim + half) * 28, p.y + Math.sin(aim + half) * 28).stroke({ color, width: 1, alpha: .4 });
       return;
@@ -168,7 +175,7 @@ export class World {
     if (telegraph && !player) {
       const fraction = Math.max(0, Math.min(1, (now - action.startedAt) / (action.contactAt - action.startedAt)));
       const radius = 32;
-      g.arc(p.x, p.y, radius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * fraction).stroke({ color, width: 3 });
+      arcOnNewPath(g, p.x, p.y, radius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * fraction).stroke({ color, width: 3 });
     }
     if (kind === 'channel') {
       for (const sign of [-1, 1]) {
@@ -271,7 +278,7 @@ export class World {
     this.label('camp', 'CAMP · 권장 투입', s.map.campX, s.map.campY + 105, colors.teal, 15);
     const ext = s.extraction;
     g.circle(ext.x, ext.y, 80).fill({ color: colors.teal, alpha: ext.unlocked ? .12 : .025 }).stroke({ color: colors.teal, alpha: ext.unlocked ? .9 : .25, width: 2 });
-    if (ext.progress > 0) g.arc(ext.x, ext.y, 80, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ext.progress / ext.duration).stroke({ color: colors.lime, width: 7 });
+    if (ext.progress > 0) arcOnNewPath(g, ext.x, ext.y, 80, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ext.progress / ext.duration).stroke({ color: colors.lime, width: 7 });
     this.label('extract', ext.unlocked ? '↑ 탈출 · 구역 확보' : '↑ 탈출 지점', ext.x, ext.y + 102, colors.teal, 15);
     for (const f of s.facilities) {
       const color = f.hp > 0 ? colors.red : 0x64706a;
