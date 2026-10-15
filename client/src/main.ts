@@ -246,9 +246,12 @@ function connect() {
     // 서버는 실제로 보낼 때까지 다시 담으므로 처음 받은 스냅샷에는 모두 있다. 그래도 빠졌으면 다음 것을 기다린다.
     if (walls === undefined || rules === undefined || map === undefined) return;
     const wasAlive = me()?.state === 'alive';
+    const wasEnded = previous?.phase === 'ended';
     snapshot = { ...wire, walls, rules, map };
     if (me()?.state !== 'waiting') deployRequested = false;
     if (wasAlive && me()?.state !== 'alive') releaseSkills();
+    // 작전이 끝나는 순간 한 번만 입력을 비운다. 끝난 뒤의 스냅샷마다 비울 필요는 없다.
+    if (!wasEnded && snapshot.phase === 'ended') clearInput();
     sequence = Math.max(sequence, (me()?.ack ?? -1) + 1);
     status('분대 연결됨', true);
     world!.update(snapshot);
@@ -335,7 +338,6 @@ function updateUi() {
     $('result-title').textContent = s.result === 'success' ? '분대, 복귀 완료.' : '분대 신호 소실.';
     $('result-description').textContent = s.result === 'success' ? '적 시설을 무력화하고 탈출 지점을 확보했습니다.' : '전원이 사망하여 작전이 종료되었습니다.';
     $('result-stats').innerHTML = `<div><b>${time(s.elapsed)}</b><span>작전 시간</span></div><div><b>${s.players.reduce((sum, member) => sum + member.kills, 0)}</b><span>분대 처치</span></div><div><b>${s.supplies.filter(f => f.objective && f.collected).length}/2</b><span>보급품 회수</span></div>`;
-    clearInput();
   }
 }
 
