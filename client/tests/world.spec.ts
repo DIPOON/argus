@@ -167,34 +167,43 @@ test('gauges and guard arcs start their own path instead of a line from an earli
   state.players[0].actions = [{ id: 912, skill: 'parry', kind: 'block', slot: 2, tier: 1, phase: 'active', aim: 0,
     startedAt: 9.8, contactAt: 9.8, activeUntil: 10.35, endsAt: 10.78, range: 54, halfWidth: 10 }];
   state.extraction = { ...state.extraction, progress: 6, unlocked: true };
-  const strays = await page.evaluate(state => {
+  const arcs = await page.evaluate(state => {
     type Step = { action: string; data: number[] };
     type Drawing = { context: { instructions: { data: { path?: { instructions: Step[] } } }[] } };
     const world = window.testWorld as unknown as { update(s: unknown): void; draw(dt: number): void; units: Drawing; props: Drawing };
     world.update(structuredClone(state)); world.draw(1 / 60);
-    const found: string[] = [];
-    let arcs = 0;
+    const found: { x: number; y: number; radius: number; stray: string | null }[] = [];
     for (const drawing of [world.units, world.props]) {
       for (const instruction of drawing.context.instructions) {
         const steps = instruction.data.path?.instructions ?? [];
         steps.forEach((step, index) => {
           if (step.action !== 'arc') return;
-          arcs++;
-          if (index === 0) return;
-          // 원호 앞에 다른 점이 있으면 그 점에서 원호 시작점까지 직선이 그어진다.
           const [x, y, radius, start] = step.data;
-          const previous = steps[index - 1];
+          // 원호 앞에 다른 점이 있으면 그 점에서 원호 시작점까지 직선이 그어진다.
+          let stray: string | null = null;
           const sx = x + radius * Math.cos(start), sy = y + radius * Math.sin(start);
-          if (previous.action !== 'moveTo' || Math.hypot(previous.data[0] - sx, previous.data[1] - sy) > 1) {
-            found.push(`${previous.action} ${previous.data.slice(0, 2).join(',')} → ${sx.toFixed(0)},${sy.toFixed(0)}`);
+          const previous = steps[index - 1];
+          if (previous && (previous.action !== 'moveTo' || Math.hypot(previous.data[0] - sx, previous.data[1] - sy) > 1)) {
+            stray = `${previous.action} ${previous.data.slice(0, 2).join(',')} → ${sx.toFixed(0)},${sy.toFixed(0)}`;
           }
+          found.push({ x, y, radius, stray });
         });
       }
     }
-    return { arcs, found };
+    return found;
   }, state);
-  expect(strays.arcs).toBe(3);
-  expect(strays.found).toEqual([]);
+  // 기대하는 원호를 반지름과 중심으로 하나씩 찾는다. 찾지 못하면 Pixi의 내부 구조가 바뀌어
+  // 이 검사가 아무것도 보지 못하는 것이므로, 조용히 통과하지 않고 실패한다.
+  const expected = [
+    { name: '적 예고 게이지', x: 460, y: 730, radius: 32 },
+    { name: '받아치기 방어 호', x: 400, y: 730, radius: 28 },
+    { name: '탈출 진행도', x: 1080, y: 1130, radius: 80 },
+  ];
+  for (const arc of expected) {
+    const matches = arcs.filter(found => found.radius === arc.radius && Math.hypot(found.x - arc.x, found.y - arc.y) < 1);
+    expect(matches.length, arc.name).toBeGreaterThan(0);
+  }
+  expect(arcs.flatMap(found => found.stray === null ? [] : [found.stray])).toEqual([]);
 });
 
 test('prediction blocks enemy bodies while allowing teammate overlap', async ({ page }) => {
