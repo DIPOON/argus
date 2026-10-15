@@ -9,6 +9,7 @@ internal static class Program
         EquipmentTests.Register(tests);
         CombatTests.Register(tests);
         EncounterTests.Register(tests);
+        DeterminismTests.Register(tests);
         int failed = 0;
         for (int i = 0; i < tests.Count; i++)
         {
@@ -69,12 +70,14 @@ internal static class TestTools
 {
     private static int _id = 20000;
 
+    // 운영 서버처럼 정수 틱으로만 진행한다. 한 틱에 못 미치는 나머지는 한 틱으로 올려 센다.
+    // 그래서 실제로 진행한 시간은 seconds 이상이고, 그보다 한 틱 미만으로 길다.
     public static void Advance(Match match, double seconds)
     {
-        double until = match.Now + seconds;
-        while (until - match.Now > 0.00000001)
+        long ticks = (long)Math.Ceiling(seconds * Rules.TicksPerSecond - 0.000001);
+        for (long i = 0; i < ticks; i++)
         {
-            match.Step(Math.Min(Rules.Step, until - match.Now));
+            match.Step();
         }
     }
 

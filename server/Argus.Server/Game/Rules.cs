@@ -3,7 +3,9 @@ namespace Argus.Server.Game;
 // 플레이 시험을 위한 초기 수치다. 확정한 판정 규칙은 docs/combat.md에 기록한다.
 public sealed class Rules
 {
-    public const double Step = 1.0 / 30;
+    // 게임은 1초에 30틱, 한 틱에 정확히 Step초씩 진행한다.
+    public const int TicksPerSecond = 30;
+    public const double Step = 1.0 / TicksPerSecond;
     public const int MaxPlayers = 4;
     public const float PlayerRadius = 13;
     public double DeploySeconds { get; init; } = 5;

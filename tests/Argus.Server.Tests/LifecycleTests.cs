@@ -49,7 +49,7 @@ internal static class LifecycleTests
 
     private static void Deployment()
     {
-        Match match = new Match("TEST01", new Rules { MaxEnemies = 0 });
+        Match match = new Match("TEST01", new Rules { MaxEnemies = 0 }, 73);
         Player player = match.Join("p", "pilot")!;
         Advance(match, 20);
         Equal(player.State, "waiting");
@@ -69,7 +69,7 @@ internal static class LifecycleTests
 
     private static void RepeatedDeploy()
     {
-        Match match = new Match("TEST01", new Rules { MaxEnemies = 0 });
+        Match match = new Match("TEST01", new Rules { MaxEnemies = 0 }, 73);
         Player player = match.Join("p", "pilot")!;
         Check(match.Deploy(player, 1200, 500));
         Vector2 landing = player.Landing;
@@ -99,7 +99,7 @@ internal static class LifecycleTests
         for (int i = 0; i < 30; i++)
         {
             Check(f.Match.Input(f.Player, i, 1, 1, 0, 0));
-            f.Match.Step(Rules.Step);
+            f.Match.Step();
         }
         Near(Vector2.Distance(from, f.Player.Position), 180, 0.1);
         Check(!f.Match.Input(f.Player, 29, -1, 0, 0, 0));
@@ -189,7 +189,7 @@ internal static class LifecycleTests
         f.Player.Hp = 2;
         f.Player.Position = f.Match.Supplies[0].Position;
         ally.Position = f.Player.Position;
-        f.Match.Step(Rules.Step);
+        f.Match.Step();
         Near(f.Player.Hp, f.Player.MaxHp);
         Equal(f.Player.Mana, f.Player.MaxMana);
         Equal(ally.Mana, ally.MaxMana);
@@ -198,7 +198,7 @@ internal static class LifecycleTests
         Advance(f.Match, 10);
         Equal(f.Player.Mana, 4);
         f.Player.Position = f.Match.Supplies[1].Position;
-        f.Match.Step(Rules.Step);
+        f.Match.Step();
         Check(f.Match.Supplies[1].Collected);
         Equal(f.Player.Mana, f.Player.MaxMana);
     }
@@ -560,7 +560,7 @@ internal static class LifecycleTests
         Equal(room.Tokens.Count, 2);
         // 접속하지 않은 자리가 풀린 뒤 방을 한 틱 진행하면 그 자리의 토큰도 정리된다.
         Advance(room.Match, room.Match.Rules.FirstConnectSeconds + 0.1);
-        host.StepRoom(room.Match.Code, room, Rules.Step, false);
+        host.StepRoom(room.Match.Code, room, 1, false);
         Equal(room.Tokens.Count, room.Match.Players.Count);
         Equal(room.Tokens.Count, 1);
     }
@@ -578,7 +578,7 @@ internal static class LifecycleTests
         room.Match.Enemies.Add(new Enemy(30040, player.Position + new Vector2(40, 0), broken));
         for (int tick = 0; tick < 60; tick++)
         {
-            host.StepRoom(room.Match.Code, room, Rules.Step, false);
+            host.StepRoom(room.Match.Code, room, 1, false);
         }
         // 고칠 수 없는 방은 닫는다. 남겨 두면 32개 자리 중 하나를 차지한 채 오류만 쌓인다.
         Check(host.Join(guest.Room, new EntryRequest("late")) == null, "계속 실패하는 방이 남아 있습니다");
@@ -640,14 +640,14 @@ internal static class LifecycleTests
 
     private static void PublishRate()
     {
-        // 서버의 PeriodicTimer와 같은 주기로 깨어난다. 1/30초를 100ns 단위로 바꾼 값이라 세 번이 0.1초에 조금 못 미친다.
-        // 깨어나는 시각은 예정보다 0~2ms 늦을 수 있다. 10초 동안 방송은 100번 안팎이어야 한다.
-        double period = TimeSpan.FromSeconds(Rules.Step).TotalSeconds;
+        // 서버의 PeriodicTimer와 같은 주기로 깨어난다. PeriodicTimer는 주기를 밀리초 단위로 내리므로 1/30초가 33ms가 되어
+        // 세 번이 0.1초에 조금 못 미친다. 깨어나는 시각은 예정보다 0~2ms 늦을 수 있다. 10초 동안 방송은 100번 안팎이어야 한다.
+        double period = 0.033;
         Random random = new Random(7);
         PublishSchedule schedule = new PublishSchedule();
         int published = 0;
         double current = 0;
-        for (int tick = 1; tick <= 300; tick++)
+        for (int tick = 1; tick <= 303; tick++)
         {
             current = tick * period + random.NextDouble() * 0.002;
             if (schedule.Due(current))

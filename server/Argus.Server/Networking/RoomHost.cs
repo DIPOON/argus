@@ -145,7 +145,7 @@ public sealed class PublishSchedule
             return false;
         }
         // 다음 방송 시각은 실제로 깨어난 시각이 아니라 이번 방송의 예정 시각에서 잡는다.
-        // 깨어난 시각에서 잡으면, 타이머 주기(1/30초를 100ns 단위로 바꾼 값) 세 번이 0.1초에 조금 못 미치거나
+        // 깨어난 시각에서 잡으면, 타이머 주기(1/30초를 밀리초 단위로 내린 33ms) 세 번이 0.1초에 조금 못 미치거나
         // 조금만 늦게 깨어나도 방송이 한 틱씩 밀려 실제로는 8Hz 안팎이 된다.
         _next += Interval;
         // 서버가 오래 멈췄다 깨어나 방송을 한 번 이상 건너뛰었으면, 밀린 방송을 몰아서 보내지 않고 지금부터 다시 센다.
@@ -154,6 +154,39 @@ public sealed class PublishSchedule
             _next = current + Interval;
         }
         return true;
+    }
+}
+
+// 벽시계로 지난 시간에 맞춰, 깨어날 때마다 진행할 틱 수를 정한다. 게임은 정수 틱으로만 진행하고
+// 한 틱에 못 미치는 남은 시간은 다음에 깨어날 때로 넘긴다. 그래서 서버가 언제 깨어났는지는 결과에 영향을 주지 않는다.
+// 타이머 주기(33ms)가 틱(33.3ms)보다 조금 짧고 깨어나는 시각도 흔들리므로, 가끔은 진행할 틱 없이 깨어나거나
+// 한 번에 두 틱을 진행한다.
+public sealed class TickClock
+{
+    // 한 번 깨어날 때 진행하는 틱 수의 상한이다. 8틱은 약 0.27초다.
+    public const int MaxTicksPerWake = 8;
+    // 시작한 뒤 지금까지 진행하기로 한 틱 수다.
+    private long _ticked;
+
+    // current는 시작한 뒤 지난 초다. 이번에 진행할 틱 수를 돌려준다.
+    public int Due(double current)
+    {
+        long due = (long)Math.Floor(current * Rules.TicksPerSecond);
+        long behind = due - _ticked;
+        if (behind <= 0)
+        {
+            return 0;
+        }
+        // 절전이나 디버거로 서버가 멈췄다 깨어나도 밀린 시간을 한꺼번에 따라잡지 않는다.
+        // 따라잡으면 잠금을 쥔 채 수천 틱을 돌리고, 아무도 보지 못하는 사이에 대원이 죽거나 작전이 끝난다.
+        // 넘친 시간은 게임 시간에서 버린다. 처리가 밀릴수록 다음에 진행할 틱이 늘어나는 악순환도 막는다.
+        if (behind > MaxTicksPerWake)
+        {
+            behind = MaxTicksPerWake;
+        }
+        // 버린 시간까지 진행한 것으로 친다.
+        _ticked = due;
+        return (int)behind;
     }
 }
 
@@ -171,9 +204,16 @@ public sealed class Room
     // 진행에 연속해서 실패한 횟수다.
     public int Failures { get; set; }
 
+    // 방마다 비밀 시드를 새로 만든다. 시드는 서버 밖으로 보내지 않는다.
     public Room(string code, string? address)
+        : this(new Match(code, new Rules(), RandomNumberGenerator.GetBytes(SeededRandom.SeedLength)), address)
     {
-        Match = new Match(code);
+    }
+
+    // 검사와 재현용이다. 시드를 정해 만든 Match로 방을 만든다.
+    public Room(Match match, string? address)
+    {
+        Match = match;
         Address = address;
     }
 
@@ -255,8 +295,6 @@ public sealed class RoomHost : BackgroundService
     private readonly ConcurrentDictionary<string, Room> _rooms = new ConcurrentDictionary<string, Room>();
     private readonly ILogger<RoomHost> _logger;
     private long _connection;
-    // 한 틱에 진행하는 시간의 상한이다. 서버가 오래 멈췄다 깨어나도 이보다 많이 따라잡지 않는다.
-    private const double MaxTickSeconds = 0.25;
     // 연속해서 이만큼 진행에 실패한 방은 닫는다. 30번이면 약 1초다.
     private const int MaxRoomFailures = 30;
     // 한 주소가 동시에 가질 수 있는 방 수다. 방을 만들고 접속을 붙잡아 두는 방법으로 몇 개 주소만으로
@@ -493,19 +531,17 @@ public sealed class RoomHost : BackgroundService
         // await로 다음 틱을 기다리는 동안 스레드는 다른 작업에 사용될 수 있다.
         using PeriodicTimer timer = new PeriodicTimer(TimeSpan.FromSeconds(Rules.Step));
         Stopwatch watch = Stopwatch.StartNew();
-        double previous = watch.Elapsed.TotalSeconds;
+        TickClock clock = new TickClock();
         PublishSchedule schedule = new PublishSchedule();
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
             double current = watch.Elapsed.TotalSeconds;
-            double delta = current - previous;
-            previous = current;
-            // 절전이나 디버거로 서버가 멈췄다 깨어나도 밀린 시간을 한꺼번에 따라잡지 않는다.
-            // 따라잡으면 잠금을 쥔 채 수천 단계를 돌리고, 아무도 보지 못하는 사이에 대원이 죽거나 작전이 끝난다.
-            // 넘친 시간은 게임 시간에서 버린다. 처리가 밀릴수록 다음 단계가 커지는 악순환도 막는다.
-            if (delta > MaxTickSeconds)
+            // 게임은 정수 틱으로만 진행한다. 지난 시간이 한 틱에 못 미치면 이번에는 아무것도 하지 않는다.
+            // 상태가 그대로이므로 방송도 다음 차례로 미룬다.
+            int ticks = clock.Due(current);
+            if (ticks == 0)
             {
-                delta = MaxTickSeconds;
+                continue;
             }
             bool publish = schedule.Due(current);
 
@@ -517,24 +553,28 @@ public sealed class RoomHost : BackgroundService
             {
                 ParallelOptions options = new ParallelOptions();
                 options.MaxDegreeOfParallelism = Environment.ProcessorCount;
-                Parallel.For(0, active.Length, options, index => StepRoom(active[index].Key, active[index].Value, delta, publish));
+                Parallel.For(0, active.Length, options, index => StepRoom(active[index].Key, active[index].Value, ticks, publish));
             }
             else if (active.Length == 1)
             {
                 // 방이 하나뿐이면 작업 분배 비용이 아깝다.
-                StepRoom(active[0].Key, active[0].Value, delta, publish);
+                StepRoom(active[0].Key, active[0].Value, ticks, publish);
             }
         }
     }
 
-    // 방 하나를 한 틱 진행한다. 타이머 반복문이 부르며, 검사에서도 직접 부른다.
-    public void StepRoom(string code, Room room, double delta, bool publish)
+    // 방 하나를 ticks틱 진행한다. 타이머 반복문이 부르며, 검사에서도 직접 부른다.
+    // 여러 틱을 진행해도 한 틱씩 따로 진행하므로, 한 번에 3틱을 진행하든 1틱씩 세 번 진행하든 결과가 같다.
+    public void StepRoom(string code, Room room, int ticks, bool publish)
     {
         lock (room.Gate)
         {
             try
             {
-                room.Match.Step(delta);
+                for (int i = 0; i < ticks; i++)
+                {
+                    room.Match.Step();
+                }
                 // 대원이 실제로 빠졌을 때만 토큰을 정리한다. 매 틱 모든 방을 훑을 필요가 없다.
                 if (room.Match.Departures != room.SeenDepartures)
                 {

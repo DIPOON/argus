@@ -1,5 +1,4 @@
 using System.Numerics;
-using System.Security.Cryptography;
 
 namespace Argus.Server.Game;
 
@@ -15,6 +14,8 @@ public sealed partial class Match
     public List<Supply> Supplies { get; } = new List<Supply>();
     public List<Effect> Effects { get; } = new List<Effect>();
     public List<Notice> Notices { get; } = new List<Notice>();
+    // 지금까지 진행한 틱 수다. 게임 시간은 언제나 틱의 정수배다.
+    public long Tick { get; private set; }
     public double Now { get; private set; }
     public double StartedAt { get; private set; } = -1;
     public double? EndedAt { get; private set; }
@@ -24,7 +25,8 @@ public sealed partial class Match
     public int Pulse { get; private set; }
     // 대원이 방에서 빠질 때마다 늘어난다. 방 관리 쪽이 토큰 정리가 필요한지 알 때 쓴다.
     public int Departures { get; private set; }
-    private readonly Random? _random;
+    // 게임 진행에 쓰는 난수는 모두 이 생성기 하나에서 뽑는다. 시드가 같으면 같은 순서로 같은 수가 나온다.
+    private readonly SeededRandom _random;
     private double _nextSpawn = 10;
     private int _nextId = 100;
     private readonly int[] _flow = new int[BattleMap.Columns * BattleMap.Rows];
@@ -32,18 +34,13 @@ public sealed partial class Match
     private static readonly int[] NeighborX = new int[] { 1, -1, 0, 0 };
     private static readonly int[] NeighborY = new int[] { 0, 0, 1, -1 };
 
-    public Match(string code, Rules? rules = null, int? seed = null)
+    // 코드·규칙·시드가 같은 두 방에 같은 틱마다 같은 입력을 넣으면, 언제 어느 기계에서 돌려도 같은 상태가 된다.
+    // 운영 방은 RoomHost가 만든 비밀 시드를 넘긴다. 시드를 알면 적의 행동과 생성 위치를 미리 알 수 있으므로 클라이언트에 보내지 않는다.
+    public Match(string code, Rules rules, byte[] seed)
     {
         Code = code;
-        Rules = new Rules();
-        if (rules != null)
-        {
-            Rules = rules;
-        }
-        if (seed.HasValue)
-        {
-            _random = new Random(seed.Value);
-        }
+        Rules = rules;
+        _random = new SeededRandom(seed);
         Facilities.Add(new Facility(1, new Vector2(960, 485)));
         Facilities.Add(new Facility(2, new Vector2(1210, 695)));
         Facilities.Add(new Facility(3, new Vector2(990, 920)));
@@ -63,6 +60,11 @@ public sealed partial class Match
             AddEnemy(new Vector2(970, 570), EnemyDefinition.Grunt);
             AddEnemy(new Vector2(1260, 770), EnemyDefinition.Grunt);
         }
+    }
+
+    // 검사와 재현용이다. 정수에서 32바이트 시드를 만든다.
+    public Match(string code, Rules rules, int seed) : this(code, rules, SeededRandom.SeedFromNumber(seed))
+    {
     }
 
     public double Elapsed
@@ -95,15 +97,6 @@ public sealed partial class Match
             }
             return true;
         }
-    }
-
-    private double NextRandom()
-    {
-        if (_random != null)
-        {
-            return _random.NextDouble();
-        }
-        return RandomNumberGenerator.GetInt32(int.MaxValue) / (double)int.MaxValue;
     }
 
     public Player? Join(string id, string name)
@@ -193,24 +186,15 @@ public sealed partial class Match
         player.RequestedSlot = 0;
     }
 
-    public void Step(double dt)
+    // 정확히 한 틱(Rules.Step)을 진행한다. 진행할 시간을 받지 않으므로, 같은 입력을 같은 틱에 넣으면
+    // 서버가 언제 깨어났는지와 관계없이 같은 결과가 나온다. 서버가 늦어지면 부르는 쪽이 여러 번 부른다.
+    // 한 번에 긴 시간을 진행하지 않으므로 짧은 방어 창이나 몸 충돌을 건너뛰지 않는다.
+    public void Step()
     {
-        if (!double.IsFinite(dt) || dt <= 0)
-        {
-            return;
-        }
-        // 일시적으로 서버 틱이 늦어져도 짧은 방어 창이나 몸 충돌을 건너뛰지 않는다.
-        while (dt > 0.0000001)
-        {
-            double step = Math.Min(dt, Rules.Step);
-            StepOnce(step);
-            dt -= step;
-        }
-    }
-
-    private void StepOnce(double dt)
-    {
-        Now += dt;
+        Tick++;
+        // 매 틱 더하면 반올림 오차가 쌓이므로 틱 번호에서 바로 구한다.
+        Now = (double)Tick / Rules.TicksPerSecond;
+        double dt = Rules.Step;
         RemoveExpiredObjects();
         if (Phase == "ended" || CheckWipe())
         {

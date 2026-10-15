@@ -246,4 +246,12 @@ public sealed class BattleMap
         WallHit wall = RayWall(from, to);
         return double.IsPositiveInfinity(wall.Fraction);
     }
+
+    // 상태 요약에 벽 종류, 벽 체력, 판 번호를 적는다.
+    public void AddState(StateHasher hasher)
+    {
+        hasher.AddBytes(Tiles);
+        hasher.AddDoubleArray(_hp);
+        hasher.AddInt(Revision);
+    }
 }

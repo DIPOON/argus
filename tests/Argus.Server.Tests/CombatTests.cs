@@ -1,5 +1,7 @@
 using System.Numerics;
 using Argus.Server.Game;
+using Argus.Server.Networking;
+using Microsoft.Extensions.Logging.Abstractions;
 using static TestTools;
 
 internal static class CombatTests
@@ -26,7 +28,7 @@ internal static class CombatTests
         tests.Add(new TestCase("Melee destroys walls and mission facilities through normal inputs", Structures));
         tests.Add(new TestCase("Every hit on a breakable wall shows a visible hit effect in front of the wall", WallHitEffect));
         tests.Add(new TestCase("Player-enemy and enemy-enemy bodies block movement while skills allow walking", Bodies));
-        tests.Add(new TestCase("Long server steps preserve short active windows and prevent body tunneling", LongStep));
+        tests.Add(new TestCase("Catching up after a stall runs whole ticks, preserving short active windows and preventing body tunneling", LongStep));
         tests.Add(new TestCase("A new skill id with guard flags still guards and follows up like a parry", SkillFlags));
         tests.Add(new TestCase("A flank outside an enemy action's area deals ordinary damage without its affinity", Flank));
         tests.Add(new TestCase("A player the shield shove reaches answers it with affinity even beside the shield", ShoveReach));
@@ -185,7 +187,7 @@ internal static class CombatTests
         for (int i = 0; i < 80; i++)
         {
             f.Match.Input(f.Player, i, 1, 0, 0, 1);
-            f.Match.Step(Rules.Step);
+            f.Match.Step();
         }
         Check(f.Player.Position.X > ally.Position.X);
         Near(ally.Hp, ally.MaxHp);
@@ -328,7 +330,7 @@ internal static class CombatTests
         for (int i = 0; i < 70; i++)
         {
             f.Match.Input(f.Player, i, 0, 0, 0, 1);
-            f.Match.Step(Rules.Step);
+            f.Match.Step();
         }
         Check(!f.Match.Map.Solid(15, 10));
         Check(!f.Match.Map.Damage(0, 100));
@@ -336,7 +338,7 @@ internal static class CombatTests
         for (int i = 70; i < 170; i++)
         {
             f.Match.Input(f.Player, i, 0, 0, 0, 1);
-            f.Match.Step(Rules.Step);
+            f.Match.Step();
         }
         Near(f.Match.Facilities[0].Hp, 0);
     }
@@ -373,7 +375,7 @@ internal static class CombatTests
         for (int i = 0; i < 20; i++)
         {
             f.Match.Input(f.Player, i, 1, 0, Math.PI, 2);
-            f.Match.Step(Rules.Step);
+            f.Match.Step();
         }
         Check(f.Player.Position.X > 300);
         Check(f.Player.Position.X <= enemy.Position.X - enemy.Definition.Radius - Rules.PlayerRadius + 0.001);
@@ -385,7 +387,7 @@ internal static class CombatTests
         moving.Match.Enemies.Add(following);
         for (int i = 0; i < 90; i++)
         {
-            moving.Match.Step(Rules.Step);
+            moving.Match.Step();
             Check(Vector2.Distance(lead.Position, following.Position) >= 26 - 0.001);
             Check(Vector2.Distance(lead.Position, moving.Player.Position) >= 26 - 0.001);
         }
@@ -608,18 +610,23 @@ internal static class CombatTests
 
     private static void LongStep()
     {
+        // 서버가 가장 많이 밀렸을 때처럼 한 번에 최대 틱 수를 진행한다. 한 틱씩 따로 진행하므로
+        // 0.25초 공격 창 안에서 방어가 판정된다.
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
         Fixture f = new Fixture();
+        Room room = new Room(f.Match, null);
         Enemy enemy = Threat(f, "strike");
         Prepare(f, f.Player, "parry");
-        f.Match.Step(2);
+        host.StepRoom(f.Match.Code, room, TickClock.MaxTicksPerWake, false);
         Near(enemy.Hp, 0);
         Near(f.Player.Hp, 6);
-        // 긴 단계에서도 실제 이동 경로가 벽을 통과하지 않는다. 오른쪽 벽의 왼쪽 면은 x = 720이다.
+        // 밀린 틱을 몰아서 진행해도 이동 경로가 벽을 통과하지 않는다. 오른쪽 벽의 왼쪽 면은 x = 720이다.
         Fixture walker = new Fixture();
+        Room walkerRoom = new Room(walker.Match, null);
         walker.Player.Position = new Vector2(680, 500);
         walker.Match.Input(walker.Player, 1, 1, 0, 0, 0);
-        walker.Match.Step(2);
-        Check(walker.Player.Position.X < 720, "긴 단계에서 벽을 통과했습니다");
+        host.StepRoom(walker.Match.Code, walkerRoom, TickClock.MaxTicksPerWake, false);
+        Check(walker.Player.Position.X < 720, "밀린 틱을 진행하다 벽을 통과했습니다");
         Check(walker.Player.Position.X > 700, "벽까지 이동하지 않았습니다");
     }
 }
