@@ -417,6 +417,9 @@ public sealed partial class Match
         return Faces(enemy.Position, guard.Aim, player.Position);
     }
 
+    // 벽을 친 효과를 벽 면에서 대원 쪽으로 당기는 거리다.
+    private const double WallEffectInset = 6;
+
     private void ResolveStructures()
     {
         for (int i = 0; i < Players.Count; i++)
@@ -451,9 +454,16 @@ public sealed partial class Match
                 if (wall.Tile >= 0 && !action.HitWalls.Contains(wall.Tile))
                 {
                     action.HitWalls.Add(wall.Tile);
-                    if (Map.Damage(wall.Tile, 1))
+                    // Map.Damage는 벽이 부서졌을 때만 true를 돌려주므로, 부술 수 있는 벽인지는 치기 전에 따로 본다.
+                    // 시설을 칠 때처럼 칠 때마다 효과를 낸다.
+                    bool breakable = Map.Tiles[wall.Tile] == 1;
+                    Map.Damage(wall.Tile, 1);
+                    if (breakable)
                     {
-                        Effect(player.Position + facing * (float)(action.Skill.Range * wall.Fraction), "hit", 0.4);
+                        // 효과는 벽 면에서 대원 쪽으로 조금 당긴 곳에 둔다. 벽 면 위에 두면 시야 판정의 사선이
+                        // 그 벽에 막혀, 벽이 부서지는 마지막 타격을 빼고는 스냅샷에서 걸러진다.
+                        double reach = Math.Max(0, action.Skill.Range * wall.Fraction - WallEffectInset);
+                        Effect(player.Position + facing * (float)reach, "hit", 0.4);
                     }
                 }
             }

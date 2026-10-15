@@ -24,6 +24,7 @@ internal static class CombatTests
         tests.Add(new TestCase("Reduced HP leaves skill tiers unchanged; a weak skill can still be fully broken", WeakPhase));
         tests.Add(new TestCase("Wall cover prevents melee hits between otherwise clear endpoints", Cover));
         tests.Add(new TestCase("Melee destroys walls and mission facilities through normal inputs", Structures));
+        tests.Add(new TestCase("Every hit on a breakable wall shows a visible hit effect in front of the wall", WallHitEffect));
         tests.Add(new TestCase("Player-enemy and enemy-enemy bodies block movement while skills allow walking", Bodies));
         tests.Add(new TestCase("Long server steps preserve short active windows and prevent body tunneling", LongStep));
         tests.Add(new TestCase("A new skill id with guard flags still guards and follows up like a parry", SkillFlags));
@@ -338,6 +339,30 @@ internal static class CombatTests
             f.Match.Step(Rules.Step);
         }
         Near(f.Match.Facilities[0].Hp, 0);
+    }
+
+    private static void WallHitEffect()
+    {
+        // 오른쪽 벽(왼쪽 면 x = 720)을 마주 보고 한 번 친다. 부술 수 있는 벽은 체력이 3이라 한 번에 부서지지 않는다.
+        Fixture f = new Fixture();
+        f.Player.Position = new Vector2(680, 500);
+        f.Player.Aim = 0;
+        f.Player.Mana = 1;
+        f.Match.Input(f.Player, 1, 0, 0, 0, 1);
+        Advance(f.Match, 0.3);
+        Check(f.Match.Map.Solid(15, 10), "한 번에 벽이 부서졌습니다");
+        // 시설을 칠 때처럼 벽을 칠 때도 효과가 보여야 한다. 스냅샷에는 시야 안의 효과만 담긴다.
+        SnapshotMessage shared = Snapshot.CreateShared(f.Match);
+        int visible = 0;
+        for (int i = 0; i < shared.Effects.Count; i++)
+        {
+            Effect effect = shared.Effects[i];
+            if (effect.Kind == "hit" && effect.X > 680 && effect.X < 720)
+            {
+                visible++;
+            }
+        }
+        Equal(visible, 1);
     }
 
     private static void Bodies()
