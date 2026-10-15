@@ -203,7 +203,9 @@ internal static class Program
             {
                 host.Detach(room, player, peer);
             }
-            if (socket.State == WebSocketState.Open)
+            // 클라이언트가 먼저 닫았으면(CloseReceived) 종료 응답을 보내 닫기를 마친다. 응답 없이 소켓을 해제하면
+            // 상대는 정상 종료 대신 비정상 종료(1006)를 받고, 이를 네트워크 장애로 보는 클라이언트는 다시 접속한다.
+            if (socket.State == WebSocketState.Open || socket.State == WebSocketState.CloseReceived)
             {
                 using CancellationTokenSource timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1));
                 WebSocketCloseStatus status = WebSocketCloseStatus.NormalClosure;

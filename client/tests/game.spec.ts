@@ -185,6 +185,22 @@ test('the deploy button sends one request even when it is clicked twice quickly'
   expect(me.errors).toEqual([]);
 });
 
+test('a client that closes first gets a clean close back', async ({ request }) => {
+  const guest = await (await request.post('/api/rooms', { data: { name: 'Closer' } })).json();
+  const url = (process.env.ARGUS_URL ?? 'http://127.0.0.1:5077').replace(/^http/, 'ws') + '/ws';
+  const ws = new WebSocket(url);
+  let snapshots = 0;
+  ws.addEventListener('message', () => { snapshots++; });
+  await new Promise<void>(resolve => ws.addEventListener('open', () => resolve()));
+  ws.send(JSON.stringify({ type: 'hello', room: guest.room, token: guest.token }));
+  await expect.poll(() => snapshots).toBeGreaterThan(1);
+  // 클라이언트가 먼저 닫으면 서버가 종료 응답으로 닫기를 마쳐야 한다. 응답이 없으면 1006(비정상 종료)이 된다.
+  const closed = new Promise<{ code: number; clean: boolean }>(resolve =>
+    ws.addEventListener('close', event => resolve({ code: event.code, clean: event.wasClean })));
+  ws.close(1000);
+  expect(await closed).toEqual({ code: 1000, clean: true });
+});
+
 test('wire protocol rejects forged state, invalid slots, replay and stolen identity; late join works', async ({ request }) => {
   const response = await request.post('/api/rooms', { data: { name: 'Wire test' } });
   const guest = await response.json();
