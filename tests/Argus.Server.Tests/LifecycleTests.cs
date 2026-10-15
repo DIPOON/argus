@@ -363,7 +363,8 @@ internal static class LifecycleTests
         room.LastVisit = DateTime.UtcNow - TimeSpan.FromMinutes(16);
         Check(!room.Expired(DateTime.UtcNow), "접속 중인 방이 삭제 대상입니다");
         host.Detach(room, player, peer);
-        // 연결이 끊긴 순간부터 15분을 센다. 끊기자마자 지우면 120초 재접속 유예가 의미가 없다.
+        // 대원이 남아 있으면 연결이 끊겨도 바로 지우지 않는다. 끊기자마자 지우면 120초 재접속 유예가 의미가 없다.
+        // 실제로는 유예가 끝나 대원이 빠지면 2초 규칙으로 지워지고, 15분은 대원이 빠지지 않을 때의 안전장치다.
         Check(!room.Expired(DateTime.UtcNow), "연결이 끊기자마자 방이 삭제 대상이 됩니다");
         Check(room.Expired(DateTime.UtcNow + TimeSpan.FromMinutes(16)));
     }

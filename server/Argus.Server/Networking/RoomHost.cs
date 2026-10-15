@@ -185,6 +185,8 @@ public sealed class Room
 
     // 연결이 모두 끊긴 방을 지울지 정한다. 기준은 마지막 참가·접속·연결 해제 시각이다.
     // 복구를 기다리는 대원이 있으면 15분, 대원이 아무도 없으면 2초(EmptyRoomGrace) 뒤에 지운다.
+    // 끊긴 대원은 재접속 유예(120초)가 지나면 Match가 빼므로, 방은 보통 그 뒤 2초 규칙으로 지워진다.
+    // 15분은 대원이 빠지지 않는 경우를 대비한 안전장치다.
     public bool Expired(DateTime now)
     {
         if (Peers.Count > 0)
