@@ -1,0 +1,993 @@
+using System.Diagnostics;
+using System.Net;
+using System.Net.WebSockets;
+using System.Numerics;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Argus.Server.Game;
+using Argus.Server.Networking;
+using Microsoft.Extensions.Logging.Abstractions;
+using static TestTools;
+
+internal static class LifecycleTests
+{
+    public static void Register(List<TestCase> tests)
+    {
+        tests.Add(new TestCase("Entry waits for selection and five seconds without revealing the landing", Deployment));
+        tests.Add(new TestCase("A repeated deploy request while deploying is accepted without moving the landing or the timer", RepeatedDeploy));
+        tests.Add(new TestCase("Movement rejects invalid/replayed input and normalizes diagonals", InputAuthority));
+        tests.Add(new TestCase("Stale input and disconnect stop movement and further casts", InputExpiry));
+        tests.Add(new TestCase("Solo death and all-dead squads fail before pending deployment", Wipe));
+        tests.Add(new TestCase("Respawn and late join wait equally, with full health and zero mana", Respawn));
+        tests.Add(new TestCase("Mission pulses hit camp and late joins and eventually guarantee a wipe", Pulses));
+        tests.Add(new TestCase("Supplies replenish HP/mana independently for each teammate without passive recovery", Supplies));
+        tests.Add(new TestCase("Facilities must be destroyed before extraction can finish", Extraction));
+        tests.Add(new TestCase("Guest tokens, replacement and reconnect preserve identity and resources", Reconnect));
+        tests.Add(new TestCase("Disconnected slots expire and cannot keep a solo mission alive", Expiry));
+        tests.Add(new TestCase("Snapshots omit hidden enemy actions and effects and share teammate sight", Visibility));
+        tests.Add(new TestCase("Deployment never discloses hidden occupancy; a blocked arrival lands nearby without overlap", BlockedDeployment));
+        tests.Add(new TestCase("A broadcast serializes the shared part once and matches a snapshot built for one recipient", SharedSnapshot));
+        tests.Add(new TestCase("A slot that never connects is released quickly while a dropped member keeps the long grace", FirstConnectGrace));
+        tests.Add(new TestCase("A long session keeps its room for the full retention time after the last disconnect", RoomRetention));
+        tests.Add(new TestCase("A room with nobody left is released soon instead of holding a slot for fifteen minutes", EmptyRoomExpiry));
+        tests.Add(new TestCase("One address cannot hold more than a few rooms at once", RoomsPerAddress));
+        tests.Add(new TestCase("Room creation and joining report why they failed so the HTTP layer can answer accurately", EntryFailures));
+        tests.Add(new TestCase("Limits count an IPv6 /64 as one address and leave local and private networks out of the room cap", AddressGrouping));
+        tests.Add(new TestCase("Hidden spawns do not advance the id sequence that player actions reveal", HiddenIdGaps));
+        tests.Add(new TestCase("Walls, rules and map are resent until delivered and walls again after they change", StaticParts));
+        tests.Add(new TestCase("Tokens of removed players are cleaned when a room steps", TokenCleanup));
+        tests.Add(new TestCase("A room whose simulation keeps throwing is closed instead of holding its slot", FailingRoom));
+        tests.Add(new TestCase("A deployment whose surroundings and camp are blocked still lands somewhere", CrowdedLanding));
+        tests.Add(new TestCase("Error and pong messages use their own channel and are never dropped behind snapshots", ControlChannel));
+        tests.Add(new TestCase("Sending puts error and pong ahead of snapshots, wakes for them and ends when snapshots close", SendOrder));
+        tests.Add(new TestCase("Sending ends on cancellation instead of spinning on a cancelled wait", SendCancel));
+        tests.Add(new TestCase("Sending still delivers an error that arrives as the snapshot channel closes", SendDrainsControl));
+        tests.Add(new TestCase("Sending snapshots alone does not pile up unfinished waits on the control channel", SendWaits));
+        tests.Add(new TestCase("Snapshots go out ten times a second on the real timer period and do not burst after a stall", PublishRate));
+    }
+
+    private static void Deployment()
+    {
+        Match match = new Match("TEST01", new Rules { MaxEnemies = 0 });
+        Player player = match.Join("p", "pilot")!;
+        Advance(match, 20);
+        Equal(player.State, "waiting");
+        Equal(match.Phase, "staging");
+        Check(!match.Deploy(player, double.NaN, 400));
+        Check(!match.Deploy(player, 730, 350));
+        Check(match.Deploy(player, 1200, 500));
+        Check(!match.Visible(new Vector2(1200, 500)));
+        Advance(match, 4.95);
+        Equal(player.State, "deploying");
+        Check(!match.Visible(new Vector2(1200, 500)));
+        Advance(match, 0.1);
+        Equal(player.State, "alive");
+        Equal(player.Mana, 0);
+        Check(match.Visible(new Vector2(1200, 500)));
+    }
+
+    private static void RepeatedDeploy()
+    {
+        Match match = new Match("TEST01", new Rules { MaxEnemies = 0 });
+        Player player = match.Join("p", "pilot")!;
+        Check(match.Deploy(player, 1200, 500));
+        Vector2 landing = player.Landing;
+        double arrives = player.DeployAt;
+        Advance(match, 1);
+        // 투입 버튼을 두 번 눌러도 거절로 답하지 않는다. 자리와 도착 시각은 처음 요청대로다.
+        Check(match.Deploy(player, 1100, 520), "투입 중인 대원의 재요청을 거절했습니다");
+        Equal(player.State, "deploying");
+        Near(player.Landing.X, landing.X);
+        Near(player.Landing.Y, landing.Y);
+        Near(player.DeployAt, arrives);
+        Advance(match, match.Rules.DeploySeconds);
+        Equal(player.State, "alive");
+        // 살아 있는 대원의 투입 요청은 여전히 거절한다.
+        Check(!match.Deploy(player, 1100, 520));
+    }
+
+    private static void InputAuthority()
+    {
+        Fixture f = new Fixture();
+        Vector2 from = f.Player.Position;
+        Check(!f.Match.Input(f.Player, 0, 100, 0, 0, 0));
+        Check(!f.Match.Input(f.Player, 0, double.NaN, 0, 0, 0));
+        Check(!f.Match.Input(f.Player, 0, 0, 0, double.PositiveInfinity, 0));
+        Check(!f.Match.Input(f.Player, 0, 0, 0, 0, 5));
+        Check(!f.Match.Input(f.Player, 0, 0, 0, 0, -1));
+        for (int i = 0; i < 30; i++)
+        {
+            Check(f.Match.Input(f.Player, i, 1, 1, 0, 0));
+            f.Match.Step(Rules.Step);
+        }
+        Near(Vector2.Distance(from, f.Player.Position), 180, 0.1);
+        Check(!f.Match.Input(f.Player, 29, -1, 0, 0, 0));
+        from = f.Player.Position;
+        for (int i = 30; i < 1030; i++)
+        {
+            f.Match.Input(f.Player, i, 1, 0, 0, 0);
+        }
+        Near(Vector2.Distance(from, f.Player.Position), 0);
+    }
+
+    private static void InputExpiry()
+    {
+        Fixture f = new Fixture();
+        f.Player.Mana = 10;
+        Vector2 from = f.Player.Position;
+        f.Match.Input(f.Player, 0, 0, -1, 0, 1);
+        Advance(f.Match, 1);
+        Check(Vector2.Distance(from, f.Player.Position) < 65);
+        Equal(f.Player.Mana, 9);
+        f.Match.Disconnect(f.Player);
+        from = f.Player.Position;
+        Advance(f.Match, 2);
+        Near(Vector2.Distance(from, f.Player.Position), 0);
+        Equal(f.Player.Mana, 9);
+    }
+
+    private static void Wipe()
+    {
+        Fixture f = new Fixture();
+        Player late = f.Match.Join("late", "late")!;
+        Check(f.Match.Deploy(late, 300, 730));
+        f.Match.Hurt(f.Player, 100);
+        Advance(f.Match, 6);
+        Equal(f.Match.Result, "failure");
+        Equal(late.State, "deploying");
+        double elapsed = f.Match.Elapsed;
+        Advance(f.Match, 2);
+        Near(f.Match.Elapsed, elapsed);
+    }
+
+    private static void Respawn()
+    {
+        Fixture f = new Fixture();
+        Ally(f, "ally");
+        f.Player.Mana = 9;
+        f.Match.Hurt(f.Player, 100);
+        Advance(f.Match, 10);
+        Equal(f.Player.State, "waiting");
+        Check(f.Match.Deploy(f.Player, 400, 730));
+        Player late = f.Match.Join("late", "late")!;
+        Check(f.Match.Deploy(late, 440, 730));
+        Near(f.Player.DeployAt, late.DeployAt);
+        Advance(f.Match, 4.95);
+        Equal(f.Player.State, "deploying");
+        Advance(f.Match, 0.1);
+        Equal(f.Player.State, "alive");
+        Equal(late.State, "alive");
+        Equal(f.Player.Mana, 0);
+        Equal(late.Mana, 0);
+        Near(f.Player.Hp, f.Player.MaxHp);
+    }
+
+    private static void Pulses()
+    {
+        Fixture f = new Fixture(new Rules { MaxEnemies = 0, PulseSeconds = 10 });
+        Equal(new Rules().PulseSeconds, 600d);
+        Advance(f.Match, 7);
+        Player late = Ally(f, "late");
+        Advance(f.Match, 3.1);
+        Near(f.Player.Hp, 4);
+        Near(late.Hp, 4);
+        f.Player.Hp = 6;
+        late.Hp = 6;
+        Advance(f.Match, 10);
+        Near(f.Player.Hp, 2);
+        f.Player.Hp = 6;
+        late.Hp = 6;
+        Advance(f.Match, 10);
+        Equal(f.Match.Result, "failure");
+    }
+
+    private static void Supplies()
+    {
+        Fixture f = new Fixture();
+        Player ally = Ally(f, "ally");
+        f.Player.Hp = 2;
+        f.Player.Position = f.Match.Supplies[0].Position;
+        ally.Position = f.Player.Position;
+        f.Match.Step(Rules.Step);
+        Near(f.Player.Hp, f.Player.MaxHp);
+        Equal(f.Player.Mana, f.Player.MaxMana);
+        Equal(ally.Mana, ally.MaxMana);
+        f.Player.Mana = 4;
+        f.Player.Position = BattleMap.Camp;
+        Advance(f.Match, 10);
+        Equal(f.Player.Mana, 4);
+        f.Player.Position = f.Match.Supplies[1].Position;
+        f.Match.Step(Rules.Step);
+        Check(f.Match.Supplies[1].Collected);
+        Equal(f.Player.Mana, f.Player.MaxMana);
+    }
+
+    private static void Extraction()
+    {
+        Fixture f = new Fixture();
+        f.Player.Position = BattleMap.Extraction;
+        Advance(f.Match, 21);
+        Equal(f.Match.Phase, "active");
+        for (int i = 0; i < f.Match.Facilities.Count; i++)
+        {
+            f.Match.Facilities[i].Hp = 0;
+        }
+        Advance(f.Match, 20.1);
+        Equal(f.Match.Result, "success");
+    }
+
+    private static void Reconnect()
+    {
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        Guest guest = host.Create(new EntryRequest("pilot"))!;
+        (Room room, Player player, Peer peer) = host.Attach(guest.Room, guest.Token)!.Value;
+        room.Match.Enemies.Clear();
+        Check(host.Attach(guest.Room, "wrong") == null);
+        room.Match.Deploy(player, 300, 730);
+        Advance(room.Match, 2);
+        host.Detach(room, player, peer);
+        (Room Room, Player Player, Peer Peer) again = host.Attach(guest.Room, guest.Token)!.Value;
+        Check(ReferenceEquals(player, again.Player));
+        Equal(player.State, "deploying");
+        Near(player.DeployAt - room.Match.Now, 3);
+        Advance(room.Match, 3.1);
+        player.Mana = 7;
+        player.Hp = 3;
+        player.Deaths = 2;
+        host.Detach(room, player, again.Peer);
+        (Room Room, Player Player, Peer Peer) third = host.Attach(guest.Room, guest.Token)!.Value;
+        Equal(third.Player.Mana, 7);
+        Near(third.Player.Hp, 3);
+        Equal(third.Player.Deaths, 2);
+        host.Detach(room, player, again.Peer);
+        Check(player.Connected);
+        host.Attach(guest.Room, guest.Token);
+        Check(third.Peer.Replaced);
+        for (int i = 0; i < 3; i++)
+        {
+            Check(host.Join(guest.Room, new EntryRequest("ally")) != null);
+        }
+        Check(host.Join(guest.Room, new EntryRequest("fifth")) == null);
+    }
+
+    private static void Expiry()
+    {
+        Fixture f = new Fixture(new Rules { MaxEnemies = 0, ReconnectSeconds = 1 });
+        f.Match.Disconnect(f.Player);
+        Advance(f.Match, 1.1);
+        Equal(f.Match.Players.Count, 0);
+        Equal(f.Match.Result, "failure");
+    }
+
+    private static void Visibility()
+    {
+        Fixture f = new Fixture();
+        Enemy visible = Target(f);
+        Enemy hidden = new Enemy(9001, new Vector2(1300, 1100), EnemyDefinition.Warden);
+        hidden.Action = new EnemyAction(9002, hidden.Definition.Skills[1], 1, f.Match.Now);
+        f.Match.Enemies.Add(hidden);
+        f.Match.Effects.Add(new Effect(9003, 1300, 1100, "break", f.Match.Now + 1));
+        string serialized = Encoding.UTF8.GetString(Snapshot.Create(f.Match, f.Player, RoomHost.Json));
+        using JsonDocument json = JsonDocument.Parse(serialized);
+        Equal(json.RootElement.GetProperty("version").GetInt32(), 3);
+        Equal(json.RootElement.GetProperty("enemies").GetArrayLength(), 1);
+        Check(!serialized.Contains("9001") && !serialized.Contains("9002") && !serialized.Contains("9003"));
+        Player ally = Ally(f, "scout");
+        ally.Position = new Vector2(1260, 1120);
+        Equal(Snapshot.CreateShared(f.Match).Enemies.Count, 2);
+        ally.State = "waiting";
+        Equal(Snapshot.CreateShared(f.Match).Enemies.Count, 1);
+        Check(visible.Hp > 0);
+    }
+
+    private static void SharedSnapshot()
+    {
+        Fixture f = new Fixture();
+        Player ally = Ally(f, "scout");
+        // 한 대원만 보급 대기 중이게 해서 수신자마다 값이 달라지게 한다.
+        f.Match.Supplies[0].ReadyAt[f.Player.Id] = f.Match.Now + 10;
+        byte[] body = Snapshot.SerializeShared(Snapshot.CreateShared(f.Match), RoomHost.Json);
+        JsonObject shared = JsonNode.Parse(body)!.AsObject();
+        // 공통 몸통에는 수신자별 값이 들어가지 않는다. SnapshotMessage에 그런 속성이 없다.
+        string[] personalKeys = new string[] { "you", "supplies", "walls", "map", "rules" };
+        for (int i = 0; i < personalKeys.Length; i++)
+        {
+            Check(!shared.ContainsKey(personalKeys[i]), $"공통 부분에 수신자별 값 {personalKeys[i]}이 섞였습니다");
+        }
+
+        // 수신자마다 공통 몸통에 자기 값만 이어 붙인다. 조종사는 벽·규칙·맵을 아직 받지 못했고 정찰병은 받았다.
+        byte[] pilotBytes = Snapshot.Combine(body, Snapshot.CreatePersonal(f.Match, f.Player, true, true), RoomHost.Json);
+        byte[] scoutBytes = Snapshot.Combine(body, Snapshot.CreatePersonal(f.Match, ally, false, false), RoomHost.Json);
+        JsonObject pilot = JsonNode.Parse(pilotBytes)!.AsObject();
+        JsonObject scout = JsonNode.Parse(scoutBytes)!.AsObject();
+        Equal((string)pilot["you"]!, f.Player.Id);
+        Equal((string)scout["you"]!, ally.Id);
+        double pilotCooldown = (double)pilot["supplies"]![0]!["cooldown"]!;
+        double scoutCooldown = (double)scout["supplies"]![0]!["cooldown"]!;
+        Check(pilotCooldown > 9, "조종사의 보급 대기 시간이 빠졌습니다");
+        Near(scoutCooldown, 0);
+        Check(pilot.ContainsKey("walls") && pilot.ContainsKey("map") && pilot.ContainsKey("rules"), "조종사에게 벽·규칙·맵이 빠졌습니다");
+        Check(!scout.ContainsKey("walls") && !scout.ContainsKey("map") && !scout.ContainsKey("rules"), "정찰병에게 이미 받은 값을 다시 보냈습니다");
+        // 수신자별 값을 빼면 두 스냅샷 모두 공통 몸통과 같아야 한다.
+        for (int i = 0; i < personalKeys.Length; i++)
+        {
+            pilot.Remove(personalKeys[i]);
+            scout.Remove(personalKeys[i]);
+        }
+        Check(JsonNode.DeepEquals(pilot, shared), "조종사의 스냅샷에서 공통 부분이 달라졌습니다");
+        Check(JsonNode.DeepEquals(scout, shared), "정찰병의 스냅샷에서 공통 부분이 달라졌습니다");
+
+        // 연결 직후 한 명에게 보내는 스냅샷도 같은 방식으로 만들고 벽·규칙·맵을 모두 담는다.
+        JsonObject alone = JsonNode.Parse(Snapshot.Create(f.Match, ally, RoomHost.Json))!.AsObject();
+        Equal((string)alone["you"]!, ally.Id);
+        Check(alone.ContainsKey("walls") && alone.ContainsKey("map") && alone.ContainsKey("rules"), "연결 직후 스냅샷에 벽·규칙·맵이 빠졌습니다");
+
+        // 시야 다각형은 그리기 전용이라 정수로 보낸다. 실제 전송되는 JSON에서 확인한다.
+        using JsonDocument json = JsonDocument.Parse(scoutBytes);
+        JsonElement sight = json.RootElement.GetProperty("sight");
+        Check(sight.GetArrayLength() > 0);
+        foreach (JsonElement polygon in sight.EnumerateArray())
+        {
+            foreach (JsonElement value in polygon.EnumerateArray())
+            {
+                Check(value.TryGetInt32(out int _), "시야 좌표가 정수가 아닙니다");
+            }
+        }
+    }
+
+    private static void FirstConnectGrace()
+    {
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        Guest owner = host.Create(new EntryRequest("owner"))!;
+        (Room room, Player player, Peer peer) = host.Attach(owner.Room, owner.Token)!.Value;
+        Guest squatter = host.Join(owner.Room, new EntryRequest("squatter"))!;
+        Equal(room.Match.Players.Count, 2);
+        // HTTP로 참가만 하고 접속하지 않은 자리는 짧은 유예 뒤에 풀린다.
+        Advance(room.Match, room.Match.Rules.FirstConnectSeconds + 0.1);
+        Equal(room.Match.Players.Count, 1);
+        Check(host.Attach(owner.Room, squatter.Token) == null);
+        // 접속했다가 끊긴 대원은 같은 시간이 지나도 긴 복구 유예를 유지한다.
+        host.Detach(room, player, peer);
+        Advance(room.Match, room.Match.Rules.FirstConnectSeconds + 0.1);
+        Equal(room.Match.Players.Count, 1);
+        Check(host.Attach(owner.Room, owner.Token) != null);
+    }
+
+    private static void RoomRetention()
+    {
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        Guest guest = host.Create(new EntryRequest("pilot"))!;
+        (Room room, Player player, Peer peer) = host.Attach(guest.Room, guest.Token)!.Value;
+        // 16분 동안 접속해 플레이한 상황이다. 마지막 참가·접속 시각이 16분 전이다.
+        room.LastVisit = DateTime.UtcNow - TimeSpan.FromMinutes(16);
+        Check(!room.Expired(DateTime.UtcNow), "접속 중인 방이 삭제 대상입니다");
+        host.Detach(room, player, peer);
+        // 대원이 남아 있으면 연결이 끊겨도 바로 지우지 않는다. 끊기자마자 지우면 120초 재접속 유예가 의미가 없다.
+        // 실제로는 유예가 끝나 대원이 빠지면 2초 규칙으로 지워지고, 15분은 대원이 빠지지 않을 때의 안전장치다.
+        Check(!room.Expired(DateTime.UtcNow), "연결이 끊기자마자 방이 삭제 대상이 됩니다");
+        Check(room.Expired(DateTime.UtcNow + TimeSpan.FromMinutes(16)));
+    }
+
+    private static void EmptyRoomExpiry()
+    {
+        // HTTP로 방을 만들고 참가만 한 뒤 한 번도 접속하지 않은 방이다.
+        Room squatted = new Room("SQUAT1", "local");
+        Player squatter = squatted.Match.Join("q", "squatter")!;
+        squatter.DisconnectedAt = squatted.Match.Now;
+        squatter.AwaitingFirstConnection = true;
+        Check(!squatted.Expired(DateTime.UtcNow), "막 만든 방이 바로 삭제 대상입니다");
+        Advance(squatted.Match, squatted.Match.Rules.FirstConnectSeconds + 0.1);
+        Equal(squatted.Match.Players.Count, 0);
+        // 접속 없이 참가만 한 자리가 풀린 방은 바로 지운다. 만든 지 15초 남짓 지난 때다.
+        // 오래 남기면 분당 30번 만들 수 있는 방으로 32개 상한을 채울 수 있다.
+        Check(squatted.Expired(DateTime.UtcNow + TimeSpan.FromSeconds(16)), "접속 없이 자리가 풀린 방이 남아 방 생성을 막습니다");
+        // 방을 만들고 첫 대원을 넣기 전의 짧은 틈에는 지우지 않는다.
+        Room fresh = new Room("FRESH1", "local");
+        Check(!fresh.Expired(DateTime.UtcNow), "막 만든 빈 방이 첫 대원을 넣기 전에 지워집니다");
+
+        // 연결이 끊겼지만 복구 유예 중인 대원이 있는 방은 그대로 남는다.
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        Guest guest = host.Create(new EntryRequest("pilot"))!;
+        (Room room, Player player, Peer peer) = host.Attach(guest.Room, guest.Token)!.Value;
+        host.Detach(room, player, peer);
+        Check(!room.Expired(DateTime.UtcNow + TimeSpan.FromSeconds(31)), "복구를 기다리는 대원이 있는 방이 지워집니다");
+    }
+
+    private static void RoomsPerAddress()
+    {
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        // 한 주소에서 만든 방은 동시에 상한만큼만 둔다. 방을 만들고 접속을 붙잡아 두는 방법으로
+        // 몇 개 주소만으로 방 32개 상한을 채우지 못하게 한다.
+        for (int i = 0; i < RoomHost.MaxRoomsPerAddress; i++)
+        {
+            EntryFailure failure;
+            Guest? guest = host.Create(new EntryRequest("a"), "203.0.113.1", out failure);
+            Check(guest != null && failure == EntryFailure.None, "상한보다 적은 방을 만들지 못했습니다");
+        }
+        EntryFailure capped;
+        Guest? extra = host.Create(new EntryRequest("a"), "203.0.113.1", out capped);
+        Check(extra == null, "한 주소에서 상한보다 많은 방을 만들었습니다");
+        Equal(capped, EntryFailure.AddressFull);
+        // 다른 주소는 따로 센다.
+        EntryFailure otherFailure;
+        Guest? other = host.Create(new EntryRequest("b"), "203.0.113.2", out otherFailure);
+        Check(other != null && otherFailure == EntryFailure.None, "다른 주소의 방 생성이 막혔습니다");
+        // 상한에서 뺀 주소(같은 기계)는 상한보다 많이 만들 수 있다.
+        for (int i = 0; i <= RoomHost.MaxRoomsPerAddress; i++)
+        {
+            EntryFailure local;
+            Guest? guest = host.Create(new EntryRequest("c"), null, out local);
+            Check(guest != null && local == EntryFailure.None, "상한에서 뺀 주소의 방 생성이 막혔습니다");
+        }
+    }
+
+    private static void EntryFailures()
+    {
+        // 장비 검증과 실패 이유는 RoomHost가 정한다. HTTP 처리는 이 값으로 상태 코드만 고른다.
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        string[] invalid = new string[] { "strike", "parry", "grab", "turret" };
+        EntryFailure badCreate;
+        Check(host.Create(new EntryRequest("bad", invalid), null, out badCreate) == null);
+        Equal(badCreate, EntryFailure.InvalidRequest);
+        Guest guest = host.Create(new EntryRequest("owner"))!;
+        EntryFailure badJoin;
+        Check(host.Join(guest.Room, new EntryRequest("bad", invalid), out badJoin) == null);
+        Equal(badJoin, EntryFailure.InvalidRequest);
+        EntryFailure missing;
+        Check(host.Join("NOPE23", new EntryRequest("late"), out missing) == null);
+        Equal(missing, EntryFailure.Unavailable);
+        EntryFailure joined;
+        Check(host.Join(guest.Room, new EntryRequest("friend"), out joined) != null);
+        Equal(joined, EntryFailure.None);
+    }
+
+    private static void AddressGrouping()
+    {
+        // IPv6 사용자는 보통 /64 대역을 통째로 받아 요청마다 주소를 바꿀 수 있다. 두 제한 모두 /64를 한 주소로 센다.
+        IPAddress first = IPAddress.Parse("2001:db8:1:2::1");
+        IPAddress sameBlock = IPAddress.Parse("2001:db8:1:2:ffff:abcd:1:5");
+        IPAddress otherBlock = IPAddress.Parse("2001:db8:1:3::1");
+        Equal(AddressKeys.ForRoomLimit(first), AddressKeys.ForRoomLimit(sameBlock));
+        Check(AddressKeys.ForRoomLimit(first) != AddressKeys.ForRoomLimit(otherBlock), "다른 /64 대역을 한 주소로 셌습니다");
+        Equal(AddressKeys.ForRateLimit(first), AddressKeys.ForRateLimit(sameBlock));
+        Check(AddressKeys.ForRateLimit(first) != AddressKeys.ForRateLimit(otherBlock), "참가 제한이 다른 /64 대역을 한 주소로 셌습니다");
+
+        // IPv4는 주소 하나가 단위다. IPv6에 담긴 IPv4 주소도 같은 주소로 센다.
+        Equal(AddressKeys.ForRoomLimit(IPAddress.Parse("203.0.113.5")), "203.0.113.5");
+        Equal(AddressKeys.ForRoomLimit(IPAddress.Parse("::ffff:203.0.113.5")), "203.0.113.5");
+        Equal(AddressKeys.ForRateLimit(IPAddress.Parse("::ffff:203.0.113.5")), "203.0.113.5");
+
+        // 같은 기계와 사설망에서 온 접속은 방 수 상한에서 뺀다. Docker로 띄우면 모든 요청이 브리지 주소(172.17.0.1 등)로 온다.
+        string[] local = new string[] { "127.0.0.1", "::1", "172.17.0.1", "172.31.255.1", "10.0.0.3", "192.168.1.10", "fd00::1", "fe80::1", "169.254.1.1", "::ffff:192.168.0.2" };
+        for (int i = 0; i < local.Length; i++)
+        {
+            Check(AddressKeys.ForRoomLimit(IPAddress.Parse(local[i])) == null, $"{local[i]}을 방 수 상한에 넣었습니다");
+        }
+        // 사설 대역 경계 밖은 공개 주소로 센다.
+        Check(AddressKeys.ForRoomLimit(IPAddress.Parse("172.32.0.1")) != null, "172.32.0.1을 사설망으로 보았습니다");
+        Check(AddressKeys.ForRoomLimit(IPAddress.Parse("172.15.255.1")) != null, "172.15.255.1을 사설망으로 보았습니다");
+        // 참가 제한은 모든 주소에 건다. 주소를 모르면 하나로 묶는다.
+        Equal(AddressKeys.ForRateLimit(IPAddress.Parse("172.17.0.1")), "172.17.0.1");
+        Equal(AddressKeys.ForRateLimit(null), "local");
+    }
+
+    private static void HiddenIdGaps()
+    {
+        Rules rules = new Rules();
+        Match match = new Match("IDGAP1", rules, 73);
+        // 처음 배치된 적이 다가와 행동하면 그 id가 끼어들므로 치우고 추가 생성만 본다.
+        match.Enemies.Clear();
+        Player player = match.Join("p", "pilot")!;
+        player.Connected = true;
+        Check(match.Deploy(player, BattleMap.Camp.X, BattleMap.Camp.Y));
+        Advance(match, rules.DeploySeconds + 0.01);
+        player.Mana = player.MaxMana;
+        long sequence = 1;
+        match.Input(player, sequence, 0, 0, 0, 1);
+        Advance(match, Rules.Step);
+        int first = player.Actions[player.Actions.Count - 1].Id;
+        sequence++;
+        match.Input(player, sequence, 0, 0, 0, 0);
+        // 안개 속에서 적이 생성될 때까지 진행한다. 생성된 적은 1초 동안 행동하지 않는다.
+        double limit = match.Now + 30;
+        while (match.Enemies.Count == 0 && match.Now < limit)
+        {
+            Advance(match, Rules.Step);
+        }
+        Check(match.Enemies.Count > 0, "적이 생성되지 않았습니다");
+        sequence++;
+        match.Input(player, sequence, 0, 0, 0, 1);
+        Advance(match, Rules.Step);
+        int second = player.Actions[player.Actions.Count - 1].Id;
+        // 그 사이 보이는 곳에서는 아무 일도 없었다. 숨은 생성이 순번을 쓰면 빈 번호로 생성 수가 드러난다.
+        Equal(second, first + 1);
+    }
+
+    private static OutgoingMessage Next(Peer peer)
+    {
+        Check(peer.Outgoing.Reader.TryRead(out OutgoingMessage? message), "보낼 메시지가 없습니다");
+        return message!;
+    }
+
+    private static bool Carries(OutgoingMessage message, string field)
+    {
+        using JsonDocument json = JsonDocument.Parse(message.Bytes);
+        return json.RootElement.TryGetProperty(field, out JsonElement _);
+    }
+
+    private static void StaticParts()
+    {
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        Guest guest = host.Create(new EntryRequest("pilot"))!;
+        (Room room, Player player, Peer peer) = host.Attach(guest.Room, guest.Token)!.Value;
+        // 접속 직후 스냅샷에는 벽·규칙·맵이 모두 있다.
+        OutgoingMessage first = Next(peer);
+        Check(Carries(first, "walls") && Carries(first, "rules") && Carries(first, "map"));
+        // 아직 보내지 않았다. 느린 연결에서 버려질 수 있으므로 다음 방송에도 다시 담는다.
+        lock (room.Gate)
+        {
+            RoomHost.PublishSnapshots(room);
+        }
+        OutgoingMessage resent = Next(peer);
+        Check(Carries(resent, "walls") && Carries(resent, "rules") && Carries(resent, "map"), "보내기 전에 버려질 수 있는 정보를 다시 담지 않았습니다");
+        // 실제로 보낸 뒤에는 바뀌지 않은 정보를 뺀다. 판 번호는 매번 보낸다.
+        peer.MarkSent(resent);
+        lock (room.Gate)
+        {
+            RoomHost.PublishSnapshots(room);
+        }
+        OutgoingMessage lean = Next(peer);
+        Check(!Carries(lean, "walls") && !Carries(lean, "rules") && !Carries(lean, "map"), "보낸 정보를 또 보냅니다");
+        Check(Carries(lean, "mapRevision"));
+        peer.MarkSent(lean);
+        // 벽이 부서져 판 번호가 바뀌면 벽만 다시 보낸다. 장애물 타일 (19, 11)의 체력은 3이다.
+        Check(room.Match.Map.Damage(11 * BattleMap.Columns + 19, 3));
+        lock (room.Gate)
+        {
+            RoomHost.PublishSnapshots(room);
+        }
+        OutgoingMessage changed = Next(peer);
+        Check(Carries(changed, "walls") && !Carries(changed, "rules"), "바뀐 벽을 다시 보내지 않았습니다");
+    }
+
+    private static void TokenCleanup()
+    {
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        Guest owner = host.Create(new EntryRequest("owner"))!;
+        (Room room, Player player, Peer peer) = host.Attach(owner.Room, owner.Token)!.Value;
+        host.Join(owner.Room, new EntryRequest("squatter"));
+        Equal(room.Tokens.Count, 2);
+        // 접속하지 않은 자리가 풀린 뒤 방을 한 틱 진행하면 그 자리의 토큰도 정리된다.
+        Advance(room.Match, room.Match.Rules.FirstConnectSeconds + 0.1);
+        host.StepRoom(room.Match.Code, room, Rules.Step, false);
+        Equal(room.Tokens.Count, room.Match.Players.Count);
+        Equal(room.Tokens.Count, 1);
+    }
+
+    private static void FailingRoom()
+    {
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        Guest guest = host.Create(new EntryRequest("pilot"))!;
+        (Room room, Player player, Peer peer) = host.Attach(guest.Room, guest.Token)!.Value;
+        Check(room.Match.Deploy(player, BattleMap.Camp.X, BattleMap.Camp.Y));
+        Advance(room.Match, room.Match.Rules.DeploySeconds + 0.1);
+        room.Match.Enemies.Clear();
+        // 행동 목록이 빈 적이 대원 곁에 있다. 행동을 고를 때마다 예외가 나므로 매 틱 진행이 실패한다.
+        EnemyDefinition broken = new EnemyDefinition("broken", "고장", 13, 1, 0, new EnemySkill[0]);
+        room.Match.Enemies.Add(new Enemy(30040, player.Position + new Vector2(40, 0), broken));
+        for (int tick = 0; tick < 60; tick++)
+        {
+            host.StepRoom(room.Match.Code, room, Rules.Step, false);
+        }
+        // 고칠 수 없는 방은 닫는다. 남겨 두면 32개 자리 중 하나를 차지한 채 오류만 쌓인다.
+        Check(host.Join(guest.Room, new EntryRequest("late")) == null, "계속 실패하는 방이 남아 있습니다");
+        // 연결도 닫아 클라이언트가 멈춘 방에 붙어 있지 않게 한다.
+        Check(!peer.Outgoing.Writer.TryWrite(new OutgoingMessage(new byte[0], -1, false)), "닫힌 방의 연결이 열려 있습니다");
+    }
+
+    private static void CrowdedLanding()
+    {
+        Fixture f = new Fixture();
+        Player late = f.Match.Join("late", "late")!;
+        // 움직이지도 행동하지도 않는 적으로 투입 지점 주변 반경 150을 간격 30으로 채운다. 어느 점이든 적과 26보다 가깝다.
+        EnemyDefinition still = new EnemyDefinition("still", "정지", 13, 1, 0, EnemyDefinition.Grunt.Skills);
+        Vector2 landing = new Vector2(1400, 1250);
+        int id = 31000;
+        for (int x = -5; x <= 5; x++)
+        {
+            for (int y = -5; y <= 5; y++)
+            {
+                Vector2 at = landing + new Vector2(x * 30, y * 30);
+                if (Vector2.Distance(at, landing) > 150 || !f.Match.Map.CanStand(at, 13))
+                {
+                    continue;
+                }
+                id++;
+                Enemy blocker = new Enemy(id, at, still);
+                blocker.NextActionAt = double.MaxValue;
+                f.Match.Enemies.Add(blocker);
+            }
+        }
+        // 캠프도 막는다.
+        Enemy guard = new Enemy(id + 1, BattleMap.Camp, still);
+        guard.NextActionAt = double.MaxValue;
+        f.Match.Enemies.Add(guard);
+        Check(f.Match.Deploy(late, landing.X, landing.Y));
+        Advance(f.Match, f.Match.Rules.DeploySeconds + 0.1);
+        // 근처와 캠프가 모두 막혀도 더 넓게 찾아 투입한다. deploying에 묶여 "0.0초 후 투입"이 계속 표시되면 안 된다.
+        Equal(late.State, "alive");
+        Check(Vector2.Distance(late.Position, landing) > 128, "막힌 범위 안에 투입되었습니다");
+        for (int i = 0; i < f.Match.Enemies.Count; i++)
+        {
+            Check(Vector2.Distance(late.Position, f.Match.Enemies[i].Position) >= 26 - 0.01, "적과 겹쳐 투입되었습니다");
+        }
+    }
+
+    private static void ControlChannel()
+    {
+        Peer peer = new Peer(1);
+        byte[] error = System.Text.Encoding.UTF8.GetBytes("{\"type\":\"error\"}");
+        Check(peer.Control.Writer.TryWrite(new OutgoingMessage(error, -1, false)));
+        // 스냅샷 통로는 용량 2에서 오래된 것부터 버린다. 스냅샷이 몰려도 오류 안내는 따로 남아 있어야 한다.
+        for (int i = 0; i < 3; i++)
+        {
+            peer.Outgoing.Writer.TryWrite(new OutgoingMessage(new byte[] { (byte)i }, -1, false));
+        }
+        Check(peer.Control.Reader.TryRead(out OutgoingMessage? kept), "오류 안내가 버려졌습니다");
+        Equal(kept!.Bytes.Length, error.Length);
+    }
+
+    private static void PublishRate()
+    {
+        // 서버의 PeriodicTimer와 같은 주기로 깨어난다. 1/30초를 100ns 단위로 바꾼 값이라 세 번이 0.1초에 조금 못 미친다.
+        // 깨어나는 시각은 예정보다 0~2ms 늦을 수 있다. 10초 동안 방송은 100번 안팎이어야 한다.
+        double period = TimeSpan.FromSeconds(Rules.Step).TotalSeconds;
+        Random random = new Random(7);
+        PublishSchedule schedule = new PublishSchedule();
+        int published = 0;
+        double current = 0;
+        for (int tick = 1; tick <= 300; tick++)
+        {
+            current = tick * period + random.NextDouble() * 0.002;
+            if (schedule.Due(current))
+            {
+                published++;
+            }
+        }
+        Check(published >= 100 && published <= 101, $"10초 동안 방송이 {published}번이었습니다");
+
+        // 서버가 5초 멈췄다 깨어나도 밀린 방송을 몰아서 보내지 않는다.
+        double resume = current + 5;
+        int burst = 0;
+        for (int tick = 0; tick < 3; tick++)
+        {
+            if (schedule.Due(resume + tick * period))
+            {
+                burst++;
+            }
+        }
+        Equal(burst, 1);
+    }
+
+    private static OutgoingMessage Text(string text)
+    {
+        return new OutgoingMessage(Encoding.UTF8.GetBytes(text), -1, false);
+    }
+
+    // 보내기 작업이 끝났는지 본다. 취소나 오류로 끝나도 끝난 것이다.
+    private static bool Finishes(Task task)
+    {
+        try
+        {
+            return task.Wait(2000);
+        }
+        catch (AggregateException)
+        {
+            return true;
+        }
+    }
+
+    private static void SendOrder()
+    {
+        // 스냅샷이 먼저 들어와 있어도 오류 안내를 먼저 보낸다.
+        Peer peer = new Peer(1);
+        RecordingSocket socket = new RecordingSocket();
+        peer.Outgoing.Writer.TryWrite(Text("snapshot"));
+        peer.Control.Writer.TryWrite(Text("error"));
+        using CancellationTokenSource stop = new CancellationTokenSource();
+        Task send = Task.Run(() => peer.Send(socket, stop.Token));
+        socket.WaitSent(2);
+        Equal(socket.Message(0), "error");
+        Equal(socket.Message(1), "snapshot");
+        // 보낼 것이 없어 기다리는 중에 들어온 pong도 곧바로 보낸다.
+        peer.Control.Writer.TryWrite(Text("pong"));
+        socket.WaitSent(3);
+        Equal(socket.Message(2), "pong");
+        // 스냅샷 통로가 닫히면(연결 교체·해제·방 닫힘) 보내기를 끝낸다.
+        peer.Outgoing.Writer.TryComplete();
+        Check(Finishes(send), "스냅샷 통로가 닫혔는데 보내기가 끝나지 않았습니다");
+        Check(send.IsCompletedSuccessfully, "스냅샷 통로가 닫혔을 때 보내기가 오류로 끝났습니다");
+    }
+
+    private static void SendCancel()
+    {
+        // 이미 취소된 채로 기다림에 들어가도 곧바로 끝나야 한다. 취소된 기다림은 바로 끝나므로 다시 기다리면 헛돈다.
+        Peer idle = new Peer(1);
+        using CancellationTokenSource cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        Task first = Task.Run(() => idle.Send(new RecordingSocket(), cancelled.Token));
+        Check(Finishes(first), "취소된 보내기가 끝나지 않고 헛돌았습니다");
+        Check(first.IsCanceled, "취소된 보내기가 취소로 끝나지 않았습니다");
+
+        // 스냅샷을 보낸 뒤 기다리는 중에 취소해도 끝나야 한다. 연결을 끊을 때 이 순서로 취소한다.
+        Peer busy = new Peer(2);
+        RecordingSocket socket = new RecordingSocket();
+        using CancellationTokenSource stop = new CancellationTokenSource();
+        Task second = Task.Run(() => busy.Send(socket, stop.Token));
+        busy.Outgoing.Writer.TryWrite(Text("snapshot"));
+        socket.WaitSent(1);
+        stop.Cancel();
+        Check(Finishes(second), "기다리는 중에 취소된 보내기가 끝나지 않았습니다");
+        Check(second.IsCanceled, "기다리는 중에 취소된 보내기가 취소로 끝나지 않았습니다");
+    }
+
+    private static void SendDrainsControl()
+    {
+        // 스냅샷 통로가 닫히는 순간 들어온 오류 안내도 보내고 끝나야 한다. 두 기다림이 함께 깨면 어느 쪽이 먼저인지
+        // 정해져 있지 않으므로, 이어서 할 일을 쌓아 두는 문맥으로 순서를 정한다.
+        // 스냅샷 통로 쪽 기다림이 먼저 깬 것을 확인한 뒤 오류 안내를 넣고, 그다음에 보내기 작업을 이어서 실행한다.
+        Peer peer = new Peer(1);
+        RecordingSocket socket = new RecordingSocket();
+        ManualContext context = new ManualContext();
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(context);
+        Task send;
+        try
+        {
+            // 보낼 것이 없으므로 두 통로를 기다리는 데까지 가서 멈춘다.
+            send = peer.Send(socket, CancellationToken.None);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+        peer.Outgoing.Writer.TryComplete();
+        Check(context.WaitForWork(2000), "스냅샷 통로가 닫혔는데 보내기 작업이 깨지 않았습니다");
+        peer.Control.Writer.TryWrite(Text("error"));
+        context.RunPending();
+        Check(send.IsCompleted, "스냅샷 통로가 닫혔는데 보내기가 끝나지 않았습니다");
+        Equal(socket.Sent, 1);
+        Equal(socket.Message(0), "error");
+    }
+
+    private static void SendWaits()
+    {
+        Peer peer = new Peer(1);
+        RecordingSocket socket = new RecordingSocket();
+        using CancellationTokenSource stop = new CancellationTokenSource();
+        Task send = Task.Run(() => peer.Send(socket, stop.Token));
+        // 처음 몇백 번은 지연 컴파일이나 작업 스레드 추가로 메모리가 한 번 늘 수 있으므로 측정에서 뺀다.
+        PumpSnapshots(peer, socket, 300);
+        long before = GC.GetTotalMemory(true);
+        PumpSnapshots(peer, socket, 2000);
+        long after = GC.GetTotalMemory(true);
+        stop.Cancel();
+        Finishes(send);
+        long grown = after - before;
+        // 스냅샷마다 제어 통로에 끝나지 않은 기다림이 하나씩 남으면 하나에 약 340 B, 2000번에 600 KB 넘게 늘어난다.
+        Check(grown < 200000, $"제어 메시지 없이 스냅샷 2000개를 보내는 동안 메모리가 {grown} B 늘었습니다");
+    }
+
+    // 스냅샷을 하나씩 넣고, 보내기 작업이 보낸 뒤 다시 기다림에 들어갈 때까지 0.1 ms 쉰다.
+    // 기다림에 들어가기 전에 다음 스냅샷을 넣으면 기다리지 않고 바로 읽으므로 검사할 상황이 생기지 않는다.
+    private static void PumpSnapshots(Peer peer, RecordingSocket socket, int count)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes("snapshot");
+        for (int i = 0; i < count; i++)
+        {
+            int sent = socket.Sent;
+            peer.Outgoing.Writer.TryWrite(new OutgoingMessage(bytes, -1, false));
+            socket.WaitSent(sent + 1);
+            long until = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 10000;
+            while (Stopwatch.GetTimestamp() < until)
+            {
+                Thread.SpinWait(20);
+            }
+        }
+    }
+
+    private static void BlockedDeployment()
+    {
+        Fixture f = new Fixture();
+        Player late = f.Match.Join("late", "late")!;
+        Enemy enemy = Target(f);
+        enemy.Position = new Vector2(1000, 600);
+        Check(!f.Match.Visible(enemy.Position));
+        Check(f.Match.Deploy(late, enemy.Position.X, enemy.Position.Y));
+        Check(!f.Match.Visible(enemy.Position));
+        Advance(f.Match, 5.1);
+        // 대기로 되돌리지 않고 가까운 빈 자리로 투입한다. 투입 성공 여부로 안개 속을 엿볼 수 없다.
+        Equal(late.State, "alive");
+        Check(late.HasDeployed);
+        double gap = Vector2.Distance(late.Position, enemy.Position);
+        Check(gap >= Rules.PlayerRadius + enemy.Definition.Radius - 0.01, "적과 겹쳐 투입되었습니다");
+        Check(gap < 80, "투입 지점에서 너무 멀리 옮겨졌습니다");
+        Check(f.Match.Map.LineOfSight(late.Position, enemy.Position), "원래 투입 지점이 보이지 않는 곳으로 옮겨졌습니다");
+        // 투입된 뒤에는 자기 시야로 적을 정상적으로 본다.
+        Check(f.Match.Visible(enemy.Position));
+    }
+}
+
+// 이어서 할 일(await 뒤의 코드)을 바로 실행하지 않고 쌓아 두는 동기화 문맥이다.
+// 검사가 원하는 때에 실행해, 스레드 순서에 달린 경합을 정해진 순서로 재현한다.
+internal sealed class ManualContext : SynchronizationContext
+{
+    private readonly Queue<KeyValuePair<SendOrPostCallback, object?>> _work = new Queue<KeyValuePair<SendOrPostCallback, object?>>();
+    private readonly object _gate = new object();
+
+    public override void Post(SendOrPostCallback callback, object? state)
+    {
+        lock (_gate)
+        {
+            _work.Enqueue(new KeyValuePair<SendOrPostCallback, object?>(callback, state));
+            Monitor.PulseAll(_gate);
+        }
+    }
+
+    // 쌓인 일이 생길 때까지 기다린다.
+    public bool WaitForWork(int milliseconds)
+    {
+        lock (_gate)
+        {
+            long deadline = Environment.TickCount64 + milliseconds;
+            while (_work.Count == 0)
+            {
+                long left = deadline - Environment.TickCount64;
+                if (left <= 0)
+                {
+                    return false;
+                }
+                Monitor.Wait(_gate, (int)left);
+            }
+            return true;
+        }
+    }
+
+    // 쌓인 일을 이 스레드에서 차례로 실행한다. 실행하는 동안 이 문맥을 현재 문맥으로 둔다.
+    public void RunPending()
+    {
+        SynchronizationContext? previous = Current;
+        SetSynchronizationContext(this);
+        try
+        {
+            while (true)
+            {
+                KeyValuePair<SendOrPostCallback, object?> item;
+                lock (_gate)
+                {
+                    if (_work.Count == 0)
+                    {
+                        return;
+                    }
+                    item = _work.Dequeue();
+                }
+                item.Key(item.Value);
+            }
+        }
+        finally
+        {
+            SetSynchronizationContext(previous);
+        }
+    }
+}
+
+// 보낸 메시지를 세는 가짜 소켓이다. 보내기 작업을 실제 네트워크 없이 검사한다.
+internal sealed class RecordingSocket : WebSocket
+{
+    private readonly List<string> _messages = new List<string>();
+    private int _sent;
+
+    public int Sent
+    {
+        get
+        {
+            return Volatile.Read(ref _sent);
+        }
+    }
+
+    public override WebSocketCloseStatus? CloseStatus
+    {
+        get
+        {
+            return null;
+        }
+    }
+
+    public override string? CloseStatusDescription
+    {
+        get
+        {
+            return null;
+        }
+    }
+
+    public override WebSocketState State
+    {
+        get
+        {
+            return WebSocketState.Open;
+        }
+    }
+
+    public override string? SubProtocol
+    {
+        get
+        {
+            return null;
+        }
+    }
+
+    public string Message(int index)
+    {
+        lock (_messages)
+        {
+            return _messages[index];
+        }
+    }
+
+    // 보낸 메시지가 count개가 될 때까지 기다린다. 처음에는 돌면서 기다리고 길어지면 양보한다.
+    public void WaitSent(int count)
+    {
+        long limit = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 2;
+        SpinWait spinner = new SpinWait();
+        while (Sent < count)
+        {
+            if (Stopwatch.GetTimestamp() > limit)
+            {
+                throw new Exception($"메시지 {count}개를 기다렸지만 {Sent}개만 보냈습니다");
+            }
+            spinner.SpinOnce();
+        }
+    }
+
+    public override Task SendAsync(ArraySegment<byte> buffer, WebSocketMessageType messageType, bool endOfMessage,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_messages)
+        {
+            // 메모리 검사에서 기록이 늘지 않도록 앞의 몇 개만 남긴다.
+            if (_messages.Count < 16)
+            {
+                _messages.Add(Encoding.UTF8.GetString(buffer));
+            }
+        }
+        Interlocked.Increment(ref _sent);
+        return Task.CompletedTask;
+    }
+
+    public override Task<WebSocketReceiveResult> ReceiveAsync(ArraySegment<byte> buffer, CancellationToken cancellationToken)
+    {
+        throw new NotSupportedException();
+    }
+
+    public override Task CloseAsync(WebSocketCloseStatus closeStatus, string? statusDescription, CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
+    public override Task CloseOutputAsync(WebSocketCloseStatus closeStatus, string? statusDescription,
+        CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
+    public override void Abort()
+    {
+    }
+
+    public override void Dispose()
+    {
+    }
+}

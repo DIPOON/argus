@@ -1,0 +1,80 @@
+name: CI
+
+# 작업은 PR로 master에 합친다. PR 브랜치 푸시마다 push와 pull_request가 겹쳐 두 번 돌지 않도록
+# push는 master에만 건다.
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  server:
+    name: 서버 검사
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - name: 빌드 (경고를 오류로 처리)
+        run: dotnet build server/Argus.Server/Argus.Server.csproj
+      - name: 서버 검사
+        run: dotnet run --project tests/Argus.Server.Tests
+
+  client:
+    name: 클라이언트 빌드
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm --prefix client ci
+      - name: 타입 검사와 프로덕션 빌드
+        run: npm --prefix client run build
+
+  browser:
+    name: 브라우저 검사
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: npm --prefix client ci
+      - name: 클라이언트를 wwwroot로 빌드
+        run: npm --prefix client run build
+      - name: Chromium 설치
+        run: npx playwright install --with-deps chromium
+        working-directory: client
+      - name: 서버를 띄우고 브라우저 검사
+        run: |
+          dotnet run --project server/Argus.Server --urls http://127.0.0.1:5077 > /tmp/argus-server.log 2>&1 &
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:5077/health > /dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          if ! curl -fsS http://127.0.0.1:5077/health > /dev/null 2>&1; then
+            echo "서버가 응답하지 않습니다"
+            cat /tmp/argus-server.log
+            exit 1
+          fi
+          npm --prefix client run test:e2e
+        env:
+          ARGUS_URL: http://127.0.0.1:5077
+      - name: 실패 기록 업로드
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            client/playwright-report/
+            client/test-results/
+          if-no-files-found: ignore
