@@ -119,6 +119,12 @@ public sealed class Peer
             bool open = await first;
             if (!open)
             {
+                // 스냅샷 통로가 닫혀 끝나더라도 이미 들어온 오류 안내와 pong은 마저 보낸다.
+                // 두 기다림이 함께 깨면 어느 쪽이 먼저인지 정해져 있지 않아, 여기서 비우지 않으면 남은 메시지를 버린다.
+                while (Control.Reader.TryRead(out OutgoingMessage? remaining))
+                {
+                    await socket.SendAsync(remaining.Bytes.AsMemory(), WebSocketMessageType.Text, true, token);
+                }
                 return;
             }
         }

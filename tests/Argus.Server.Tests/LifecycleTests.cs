@@ -41,6 +41,7 @@ internal static class LifecycleTests
         tests.Add(new TestCase("Error and pong messages use their own channel and are never dropped behind snapshots", ControlChannel));
         tests.Add(new TestCase("Sending puts error and pong ahead of snapshots, wakes for them and ends when snapshots close", SendOrder));
         tests.Add(new TestCase("Sending ends on cancellation instead of spinning on a cancelled wait", SendCancel));
+        tests.Add(new TestCase("Sending still delivers an error that arrives as the snapshot channel closes", SendDrainsControl));
         tests.Add(new TestCase("Sending snapshots alone does not pile up unfinished waits on the control channel", SendWaits));
         tests.Add(new TestCase("Snapshots go out ten times a second on the real timer period and do not burst after a stall", PublishRate));
     }
@@ -707,6 +708,31 @@ internal static class LifecycleTests
         stop.Cancel();
         Check(Finishes(second), "기다리는 중에 취소된 보내기가 끝나지 않았습니다");
         Check(second.IsCanceled, "기다리는 중에 취소된 보내기가 취소로 끝나지 않았습니다");
+    }
+
+    private static void SendDrainsControl()
+    {
+        // 스냅샷 통로가 닫히는 순간 들어온 오류 안내도 보내고 끝나야 한다. 두 기다림이 함께 깨면 어느 쪽이
+        // 먼저인지 정해져 있지 않으므로 여러 번 되풀이한다. 고치기 전 코드는 이 순서에서 거의 매번 버렸다.
+        int lost = 0;
+        for (int i = 0; i < 20; i++)
+        {
+            Peer peer = new Peer(i);
+            RecordingSocket socket = new RecordingSocket();
+            Task send = Task.Run(() => peer.Send(socket, CancellationToken.None));
+            peer.Outgoing.Writer.TryWrite(Text("snapshot"));
+            socket.WaitSent(1);
+            // 보내기 작업이 두 통로를 기다리는 상태가 되도록 잠깐 둔다.
+            Thread.Sleep(1);
+            peer.Outgoing.Writer.TryComplete();
+            peer.Control.Writer.TryWrite(Text("error"));
+            Check(Finishes(send), "스냅샷 통로가 닫혔는데 보내기가 끝나지 않았습니다");
+            if (socket.Sent < 2)
+            {
+                lost++;
+            }
+        }
+        Equal(lost, 0);
     }
 
     private static void SendWaits()
