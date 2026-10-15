@@ -147,8 +147,11 @@ internal static class Program
                 host.Attach(Text(hello.RootElement, "room"), Text(hello.RootElement, "token"));
             if (!attached.HasValue)
             {
-                await socket.CloseAsync(WebSocketCloseStatus.PolicyViolation,
-                    "참가 정보가 만료되었습니다", lifetime.Token);
+                // 상대의 종료 응답은 1초까지만 기다린다. 무기한 기다리면 종료에 답하지 않는 클라이언트가
+                // 참가 정보 없이 연결을 붙잡아 둘 수 있다. keep-alive가 TCP 연결을 계속 살려 둔다.
+                using CancellationTokenSource closeTimeout = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
+                closeTimeout.CancelAfter(TimeSpan.FromSeconds(1));
+                await socket.CloseAsync(WebSocketCloseStatus.PolicyViolation, "참가 정보가 만료되었습니다", closeTimeout.Token);
                 return;
             }
             room = attached.Value.Room;
@@ -161,9 +164,19 @@ internal static class Program
             try
             {
                 await Task.WhenAny(receive, send);
-                if (peer.Replaced)
+                // 수신이 아직 기다리는 중이면 송신 쪽이 먼저 끝난 것이다. 연결 교체나 방 닫힘처럼 서버가 먼저 닫는 경우다.
+                // 종료 메시지를 먼저 보내고 상대의 응답을 기다린다. 기다리는 수신을 그냥 취소하면 소켓이 중단되어
+                // 상대는 정상 종료 대신 1006을 받는다.
+                if (!receive.IsCompleted)
                 {
-                    await CloseReplaced(socket, receive, send, lifetime.Token);
+                    WebSocketCloseStatus status = WebSocketCloseStatus.NormalClosure;
+                    string reason = "연결 종료";
+                    if (peer.Replaced)
+                    {
+                        status = ReplacedStatus;
+                        reason = ReplacedReason;
+                    }
+                    await CloseFirst(socket, receive, send, status, reason, lifetime.Token);
                 }
             }
             finally
@@ -231,9 +244,11 @@ internal static class Program
     private const WebSocketCloseStatus ReplacedStatus = (WebSocketCloseStatus)4001;
     private const string ReplacedReason = "다른 연결로 교체됨";
 
-    // 교체된 연결에 종료 코드를 보낸다. 수신을 먼저 취소하면 소켓이 바로 중단되어 4001 대신 비정상 종료로
-    // 보일 수 있으므로, 남은 전송을 마치고 4001을 보낸 뒤 상대의 종료 응답까지 기다린다. 1초 안에 끝나지 않으면 그만둔다.
-    private static async Task CloseReplaced(WebSocket socket, Task receive, Task send, CancellationToken token)
+    // 서버가 먼저 닫을 때 종료 메시지를 보낸다. 수신을 먼저 취소하면 소켓이 바로 중단되어 정상 종료 대신
+    // 비정상 종료(1006)로 보이므로, 남은 전송을 마치고 종료 메시지를 보낸 뒤 상대의 종료 응답까지 기다린다.
+    // 1초 안에 끝나지 않으면 그만둔다.
+    private static async Task CloseFirst(WebSocket socket, Task receive, Task send, WebSocketCloseStatus status, string reason,
+        CancellationToken token)
     {
         using CancellationTokenSource closeTimeout = CancellationTokenSource.CreateLinkedTokenSource(token);
         closeTimeout.CancelAfter(TimeSpan.FromSeconds(1));
@@ -251,11 +266,11 @@ internal static class Program
             {
                 return;
             }
-            await socket.CloseOutputAsync(ReplacedStatus, ReplacedReason, closeTimeout.Token);
+            await socket.CloseOutputAsync(status, reason, closeTimeout.Token);
             await receive.WaitAsync(closeTimeout.Token);
             if (socket.State == WebSocketState.CloseSent)
             {
-                await socket.CloseAsync(ReplacedStatus, ReplacedReason, closeTimeout.Token);
+                await socket.CloseAsync(status, reason, closeTimeout.Token);
             }
         }
         catch (Exception error) when (IsConnectionError(error))

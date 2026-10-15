@@ -1,4 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
+import net from 'node:net';
+import crypto from 'node:crypto';
 import type { Snapshot } from '../src/types';
 
 function observe(page: Page) {
@@ -231,6 +233,28 @@ test('a client that closes first gets a clean close back', async ({ request }) =
     ws.addEventListener('close', event => resolve({ code: event.code, clean: event.wasClean })));
   ws.close(1000);
   expect(await closed).toEqual({ code: 1000, clean: true });
+});
+
+test('a connection with a wrong hello that never answers the close is dropped within a couple of seconds', async () => {
+  // 종료 프레임에 답하지 않는 연결을 직접 만든다. 서버가 상대의 종료 응답을 무기한 기다리면 인증 없이 연결이 계속 남는다.
+  const target = new URL(process.env.ARGUS_URL ?? 'http://127.0.0.1:5077');
+  const socket = net.connect(Number(target.port), target.hostname);
+  await new Promise<void>(resolve => socket.once('connect', () => resolve()));
+  socket.write(`GET /ws HTTP/1.1\r\nHost: ${target.host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n` +
+    `Sec-WebSocket-Key: ${crypto.randomBytes(16).toString('base64')}\r\nSec-WebSocket-Version: 13\r\n\r\n`);
+  await new Promise<void>(resolve => socket.once('data', () => resolve()));
+  const closed = new Promise<number>(resolve => socket.once('close', () => resolve(Date.now())));
+  socket.on('data', () => {});
+  socket.on('error', () => {});
+  // 클라이언트가 보내는 프레임은 마스크를 씌워야 한다.
+  const payload = Buffer.from(JSON.stringify({ type: 'hello', room: 'NOPE23', token: 'wrong' }));
+  const mask = crypto.randomBytes(4);
+  const masked = Buffer.from(payload.map((value, index) => value ^ mask[index % 4]));
+  const sentAt = Date.now();
+  socket.write(Buffer.concat([Buffer.from([0x81, 0x80 | payload.length]), mask, masked]));
+  const seconds = (await Promise.race([closed, new Promise<number>(resolve => setTimeout(() => resolve(Number.NaN), 4000))]) - sentAt) / 1000;
+  socket.destroy();
+  expect(seconds).toBeLessThan(2.5);
 });
 
 test('wire protocol rejects forged state, invalid slots, replay and stolen identity; late join works', async ({ request }) => {
