@@ -169,6 +169,38 @@ test('a skill key held through deployment does not cast after landing until it i
   expect(me.errors).toEqual([]);
 });
 
+test('a mouse button held while the window loses focus is not a new press when it comes back', async ({ page }) => {
+  const me = observe(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: '새 작전 시작' }).click();
+  await expect.poll(() => me.player?.state).toBe('waiting');
+  await page.getByRole('button', { name: '캠프 선택' }).click();
+  await page.locator('#deploy').click();
+  await expect.poll(() => me.player?.state, { timeout: 8000 }).toBe('alive');
+  await page.keyboard.down('KeyD'); await page.keyboard.down('KeyS');
+  await page.waitForTimeout(470);
+  await page.keyboard.up('KeyD'); await page.keyboard.up('KeyS');
+  await expect.poll(() => me.player?.mana).toBe(24);
+  const canvas = (await page.locator('canvas').boundingBox())!;
+  await page.mouse.move(canvas.x + canvas.width * .05, canvas.y + canvas.height / 2);
+  // 좌클릭을 쥔 채 창이 포커스를 잃었다가 돌아온다. 돌아와서 마우스를 움직여도 새로 누른 것이 아니므로 타격이 나가면 안 된다.
+  await page.mouse.down({ button: 'left' });
+  await expect.poll(() => me.player?.mana).toBeLessThan(24);
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await expect.poll(() => me.player?.busy).toBe(0);
+  const kept = me.player!.mana;
+  await page.mouse.move(canvas.x + canvas.width * .06, canvas.y + canvas.height / 2);
+  await page.waitForTimeout(1200);
+  expect(me.player!.mana).toBe(kept);
+  // 떼었다가 다시 누르면 나간다.
+  await page.mouse.up({ button: 'left' });
+  await page.mouse.down({ button: 'left' });
+  await expect.poll(() => me.player?.mana).toBe(kept - 1);
+  await page.mouse.up({ button: 'left' });
+  expect(me.player!.state).toBe('alive');
+  expect(me.errors).toEqual([]);
+});
+
 test('the deploy button sends one request even when it is clicked twice quickly', async ({ page }) => {
   const me = observe(page);
   const sent: string[] = [];

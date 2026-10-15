@@ -131,7 +131,16 @@ function releaseSkills() {
 // 그래서 세 이벤트 모두에서 event.buttons(지금 눌린 버튼 비트)로 상태를 다시 맞춘다.
 // 직전 이벤트와 비교해 새로 눌린 버튼만 누름으로 본다. 투입 클릭을 쥔 채 살아난 순간 타격이 나가지 않게 한다.
 let pointerButtons = 0;
-function syncButtons(buttons: number, allowPress: boolean) {
+// 입력을 비운 뒤(창을 다녀왔을 때 등) 처음 받은 pointermove·pointerup의 버튼은 비우기 전부터 쥐고 있던 것이다.
+// 새 누름으로 치지 않고 기준값으로만 받는다. 0으로 비우면 쥐고 있던 버튼이 돌아온 뒤 첫 움직임에서 새로 누른 것으로
+// 보여 기술이 나간다. pointerdown은 아무 버튼도 누르지 않은 상태에서만 오므로(fresh) 그대로 새 누름으로 본다.
+let pointerBaseline = false;
+function syncButtons(buttons: number, allowPress: boolean, fresh = false) {
+  if (pointerBaseline) {
+    pointerBaseline = false;
+    if (!fresh) { pointerButtons = buttons; return; }
+    pointerButtons = 0;
+  }
   for (const [button, bit, slot] of [[0, 1, 1], [2, 2, 2]] as const) {
     const pressed = (buttons & bit) !== 0 && (pointerButtons & bit) === 0;
     if (pressed && allowPress && !mouseButtons.has(button)) { mouseButtons.add(button); pressSlot(slot); }
@@ -158,7 +167,7 @@ function toast(text: string) {
   toastTimer = window.setTimeout(() => { $('toast').hidden = true; }, 3500);
 }
 function clearInput() {
-  keys.clear(); mouseButtons.clear(); slotOrder.length = 0; pointerButtons = 0;
+  keys.clear(); mouseButtons.clear(); slotOrder.length = 0; pointerBaseline = true;
   if (world) world.control = { x: 0, y: 0, aim: world.control.aim, slot: 0 };
   // 서버는 작전 중 살아 있는 대원의 입력만 받는다. 30Hz 입력과 같은 조건일 때만 멈춤 입력을 보낸다.
   if (me()?.state === 'alive' && snapshot?.phase === 'active') sendInput(0, 0, world?.control.aim ?? 0, 0);
@@ -205,10 +214,10 @@ async function openOperation() {
       mouse = { x: event.clientX, y: event.clientY, known: true };
       if (event.button === 0 && me()?.state === 'waiting' && snapshot?.phase !== 'ended') {
         const point = world.screenToWorld(event.clientX, event.clientY);
-        syncButtons(event.buttons, false);
+        syncButtons(event.buttons, false, true);
         if (!world.canStand(point)) { toast('벽을 피해 빈 지면을 선택하세요.'); return; }
         world.landing = point; updateUi();
-      } else { syncButtons(event.buttons, me()?.state === 'alive'); }
+      } else { syncButtons(event.buttons, me()?.state === 'alive', true); }
     });
     canvas.addEventListener('contextmenu', event => event.preventDefault());
   }
