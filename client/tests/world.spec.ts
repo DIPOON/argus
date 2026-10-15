@@ -155,6 +155,48 @@ test('enemy tells refresh color and disappear immediately with lost visibility',
   expect(result.removed).toBe(true); expect(result.hidden).toBe(true);
 });
 
+test('gauges and guard arcs start their own path instead of a line from an earlier point', async ({ page }) => {
+  const state = snapshot();
+  // 적의 예고 게이지, 대원의 받아치기 방어 호, 탈출 진행도는 모두 원호로 그린다.
+  state.enemies = [elite(910)];
+  state.enemies[0].action = { id: 911, skill: 'block', kind: 'block', slot: 0, tier: 1, phase: 'telegraph',
+    aim: Math.PI, startedAt: 9.5, contactAt: 11, activeUntil: 11.25, endsAt: 12, range: 62, halfWidth: 15 };
+  state.rules.skills = [{ id: 'parry', kind: 'block', mana: 1, contactAfter: 0, activeSeconds: .55, duration: .98,
+    range: 54, halfWidth: 10, guardsFront: true, hasFollowup: true, singleTarget: false, breaksStructures: false,
+    followupBreaksStructures: true }];
+  state.players[0].actions = [{ id: 912, skill: 'parry', kind: 'block', slot: 2, tier: 1, phase: 'active', aim: 0,
+    startedAt: 9.8, contactAt: 9.8, activeUntil: 10.35, endsAt: 10.78, range: 54, halfWidth: 10 }];
+  state.extraction = { ...state.extraction, progress: 6, unlocked: true };
+  const strays = await page.evaluate(state => {
+    type Step = { action: string; data: number[] };
+    type Drawing = { context: { instructions: { data: { path?: { instructions: Step[] } } }[] } };
+    const world = window.testWorld as unknown as { update(s: unknown): void; draw(dt: number): void; units: Drawing; props: Drawing };
+    world.update(structuredClone(state)); world.draw(1 / 60);
+    const found: string[] = [];
+    let arcs = 0;
+    for (const drawing of [world.units, world.props]) {
+      for (const instruction of drawing.context.instructions) {
+        const steps = instruction.data.path?.instructions ?? [];
+        steps.forEach((step, index) => {
+          if (step.action !== 'arc') return;
+          arcs++;
+          if (index === 0) return;
+          // 원호 앞에 다른 점이 있으면 그 점에서 원호 시작점까지 직선이 그어진다.
+          const [x, y, radius, start] = step.data;
+          const previous = steps[index - 1];
+          const sx = x + radius * Math.cos(start), sy = y + radius * Math.sin(start);
+          if (previous.action !== 'moveTo' || Math.hypot(previous.data[0] - sx, previous.data[1] - sy) > 1) {
+            found.push(`${previous.action} ${previous.data.slice(0, 2).join(',')} → ${sx.toFixed(0)},${sy.toFixed(0)}`);
+          }
+        });
+      }
+    }
+    return { arcs, found };
+  }, state);
+  expect(strays.arcs).toBe(3);
+  expect(strays.found).toEqual([]);
+});
+
 test('prediction blocks enemy bodies while allowing teammate overlap', async ({ page }) => {
   const state = snapshot();
   state.enemies = [elite(900)];

@@ -153,7 +153,8 @@ export class World {
     const f = { x: Math.cos(aim), y: Math.sin(aim) };
     if (definition?.guardsFront && !followup) {
       const half = this.snapshot!.rules.guardHalfAngle;
-      g.arc(p.x, p.y, 28, aim - half, aim + half).stroke({ color, width: 5 });
+      // 원호는 새 경로로 시작한다(아래 예고 게이지 주석 참고).
+      g.beginPath().arc(p.x, p.y, 28, aim - half, aim + half).stroke({ color, width: 5 });
       g.moveTo(p.x, p.y).lineTo(p.x + Math.cos(aim - half) * 28, p.y + Math.sin(aim - half) * 28)
         .moveTo(p.x, p.y).lineTo(p.x + Math.cos(aim + half) * 28, p.y + Math.sin(aim + half) * 28).stroke({ color, width: 1, alpha: .4 });
       return;
@@ -168,7 +169,9 @@ export class World {
     if (telegraph && !player) {
       const fraction = Math.max(0, Math.min(1, (now - action.startedAt) / (action.contactAt - action.startedAt)));
       const radius = 32;
-      g.arc(p.x, p.y, radius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * fraction).stroke({ color, width: 3 });
+      // Pixi는 fill·stroke 뒤의 다음 경로를 직전 경로의 마지막 점에서 시작한다. 직전이 다각형이면 그 점을 몰라 원점(0, 0)이 되어,
+      // 원호가 지도 왼쪽 위에서부터 직선으로 이어져 그려진다. 원호는 beginPath로 새 경로를 열고 그린다.
+      g.beginPath().arc(p.x, p.y, radius, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * fraction).stroke({ color, width: 3 });
     }
     if (kind === 'channel') {
       for (const sign of [-1, 1]) {
@@ -271,7 +274,8 @@ export class World {
     this.label('camp', 'CAMP · 권장 투입', s.map.campX, s.map.campY + 105, colors.teal, 15);
     const ext = s.extraction;
     g.circle(ext.x, ext.y, 80).fill({ color: colors.teal, alpha: ext.unlocked ? .12 : .025 }).stroke({ color: colors.teal, alpha: ext.unlocked ? .9 : .25, width: 2 });
-    if (ext.progress > 0) g.arc(ext.x, ext.y, 80, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ext.progress / ext.duration).stroke({ color: colors.lime, width: 7 });
+    // 원호는 새 경로로 시작한다. 그러지 않으면 직전 경로의 점(대개 원점)에서부터 직선이 이어진다.
+    if (ext.progress > 0) g.beginPath().arc(ext.x, ext.y, 80, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ext.progress / ext.duration).stroke({ color: colors.lime, width: 7 });
     this.label('extract', ext.unlocked ? '↑ 탈출 · 구역 확보' : '↑ 탈출 지점', ext.x, ext.y + 102, colors.teal, 15);
     for (const f of s.facilities) {
       const color = f.hp > 0 ? colors.red : 0x64706a;
