@@ -733,27 +733,31 @@ internal static class LifecycleTests
 
     private static void SendDrainsControl()
     {
-        // 스냅샷 통로가 닫히는 순간 들어온 오류 안내도 보내고 끝나야 한다. 두 기다림이 함께 깨면 어느 쪽이
-        // 먼저인지 정해져 있지 않으므로 여러 번 되풀이한다. 고치기 전 코드는 이 순서에서 거의 매번 버렸다.
-        int lost = 0;
-        for (int i = 0; i < 20; i++)
+        // 스냅샷 통로가 닫히는 순간 들어온 오류 안내도 보내고 끝나야 한다. 두 기다림이 함께 깨면 어느 쪽이 먼저인지
+        // 정해져 있지 않으므로, 이어서 할 일을 쌓아 두는 문맥으로 순서를 정한다.
+        // 스냅샷 통로 쪽 기다림이 먼저 깬 것을 확인한 뒤 오류 안내를 넣고, 그다음에 보내기 작업을 이어서 실행한다.
+        Peer peer = new Peer(1);
+        RecordingSocket socket = new RecordingSocket();
+        ManualContext context = new ManualContext();
+        SynchronizationContext? previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(context);
+        Task send;
+        try
         {
-            Peer peer = new Peer(i);
-            RecordingSocket socket = new RecordingSocket();
-            Task send = Task.Run(() => peer.Send(socket, CancellationToken.None));
-            peer.Outgoing.Writer.TryWrite(Text("snapshot"));
-            socket.WaitSent(1);
-            // 보내기 작업이 두 통로를 기다리는 상태가 되도록 잠깐 둔다.
-            Thread.Sleep(1);
-            peer.Outgoing.Writer.TryComplete();
-            peer.Control.Writer.TryWrite(Text("error"));
-            Check(Finishes(send), "스냅샷 통로가 닫혔는데 보내기가 끝나지 않았습니다");
-            if (socket.Sent < 2)
-            {
-                lost++;
-            }
+            // 보낼 것이 없으므로 두 통로를 기다리는 데까지 가서 멈춘다.
+            send = peer.Send(socket, CancellationToken.None);
         }
-        Equal(lost, 0);
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+        peer.Outgoing.Writer.TryComplete();
+        Check(context.WaitForWork(2000), "스냅샷 통로가 닫혔는데 보내기 작업이 깨지 않았습니다");
+        peer.Control.Writer.TryWrite(Text("error"));
+        context.RunPending();
+        Check(send.IsCompleted, "스냅샷 통로가 닫혔는데 보내기가 끝나지 않았습니다");
+        Equal(socket.Sent, 1);
+        Equal(socket.Message(0), "error");
     }
 
     private static void SendWaits()
@@ -811,6 +815,69 @@ internal static class LifecycleTests
         Check(f.Match.Map.LineOfSight(late.Position, enemy.Position), "원래 투입 지점이 보이지 않는 곳으로 옮겨졌습니다");
         // 투입된 뒤에는 자기 시야로 적을 정상적으로 본다.
         Check(f.Match.Visible(enemy.Position));
+    }
+}
+
+// 이어서 할 일(await 뒤의 코드)을 바로 실행하지 않고 쌓아 두는 동기화 문맥이다.
+// 검사가 원하는 때에 실행해, 스레드 순서에 달린 경합을 정해진 순서로 재현한다.
+internal sealed class ManualContext : SynchronizationContext
+{
+    private readonly Queue<KeyValuePair<SendOrPostCallback, object?>> _work = new Queue<KeyValuePair<SendOrPostCallback, object?>>();
+    private readonly object _gate = new object();
+
+    public override void Post(SendOrPostCallback callback, object? state)
+    {
+        lock (_gate)
+        {
+            _work.Enqueue(new KeyValuePair<SendOrPostCallback, object?>(callback, state));
+            Monitor.PulseAll(_gate);
+        }
+    }
+
+    // 쌓인 일이 생길 때까지 기다린다.
+    public bool WaitForWork(int milliseconds)
+    {
+        lock (_gate)
+        {
+            long deadline = Environment.TickCount64 + milliseconds;
+            while (_work.Count == 0)
+            {
+                long left = deadline - Environment.TickCount64;
+                if (left <= 0)
+                {
+                    return false;
+                }
+                Monitor.Wait(_gate, (int)left);
+            }
+            return true;
+        }
+    }
+
+    // 쌓인 일을 이 스레드에서 차례로 실행한다. 실행하는 동안 이 문맥을 현재 문맥으로 둔다.
+    public void RunPending()
+    {
+        SynchronizationContext? previous = Current;
+        SetSynchronizationContext(this);
+        try
+        {
+            while (true)
+            {
+                KeyValuePair<SendOrPostCallback, object?> item;
+                lock (_gate)
+                {
+                    if (_work.Count == 0)
+                    {
+                        return;
+                    }
+                    item = _work.Dequeue();
+                }
+                item.Key(item.Value);
+            }
+        }
+        finally
+        {
+            SetSynchronizationContext(previous);
+        }
     }
 }
 
