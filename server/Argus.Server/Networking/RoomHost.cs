@@ -178,7 +178,7 @@ public sealed class Room
     private static readonly TimeSpan IdleRoomGrace = TimeSpan.FromMinutes(15);
 
     // 연결이 모두 끊긴 방을 지울지 정한다. 기준은 마지막 참가·접속·연결 해제 시각이다.
-    // 복구를 기다리는 대원이 있으면 15분, 대원이 아무도 없으면 30초 뒤에 지운다.
+    // 복구를 기다리는 대원이 있으면 15분, 대원이 아무도 없으면 2초(EmptyRoomGrace) 뒤에 지운다.
     public bool Expired(DateTime now)
     {
         if (Peers.Count > 0)

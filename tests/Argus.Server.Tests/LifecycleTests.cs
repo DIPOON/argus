@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net;
 using System.Net.WebSockets;
 using System.Numerics;
 using System.Text;
@@ -31,6 +32,7 @@ internal static class LifecycleTests
         tests.Add(new TestCase("A long session keeps its room for the full retention time after the last disconnect", RoomRetention));
         tests.Add(new TestCase("A room with nobody left is released soon instead of holding a slot for fifteen minutes", EmptyRoomExpiry));
         tests.Add(new TestCase("One address cannot hold more than a few rooms at once", RoomsPerAddress));
+        tests.Add(new TestCase("Limits count an IPv6 /64 as one address and leave local and private networks out of the room cap", AddressGrouping));
         tests.Add(new TestCase("Hidden spawns do not advance the id sequence that player actions reveal", HiddenIdGaps));
         tests.Add(new TestCase("Walls, rules and map are resent until delivered and walls again after they change", StaticParts));
         tests.Add(new TestCase("Tokens of removed players are cleaned when a room steps", TokenCleanup));
@@ -415,6 +417,36 @@ internal static class LifecycleTests
             Guest? guest = host.Create(new EntryRequest("c"), null, out local);
             Check(guest != null && !local, "상한에서 뺀 주소의 방 생성이 막혔습니다");
         }
+    }
+
+    private static void AddressGrouping()
+    {
+        // IPv6 사용자는 보통 /64 대역을 통째로 받아 요청마다 주소를 바꿀 수 있다. 두 제한 모두 /64를 한 주소로 센다.
+        IPAddress first = IPAddress.Parse("2001:db8:1:2::1");
+        IPAddress sameBlock = IPAddress.Parse("2001:db8:1:2:ffff:abcd:1:5");
+        IPAddress otherBlock = IPAddress.Parse("2001:db8:1:3::1");
+        Equal(AddressKeys.ForRoomLimit(first), AddressKeys.ForRoomLimit(sameBlock));
+        Check(AddressKeys.ForRoomLimit(first) != AddressKeys.ForRoomLimit(otherBlock), "다른 /64 대역을 한 주소로 셌습니다");
+        Equal(AddressKeys.ForRateLimit(first), AddressKeys.ForRateLimit(sameBlock));
+        Check(AddressKeys.ForRateLimit(first) != AddressKeys.ForRateLimit(otherBlock), "참가 제한이 다른 /64 대역을 한 주소로 셌습니다");
+
+        // IPv4는 주소 하나가 단위다. IPv6에 담긴 IPv4 주소도 같은 주소로 센다.
+        Equal(AddressKeys.ForRoomLimit(IPAddress.Parse("203.0.113.5")), "203.0.113.5");
+        Equal(AddressKeys.ForRoomLimit(IPAddress.Parse("::ffff:203.0.113.5")), "203.0.113.5");
+        Equal(AddressKeys.ForRateLimit(IPAddress.Parse("::ffff:203.0.113.5")), "203.0.113.5");
+
+        // 같은 기계와 사설망에서 온 접속은 방 수 상한에서 뺀다. Docker로 띄우면 모든 요청이 브리지 주소(172.17.0.1 등)로 온다.
+        string[] local = new string[] { "127.0.0.1", "::1", "172.17.0.1", "172.31.255.1", "10.0.0.3", "192.168.1.10", "fd00::1", "fe80::1", "169.254.1.1", "::ffff:192.168.0.2" };
+        for (int i = 0; i < local.Length; i++)
+        {
+            Check(AddressKeys.ForRoomLimit(IPAddress.Parse(local[i])) == null, $"{local[i]}을 방 수 상한에 넣었습니다");
+        }
+        // 사설 대역 경계 밖은 공개 주소로 센다.
+        Check(AddressKeys.ForRoomLimit(IPAddress.Parse("172.32.0.1")) != null, "172.32.0.1을 사설망으로 보았습니다");
+        Check(AddressKeys.ForRoomLimit(IPAddress.Parse("172.15.255.1")) != null, "172.15.255.1을 사설망으로 보았습니다");
+        // 참가 제한은 모든 주소에 건다. 주소를 모르면 하나로 묶는다.
+        Equal(AddressKeys.ForRateLimit(IPAddress.Parse("172.17.0.1")), "172.17.0.1");
+        Equal(AddressKeys.ForRateLimit(null), "local");
     }
 
     private static void HiddenIdGaps()
