@@ -70,7 +70,7 @@ slots를 생략하면 `["strike","parry","grab","strike"]`. 길이는 정확히 
 | 필드 | 내용 |
 | --- | --- |
 | type, version, room, you | snapshot, 3, 방 코드, 수신자 공개 ID |
-| now, elapsed | 방 시간 / 첫 투입 이후 임무 시간. 임무 종료 후 elapsed 고정 |
+| now, elapsed | 방 시간 / 첫 투입 이후 임무 시간. 임무 종료 후 elapsed 고정. 서버는 1/30초 틱 단위로만 진행하고, 보낼 때는 소수 둘째 자리로 반올림한다 |
 | phase, result | staging / active / ended, null / success / failure |
 | pulse, nextPulse | 전역 피해 회차 / 다음 피해까지 초 |
 | map | width, height, cell, columns, rows, campX, campY. 아직 받지 못했을 때만 온다 |
