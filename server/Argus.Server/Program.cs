@@ -73,41 +73,47 @@ internal static class Program
 
     private static IResult CreateRoom(EntryRequest request, RoomHost host, HttpContext context)
     {
-        if (!request.Valid)
+        EntryFailure failure;
+        Guest? guest = host.Create(request, AddressKeys.ForRoomLimit(context.Connection.RemoteIpAddress), out failure);
+        if (guest != null)
         {
-            return Results.Json(new { error = "선택할 수 없는 장비입니다." }, statusCode: 400);
+            return Results.Json(guest);
         }
-
-        bool addressFull;
-        Guest? guest = host.Create(request, AddressKeys.ForRoomLimit(context.Connection.RemoteIpAddress), out addressFull);
-        if (guest == null && addressFull)
+        // 방을 만든 직후 참가에 실패한 경우다. 지금 규칙으로는 생기지 않지만 서버가 가득 찼다고 잘못 알리지 않는다.
+        if (failure == EntryFailure.Unavailable)
         {
-            return Results.Json(new { error = "이 주소에서 연 작전이 너무 많습니다. 이전 작전이 정리된 뒤 다시 시도하세요." }, statusCode: 429);
+            return Results.Json(new { error = "작전을 만들지 못했습니다. 잠시 뒤 다시 시도하세요." }, statusCode: 500);
         }
-        if (guest == null)
-        {
-            return Results.Json(new { error = "서버의 작전 공간이 가득 찼습니다." }, statusCode: 503);
-        }
-        return Results.Json(guest);
+        return EntryError(failure);
     }
 
     private static IResult JoinRoom(string code, EntryRequest request, RoomHost host)
     {
-        if (!request.Valid)
+        EntryFailure failure;
+        Guest? guest = host.Join(code, request, out failure);
+        if (guest != null)
+        {
+            return Results.Json(guest);
+        }
+        return EntryError(failure);
+    }
+
+    // 방 만들기와 참가가 실패한 이유를 HTTP 응답으로 바꾼다. 장비 검증은 RoomHost가 한 곳에서 한다.
+    private static IResult EntryError(EntryFailure failure)
+    {
+        if (failure == EntryFailure.InvalidRequest)
         {
             return Results.Json(new { error = "선택할 수 없는 장비입니다." }, statusCode: 400);
         }
-
-        Guest? guest = null;
-        if (code.Length == 6)
+        if (failure == EntryFailure.AddressFull)
         {
-            guest = host.Join(code, request);
+            return Results.Json(new { error = "이 주소에서 연 작전이 너무 많습니다. 이전 작전이 정리된 뒤 다시 시도하세요." }, statusCode: 429);
         }
-        if (guest == null)
+        if (failure == EntryFailure.ServerFull)
         {
-            return Results.Json(new { error = "방이 없거나, 가득 찼거나, 종료된 작전입니다." }, statusCode: 409);
+            return Results.Json(new { error = "서버의 작전 공간이 가득 찼습니다." }, statusCode: 503);
         }
-        return Results.Json(guest);
+        return Results.Json(new { error = "방이 없거나, 가득 찼거나, 종료된 작전입니다." }, statusCode: 409);
     }
 
     private static async Task HandleWebSocket(HttpContext context, RoomHost host, ILoggerFactory loggers)

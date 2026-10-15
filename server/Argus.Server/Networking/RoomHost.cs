@@ -233,6 +233,20 @@ public sealed class EntryRequest
     }
 }
 
+// 방 만들기와 참가가 실패한 이유다. HTTP 처리가 이 값으로 상태 코드와 안내를 고른다.
+public enum EntryFailure
+{
+    None,
+    // 선택할 수 없는 장비를 골랐다.
+    InvalidRequest,
+    // 서버의 방이 모두 찼다.
+    ServerFull,
+    // 이 주소가 만든 방이 이미 상한만큼 있다.
+    AddressFull,
+    // 방이 없거나, 가득 찼거나, 끝났다. 방을 만든 직후 참가에 실패한 경우도 여기에 든다.
+    Unavailable
+}
+
 public sealed class RoomHost : BackgroundService
 {
     public static readonly JsonSerializerOptions Json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
@@ -258,17 +272,18 @@ public sealed class RoomHost : BackgroundService
     // 주소별 상한을 적용하지 않고 만든다. 검사처럼 접속 주소가 없을 때 쓴다.
     public Guest? Create(EntryRequest request)
     {
-        bool addressFull;
-        return Create(request, null, out addressFull);
+        EntryFailure failure;
+        return Create(request, null, out failure);
     }
 
-    // address가 null이면 주소별 상한을 적용하지 않는다.
-    // addressFull은 이 주소가 만든 방이 이미 상한만큼 있어서 거절했을 때 켠다.
-    public Guest? Create(EntryRequest request, string? address, out bool addressFull)
+    // address가 null이면 주소별 상한을 적용하지 않는다. 만들지 못하면 null을 돌려주고 failure에 이유를 담는다.
+    // 장비 검증은 여기서 한다. HTTP 처리는 따로 검증하지 않고 failure로 상태 코드를 고른다.
+    public Guest? Create(EntryRequest request, string? address, out EntryFailure failure)
     {
-        addressFull = false;
+        failure = EntryFailure.None;
         if (!request.Valid)
         {
+            failure = EntryFailure.InvalidRequest;
             return null;
         }
 
@@ -277,11 +292,12 @@ public sealed class RoomHost : BackgroundService
         {
             if (_rooms.Count >= 32)
             {
+                failure = EntryFailure.ServerFull;
                 return null;
             }
             if (address != null && CountRooms(address) >= MaxRoomsPerAddress)
             {
-                addressFull = true;
+                failure = EntryFailure.AddressFull;
                 return null;
             }
             do
@@ -298,7 +314,17 @@ public sealed class RoomHost : BackgroundService
             } while (!_rooms.TryAdd(room.Match.Code, room));
         }
 
-        return Join(room.Match.Code, request);
+        Guest? guest = Join(room.Match.Code, request, out failure);
+        if (guest == null)
+        {
+            // 방을 만든 직후 참가에 실패하면 빈 방을 바로 지운다. 남겨 두면 빈 방이 2초 동안 자리를 차지한다.
+            // 방 삭제는 그 방의 잠금 안에서 한다.
+            lock (room.Gate)
+            {
+                _rooms.TryRemove(room.Match.Code, out _);
+            }
+        }
+        return guest;
     }
 
     // 이 주소가 만든 방 가운데 아직 남아 있는 방의 수다.
@@ -328,8 +354,22 @@ public sealed class RoomHost : BackgroundService
 
     public Guest? Join(string code, EntryRequest request)
     {
-        if (!request.Valid || !_rooms.TryGetValue(code.ToUpperInvariant(), out Room? room))
+        EntryFailure failure;
+        return Join(code, request, out failure);
+    }
+
+    // 참가하지 못하면 null을 돌려주고 failure에 이유를 담는다.
+    public Guest? Join(string code, EntryRequest request, out EntryFailure failure)
+    {
+        failure = EntryFailure.None;
+        if (!request.Valid)
         {
+            failure = EntryFailure.InvalidRequest;
+            return null;
+        }
+        if (!_rooms.TryGetValue(code.ToUpperInvariant(), out Room? room))
+        {
+            failure = EntryFailure.Unavailable;
             return null;
         }
 
@@ -339,6 +379,7 @@ public sealed class RoomHost : BackgroundService
             // 지워진 방에 참가시키면 토큰은 발급되지만 이어지는 WebSocket 접속이 실패한다.
             if (!IsRegistered(room))
             {
+                failure = EntryFailure.Unavailable;
                 return null;
             }
             string name = CleanName(request.Name);
@@ -346,6 +387,7 @@ public sealed class RoomHost : BackgroundService
             Player? player = room.Match.Join(id, name);
             if (player == null)
             {
+                failure = EntryFailure.Unavailable;
                 return null;
             }
 

@@ -32,6 +32,7 @@ internal static class LifecycleTests
         tests.Add(new TestCase("A long session keeps its room for the full retention time after the last disconnect", RoomRetention));
         tests.Add(new TestCase("A room with nobody left is released soon instead of holding a slot for fifteen minutes", EmptyRoomExpiry));
         tests.Add(new TestCase("One address cannot hold more than a few rooms at once", RoomsPerAddress));
+        tests.Add(new TestCase("Room creation and joining report why they failed so the HTTP layer can answer accurately", EntryFailures));
         tests.Add(new TestCase("Limits count an IPv6 /64 as one address and leave local and private networks out of the room cap", AddressGrouping));
         tests.Add(new TestCase("Hidden spawns do not advance the id sequence that player actions reveal", HiddenIdGaps));
         tests.Add(new TestCase("Walls, rules and map are resent until delivered and walls again after they change", StaticParts));
@@ -399,25 +400,45 @@ internal static class LifecycleTests
         // 몇 개 주소만으로 방 32개 상한을 채우지 못하게 한다.
         for (int i = 0; i < RoomHost.MaxRoomsPerAddress; i++)
         {
-            bool full;
-            Guest? guest = host.Create(new EntryRequest("a"), "203.0.113.1", out full);
-            Check(guest != null && !full, "상한보다 적은 방을 만들지 못했습니다");
+            EntryFailure failure;
+            Guest? guest = host.Create(new EntryRequest("a"), "203.0.113.1", out failure);
+            Check(guest != null && failure == EntryFailure.None, "상한보다 적은 방을 만들지 못했습니다");
         }
-        bool capped;
+        EntryFailure capped;
         Guest? extra = host.Create(new EntryRequest("a"), "203.0.113.1", out capped);
         Check(extra == null, "한 주소에서 상한보다 많은 방을 만들었습니다");
-        Check(capped, "주소별 상한에 걸렸다고 알리지 않았습니다");
+        Equal(capped, EntryFailure.AddressFull);
         // 다른 주소는 따로 센다.
-        bool otherFull;
-        Guest? other = host.Create(new EntryRequest("b"), "203.0.113.2", out otherFull);
-        Check(other != null && !otherFull, "다른 주소의 방 생성이 막혔습니다");
+        EntryFailure otherFailure;
+        Guest? other = host.Create(new EntryRequest("b"), "203.0.113.2", out otherFailure);
+        Check(other != null && otherFailure == EntryFailure.None, "다른 주소의 방 생성이 막혔습니다");
         // 상한에서 뺀 주소(같은 기계)는 상한보다 많이 만들 수 있다.
         for (int i = 0; i <= RoomHost.MaxRoomsPerAddress; i++)
         {
-            bool local;
+            EntryFailure local;
             Guest? guest = host.Create(new EntryRequest("c"), null, out local);
-            Check(guest != null && !local, "상한에서 뺀 주소의 방 생성이 막혔습니다");
+            Check(guest != null && local == EntryFailure.None, "상한에서 뺀 주소의 방 생성이 막혔습니다");
         }
+    }
+
+    private static void EntryFailures()
+    {
+        // 장비 검증과 실패 이유는 RoomHost가 정한다. HTTP 처리는 이 값으로 상태 코드만 고른다.
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        string[] invalid = new string[] { "strike", "parry", "grab", "turret" };
+        EntryFailure badCreate;
+        Check(host.Create(new EntryRequest("bad", invalid), null, out badCreate) == null);
+        Equal(badCreate, EntryFailure.InvalidRequest);
+        Guest guest = host.Create(new EntryRequest("owner"))!;
+        EntryFailure badJoin;
+        Check(host.Join(guest.Room, new EntryRequest("bad", invalid), out badJoin) == null);
+        Equal(badJoin, EntryFailure.InvalidRequest);
+        EntryFailure missing;
+        Check(host.Join("NOPE23", new EntryRequest("late"), out missing) == null);
+        Equal(missing, EntryFailure.Unavailable);
+        EntryFailure joined;
+        Check(host.Join(guest.Room, new EntryRequest("friend"), out joined) != null);
+        Equal(joined, EntryFailure.None);
     }
 
     private static void AddressGrouping()
