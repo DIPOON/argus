@@ -45,7 +45,7 @@ internal static class EquipmentTests
         Equal(f.Player.Actions.Count, 0);
         f.Player.Mana = 3;
         f.Match.Input(f.Player, 1, 0, 0, 0, 1);
-        f.Match.Step(Rules.Step);
+        f.Match.Step();
         Equal(f.Player.Mana, 2);
         f.Match.Input(f.Player, 2, 0, 0, 0, 0);
         Advance(f.Match, 20);
@@ -60,11 +60,11 @@ internal static class EquipmentTests
         {
             Check(f.Match.Input(f.Player, i, 0, 0, 0, 1));
         }
-        f.Match.Step(Rules.Step);
+        f.Match.Step();
         Equal(f.Player.Mana, 23);
         Equal(f.Player.Actions.Count, 1);
         f.Match.Input(f.Player, 1000, 0, 0, 0, 2);
-        f.Match.Step(Rules.Step);
+        f.Match.Step();
         Equal(f.Player.Actions.Count, 1);
         Equal(f.Player.Actions[0].Skill.Id, "strike");
         Equal(f.Player.Mana, 23);
@@ -72,14 +72,14 @@ internal static class EquipmentTests
 
     private static void FreeSlot()
     {
-        Match match = new Match("TEST01", new Rules { MaxEnemies = 0 });
+        Match match = new Match("TEST01", new Rules { MaxEnemies = 0 }, 73);
         Player player = match.Join("p", "pilot")!;
         Check(match.SetLoadout(player, new string[] { "strike", "parry", "grab", "grab" }));
         match.Deploy(player, 300, 730);
         Advance(match, 5.1);
         player.Mana = 1;
         match.Input(player, 0, 0, 0, 0, 4);
-        match.Step(Rules.Step);
+        match.Step();
         Equal(player.Actions[0].Skill.Id, "grab");
         Equal(player.Actions[0].Slot, 4);
         Equal(player.Mana, 0);

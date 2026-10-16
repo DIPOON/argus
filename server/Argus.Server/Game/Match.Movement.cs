@@ -1,5 +1,4 @@
 using System.Numerics;
-using System.Security.Cryptography;
 
 namespace Argus.Server.Game;
 
@@ -62,12 +61,13 @@ public sealed partial class Match
 
     // 적 id는 무작위로 정한다. 효과·행동과 같은 순번을 쓰면 보이는 id 사이의 빈 번호로
     // 안개 속에서 생성된 적의 수를 셀 수 있다. 살아 있는 적끼리는 겹치지 않게 한다.
-    // 게임 진행용 난수와 따로 뽑으므로 시드를 고정한 검사의 진행은 바뀌지 않는다.
+    // 방의 시드에서 뽑으므로 같은 시드면 같은 id가 나온다. 출력으로 다음 값을 알 수 없는 생성기라
+    // 보이는 적 id로 다음 생성이나 적의 행동 선택을 미리 알아낼 수 없다.
     private int NewEnemyId()
     {
         while (true)
         {
-            int id = RandomNumberGenerator.GetInt32(1, int.MaxValue);
+            int id = _random.NextInt(1, int.MaxValue);
             bool taken = false;
             for (int i = 0; i < Enemies.Count; i++)
             {
@@ -96,7 +96,7 @@ public sealed partial class Match
         {
             return false;
         }
-        candidate.NextActionAt = Now + 1;
+        candidate.NextActionTick = Tick + Rules.ToTicks(1);
         Enemies.Add(candidate);
         return true;
     }
@@ -107,12 +107,12 @@ public sealed partial class Match
         // 시간이 지나도 첫 작전에는 2티어 적이 섞이지 않도록 추가 생성에도 같은 규칙을 적용한다.
         if (Rules.AllowEliteEnemies)
         {
-            double roll = NextRandom();
+            double roll = _random.NextDouble();
             if (roll < 0.15)
             {
                 definition = EnemyDefinition.Breaker;
             }
-            else if (roll < 0.25 && Elapsed > 45)
+            else if (roll < 0.25 && ElapsedTicks > Rules.ToTicks(45))
             {
                 definition = EnemyDefinition.Warden;
             }
@@ -120,7 +120,7 @@ public sealed partial class Match
         // 분대가 보고 있거나 벽·몸에 막힌 자리면 각도를 다시 뽑는다. 끝까지 못 찾으면 이번 회차는 넘긴다.
         for (int attempt = 0; attempt < 12; attempt++)
         {
-            double angle = NextRandom() * Math.Tau;
+            double angle = _random.NextDouble() * Math.Tau;
             Vector2 position = new Vector2(1080 + (float)Math.Cos(angle) * 650, 710 + (float)Math.Sin(angle) * 540);
             if (Visible(position))
             {
@@ -258,7 +258,7 @@ public sealed partial class Match
             }
             if (enemy.Action != null)
             {
-                if (enemy.Action.EndsAt > Now)
+                if (enemy.Action.EndsTick > Tick)
                 {
                     continue;
                 }
@@ -282,13 +282,14 @@ public sealed partial class Match
             }
             Vector2 direct = target.Position - enemy.Position;
             bool sight = Map.LineOfSight(enemy.Position, target.Position);
-            if (Now >= enemy.NextActionAt && closest < 75 * 75 && sight)
+            if (Tick >= enemy.NextActionTick && closest < 75 * 75 && sight)
             {
-                int index = (int)(NextRandom() * enemy.Definition.Skills.Length);
+                int index = _random.NextInt(0, enemy.Definition.Skills.Length);
                 EnemySkill skill = enemy.Definition.Skills[index];
                 _nextId++;
-                enemy.Action = new EnemyAction(_nextId, skill, Math.Atan2(direct.Y, direct.X), Now, Rules.EnemyWindupMultiplier);
-                enemy.NextActionAt = enemy.Action.EndsAt + 0.25;
+                enemy.Action = new EnemyAction(_nextId, skill, Math.Atan2(direct.Y, direct.X), Tick, Rules.EnemyWindupMultiplier);
+                // 회복이 끝난 틱에서 0.25초(8틱) 쉰 뒤 다음 행동을 고른다.
+                enemy.NextActionTick = enemy.Action.EndsTick + Rules.ToTicks(0.25);
                 continue;
             }
 
