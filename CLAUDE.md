@@ -126,7 +126,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 
 수치와 정의의 위치: `Game/Rules.cs`(기술 비용·유효 시간, `AllowEliteEnemies`, `EnemyWindupMultiplier`, 체력·마나·시야), `Game/SkillDefinition.cs`(`Affinity`, `EnemySkill`, `EnemyDefinition`의 Grunt/Breaker/Warden), `Game/Model.cs`(`Player`·`Enemy`·`PlayerAction`·`EnemyAction` 상태와 중복 판정 기록용 `HashSet`).
 
-첫 작전은 1티어 `Grunt`만 배치·생성한다. `Breaker`와 `Warden`은 정의만 남아 있고 `Rules.AllowEliteEnemies`를 켠 작전에서만 나온다.
+첫 작전은 1티어 `Grunt`만 배치·생성한다. `Breaker`와 `Warden`은 정의만 남아 있고 `Rules.AllowEliteEnemies`를 켠 작전에서만 나온다. 처음 배치하는 자리는 `Match.InitialEnemySpots` 한 곳에서 정하고, 작전에 따라 종류만 바꾼다. 자리가 막혀 있으면 생성자가 예외를 낸다(`PlaceInitialEnemy`). `AddEnemy`는 막힌 자리를 아무 표시 없이 건너뛰므로, 처음 배치에 그대로 쓰면 적이 빠져도 알 수 없다. 증원(`SpawnEnemy`)은 막히면 다른 각도를 다시 뽑으므로 그대로 둔다.
 
 ### 서버 권위와 시야 — 치트 방지 불변식
 
