@@ -28,7 +28,7 @@ public sealed partial class Match
             {
                 continue;
             }
-            if (enemy.Action != null && enemy.Action.IsActive(Now))
+            if (enemy.Action != null && enemy.Action.IsActive(Tick))
             {
                 ResolveEnemyAction(enemy, enemy.Action);
             }
@@ -53,7 +53,7 @@ public sealed partial class Match
             for (int j = 0; j < player.Actions.Count; j++)
             {
                 PlayerAction action = player.Actions[j];
-                if (!action.IsActive(Now) || !action.Skill.SingleTarget || action.TargetLocked)
+                if (!action.IsActive(Tick) || !action.Skill.SingleTarget || action.TargetLocked)
                 {
                     continue;
                 }
@@ -89,7 +89,7 @@ public sealed partial class Match
                 action.Target = nearest.Id;
                 // 접촉하는 틱이나 그 뒤에 고른 대상으로 정한다. 접촉 틱에도 다시 고르므로 접촉 순간 가장 가까운 적이 된다.
                 // 접촉 순간 범위에 아무도 없었으면 유효 시간 안에 처음 들어온 적이 대상이 된다.
-                if (Now >= action.ContactAt)
+                if (Tick >= action.ContactTick)
                 {
                     action.TargetLocked = true;
                 }
@@ -151,7 +151,7 @@ public sealed partial class Match
 
     private bool Incoming(Enemy enemy, EnemyAction attack, Player player)
     {
-        return Now >= attack.ContactAt && Now < attack.ActiveUntil && !attack.HitPlayers.Contains(player.Id) &&
+        return Tick >= attack.ContactTick && Tick < attack.ActiveUntilTick && !attack.HitPlayers.Contains(player.Id) &&
             InReach(enemy.Position, attack.Aim, attack.Skill.Range, attack.Skill.HalfWidth, player.Position, Rules.PlayerRadius);
     }
 
@@ -178,7 +178,7 @@ public sealed partial class Match
             for (int j = 0; j < player.Actions.Count; j++)
             {
                 PlayerAction action = player.Actions[j];
-                if (!action.IsActive(Now) || action.JudgedEnemies.Contains(enemy.Id))
+                if (!action.IsActive(Tick) || action.JudgedEnemies.Contains(enemy.Id))
                 {
                     continue;
                 }
@@ -201,13 +201,13 @@ public sealed partial class Match
                     // 무행동 적을 칠 때처럼 접촉한 순간 일반 피해만 준다.
                     if (!InActionArea(enemy, attack, player))
                     {
-                        if (Now >= action.ContactAt)
+                        if (Tick >= action.ContactTick)
                         {
                             flanks.Add(new Response(player, action, true));
                         }
                         continue;
                     }
-                    initiates = Now >= action.ContactAt;
+                    initiates = Tick >= action.ContactTick;
                 }
                 responses.Add(new Response(player, action, initiates));
                 if (initiates)
@@ -359,7 +359,7 @@ public sealed partial class Match
             for (int j = 0; j < player.Actions.Count; j++)
             {
                 PlayerAction action = player.Actions[j];
-                if (enemy.Hp <= 0 || !action.IsActive(Now) || Now < action.ContactAt ||
+                if (enemy.Hp <= 0 || !action.IsActive(Tick) || Tick < action.ContactTick ||
                     action.Skill.GuardsFront || action.JudgedEnemies.Contains(enemy.Id))
                 {
                     continue;
@@ -389,7 +389,7 @@ public sealed partial class Match
             for (int j = 0; j < player.Actions.Count; j++)
             {
                 PlayerAction action = player.Actions[j];
-                if (enemy.Hp <= 0 || !action.IsFollowup(Now, Rules.ParryFollowupSeconds) ||
+                if (enemy.Hp <= 0 || !action.IsFollowup(Tick, Rules.ParryFollowupSeconds) ||
                     action.FollowupHits.Contains(enemy.Id) || !PlayerContact(player, action, enemy))
                 {
                     continue;
@@ -410,7 +410,7 @@ public sealed partial class Match
     private bool EnemyBlocksFollowup(Enemy enemy, Player player)
     {
         EnemyAction? guard = enemy.Action;
-        if (guard == null || guard.Skill.Kind != "block" || !guard.IsActive(Now))
+        if (guard == null || guard.Skill.Kind != "block" || !guard.IsActive(Tick))
         {
             return false;
         }
@@ -432,9 +432,9 @@ public sealed partial class Match
             for (int j = 0; j < player.Actions.Count; j++)
             {
                 PlayerAction action = player.Actions[j];
-                bool contact = action.Skill.BreaksStructures && action.IsActive(Now) && Now >= action.ContactAt;
+                bool contact = action.Skill.BreaksStructures && action.IsActive(Tick) && Tick >= action.ContactTick;
                 // 반격이 구조물을 부수는지도 기술 속성으로 정한다. 공개되는 속성만 보고도 동작을 알 수 있어야 한다.
-                bool followup = action.Skill.FollowupBreaksStructures && action.IsFollowup(Now, Rules.ParryFollowupSeconds);
+                bool followup = action.Skill.FollowupBreaksStructures && action.IsFollowup(Tick, Rules.ParryFollowupSeconds);
                 if (!contact && !followup)
                 {
                     continue;

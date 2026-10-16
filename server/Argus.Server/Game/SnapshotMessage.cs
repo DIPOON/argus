@@ -20,7 +20,7 @@ public sealed class SnapshotMessage
     public int MapRevision { get; set; }
     public List<PlayerSnapshot> Players { get; set; } = new List<PlayerSnapshot>();
     public List<EnemySnapshot> Enemies { get; set; } = new List<EnemySnapshot>();
-    public List<Effect> Effects { get; set; } = new List<Effect>();
+    public List<EffectSnapshot> Effects { get; set; } = new List<EffectSnapshot>();
     // 정수 좌표라 double보다 직렬화가 빠르다. 전송되는 JSON은 같다.
     public List<int[]> Sight { get; set; } = new List<int[]>();
     public List<FacilitySnapshot> Facilities { get; set; } = new List<FacilitySnapshot>();
@@ -97,6 +97,16 @@ public sealed class EnemySnapshot
     public int MaxHp { get; set; }
     public int[] Tiers { get; set; } = Array.Empty<int>();
     public ActionSnapshot? Action { get; set; }
+}
+
+// 효과는 서버에서 사라지는 틱으로 다루지만 보낼 때는 초(until)로 바꾼다.
+public sealed class EffectSnapshot
+{
+    public int Id { get; set; }
+    public double X { get; set; }
+    public double Y { get; set; }
+    public string Kind { get; set; } = "";
+    public double Until { get; set; }
 }
 
 public sealed class FacilitySnapshot

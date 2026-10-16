@@ -163,7 +163,7 @@ internal static class EncounterTests
         Check(f.Match.Map.LineOfSight(start, f.Player.Position), "사선이 막혀 있어 검사 조건이 아닙니다");
         // id가 짝수인 적은 예전 방식에서 위(벽 쪽)로 비켜 가려다 계속 걸렸다. 행동 없이 이동만 본다.
         Enemy enemy = new Enemy(30020, start, EnemyDefinition.Grunt);
-        enemy.NextActionAt = double.MaxValue;
+        enemy.NextActionTick = long.MaxValue;
         f.Match.Enemies.Add(enemy);
         Advance(f.Match, 2);
         Check(enemy.Position.X > 1560, "모서리에 걸려 멈췄습니다");
@@ -189,7 +189,7 @@ internal static class EncounterTests
         Vector2 start = new Vector2(1523, 470);
         f.Player.Position = new Vector2(1523, 650);
         Enemy enemy = new Enemy(30030, start, EnemyDefinition.Grunt);
-        enemy.NextActionAt = double.MaxValue;
+        enemy.NextActionTick = long.MaxValue;
         f.Match.Enemies.Add(enemy);
         Advance(f.Match, 1);
         Check(enemy.Position.Y > start.Y + 60, "아래로 내려가지 않았습니다");
@@ -213,15 +213,18 @@ internal static class EncounterTests
                 EnemyDefinition singleSkill = new EnemyDefinition("grunt", "병사", 13, 1, 0,
                     new EnemySkill[] { skill });
                 Enemy enemy = Target(f, singleSkill);
-                enemy.NextActionAt = f.Match.Now;
+                enemy.NextActionTick = f.Match.Tick;
                 Advance(f.Match, Rules.Step);
                 Check(enemy.Action != null);
                 EnemyAction action = enemy.Action!;
                 double expected = skill.Windup * rules.EnemyWindupMultiplier;
-                Near(action.ContactAt - action.StartedAt, expected);
+                // 예고 길이는 틱으로 올려 센다. 배율 1의 0.85초 예고는 26틱(약 0.867초)이다.
+                // 클라이언트에 보내는 예고도 실제 접촉과 같은 틱을 가리켜야 한다.
+                long windupTicks = Rules.ToTicks(expected);
+                Equal(action.ContactTick - action.StartedTick, windupTicks);
                 SnapshotMessage snapshot = Snapshot.CreateShared(f.Match);
                 ActionSnapshot tell = snapshot.Enemies[0].Action!;
-                Near(tell.ContactAt - tell.StartedAt, expected);
+                Near(tell.ContactAt - tell.StartedAt, Rules.ToSeconds(windupTicks));
                 Equal(tell.Phase, "telegraph");
                 Advance(f.Match, expected - Rules.Step);
                 Near(f.Player.Hp, f.Player.MaxHp);

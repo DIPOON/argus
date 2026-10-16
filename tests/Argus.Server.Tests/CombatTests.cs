@@ -1,5 +1,7 @@
 using System.Numerics;
 using Argus.Server.Game;
+using Argus.Server.Networking;
+using Microsoft.Extensions.Logging.Abstractions;
 using static TestTools;
 
 internal static class CombatTests
@@ -26,7 +28,7 @@ internal static class CombatTests
         tests.Add(new TestCase("Melee destroys walls and mission facilities through normal inputs", Structures));
         tests.Add(new TestCase("Every hit on a breakable wall shows a visible hit effect in front of the wall", WallHitEffect));
         tests.Add(new TestCase("Player-enemy and enemy-enemy bodies block movement while skills allow walking", Bodies));
-        tests.Add(new TestCase("Long server steps preserve short active windows and prevent body tunneling", LongStep));
+        tests.Add(new TestCase("Catching up after a stall runs whole ticks, preserving short active windows and preventing body tunneling", LongStep));
         tests.Add(new TestCase("A new skill id with guard flags still guards and follows up like a parry", SkillFlags));
         tests.Add(new TestCase("A flank outside an enemy action's area deals ordinary damage without its affinity", Flank));
         tests.Add(new TestCase("A player the shield shove reaches answers it with affinity even beside the shield", ShoveReach));
@@ -99,7 +101,7 @@ internal static class CombatTests
         Near(enemy.Hp, 1);
         Near(f.Player.Hp, 6);
         Check(enemy.Action != null);
-        Check(enemy.Action!.IsActive(f.Match.Now));
+        Check(enemy.Action!.IsActive(f.Match.Tick));
     }
 
     private static void InterruptedParry()
@@ -129,7 +131,7 @@ internal static class CombatTests
 
         Fixture rear = new Fixture();
         Enemy facingAway = Threat(rear, "block", 2, arrivesIn: 2);
-        facingAway.Action = new EnemyAction(999, facingAway.Action!.Skill, 0, rear.Match.Now);
+        facingAway.Action = new EnemyAction(999, facingAway.Action!.Skill, 0, rear.Match.Tick);
         Prepare(rear, rear.Player, "parry");
         Advance(rear.Match, 0.8);
         Near(facingAway.Hp, 1);
@@ -185,7 +187,7 @@ internal static class CombatTests
         for (int i = 0; i < 80; i++)
         {
             f.Match.Input(f.Player, i, 1, 0, 0, 1);
-            f.Match.Step(Rules.Step);
+            f.Match.Step();
         }
         Check(f.Player.Position.X > ally.Position.X);
         Near(ally.Hp, ally.MaxHp);
@@ -270,7 +272,7 @@ internal static class CombatTests
             Near(f.Player.Hp, 5);
             Check(parry.Cancelled);
             enemy.Hp = 1;
-            enemy.Action = new EnemyAction(999, new EnemySkill("strike", 2, partial, 0.05, 85, 25), Math.PI, f.Match.Now);
+            enemy.Action = new EnemyAction(999, new EnemySkill("strike", 2, partial, 0.05, 85, 25), Math.PI, f.Match.Tick);
             Prepare(f, f.Player, "parry");
             Advance(f.Match, 0.1);
             Near(enemy.Hp, 1);
@@ -296,7 +298,7 @@ internal static class CombatTests
     {
         Fixture f = new Fixture();
         Enemy elite = Target(f, EnemyDefinition.Warden);
-        elite.Action = new EnemyAction(999, elite.Definition.Skills[2], Math.PI, f.Match.Now);
+        elite.Action = new EnemyAction(999, elite.Definition.Skills[2], Math.PI, f.Match.Tick);
         Prepare(f, f.Player, "strike");
         Advance(f.Match, 0.2);
         Near(elite.Hp, 0);
@@ -328,7 +330,7 @@ internal static class CombatTests
         for (int i = 0; i < 70; i++)
         {
             f.Match.Input(f.Player, i, 0, 0, 0, 1);
-            f.Match.Step(Rules.Step);
+            f.Match.Step();
         }
         Check(!f.Match.Map.Solid(15, 10));
         Check(!f.Match.Map.Damage(0, 100));
@@ -336,7 +338,7 @@ internal static class CombatTests
         for (int i = 70; i < 170; i++)
         {
             f.Match.Input(f.Player, i, 0, 0, 0, 1);
-            f.Match.Step(Rules.Step);
+            f.Match.Step();
         }
         Near(f.Match.Facilities[0].Hp, 0);
     }
@@ -356,7 +358,7 @@ internal static class CombatTests
         int visible = 0;
         for (int i = 0; i < shared.Effects.Count; i++)
         {
-            Effect effect = shared.Effects[i];
+            EffectSnapshot effect = shared.Effects[i];
             if (effect.Kind == "hit" && effect.X > 680 && effect.X < 720)
             {
                 visible++;
@@ -373,7 +375,7 @@ internal static class CombatTests
         for (int i = 0; i < 20; i++)
         {
             f.Match.Input(f.Player, i, 1, 0, Math.PI, 2);
-            f.Match.Step(Rules.Step);
+            f.Match.Step();
         }
         Check(f.Player.Position.X > 300);
         Check(f.Player.Position.X <= enemy.Position.X - enemy.Definition.Radius - Rules.PlayerRadius + 0.001);
@@ -385,7 +387,7 @@ internal static class CombatTests
         moving.Match.Enemies.Add(following);
         for (int i = 0; i < 90; i++)
         {
-            moving.Match.Step(Rules.Step);
+            moving.Match.Step();
             Check(Vector2.Distance(lead.Position, following.Position) >= 26 - 0.001);
             Check(Vector2.Distance(lead.Position, moving.Player.Position) >= 26 - 0.001);
         }
@@ -401,9 +403,9 @@ internal static class CombatTests
 
     private static PlayerAction Use(Fixture f, SkillDefinition skill, int id)
     {
-        PlayerAction action = new PlayerAction(id, skill, 1, f.Match.Now);
+        PlayerAction action = new PlayerAction(id, skill, 1, f.Match.Tick);
         f.Player.Actions.Add(action);
-        f.Player.BusyUntil = action.EndsAt;
+        f.Player.BusyUntilTick = action.EndsTick;
         return action;
     }
 
@@ -420,7 +422,7 @@ internal static class CombatTests
         Enemy striker = Target(guarded);
         double side = 40 * Math.PI / 180;
         striker.Position = guarded.Player.Position + new Vector2((float)Math.Cos(side), (float)Math.Sin(side)) * 50;
-        striker.Action = new EnemyAction(30010, new EnemySkill("strike", 1, 0, 0.05, 85, 25), side + Math.PI, guarded.Match.Now);
+        striker.Action = new EnemyAction(30010, new EnemySkill("strike", 1, 0, 0.05, 85, 25), side + Math.PI, guarded.Match.Tick);
         Use(guarded, shield, 30011);
         Advance(guarded.Match, 0.08);
         Near(striker.Hp, 0);
@@ -484,7 +486,7 @@ internal static class CombatTests
         front.Position = new Vector2(380, 730);
         shielded.Player.Position = new Vector2(460, 730);
         shielded.Player.Aim = Math.PI;
-        blocker.Action = new EnemyAction(30050, new EnemySkill("block", 1, 0, 1, 62, 15), Math.PI, shielded.Match.Now);
+        blocker.Action = new EnemyAction(30050, new EnemySkill("block", 1, 0, 1, 62, 15), Math.PI, shielded.Match.Tick);
         PlayerAction behind = Prepare(shielded, shielded.Player, "strike", 0.2);
         Advance(shielded.Match, Rules.Step);
         Near(blocker.Hp, 0);
@@ -499,7 +501,7 @@ internal static class CombatTests
         target.Position = new Vector2(380, 730);
         flanked.Player.Position = new Vector2(460, 730);
         flanked.Player.Aim = Math.PI;
-        striker.Action = new EnemyAction(30051, new EnemySkill("strike", 1, 0, 0.05, 85, 25), Math.PI, flanked.Match.Now - 0.05);
+        striker.Action = new EnemyAction(30051, new EnemySkill("strike", 1, 0, 0.05, 85, 25), Math.PI, flanked.Match.Tick - Rules.ToTicks(0.05));
         Prepare(flanked, flanked.Player, "strike", 0.2);
         Advance(flanked.Match, Rules.Step);
         Near(striker.Hp, 0);
@@ -519,10 +521,10 @@ internal static class CombatTests
         shover.Position = new Vector2(420, 730);
         grabbing.Player.Position = shover.Position + beside;
         grabbing.Player.Aim = aim;
-        shover.Action = new EnemyAction(30052, new EnemySkill("block", 1, 0, 0.05, 62, 15), Math.PI, grabbing.Match.Now - 0.05);
+        shover.Action = new EnemyAction(30052, new EnemySkill("block", 1, 0, 0.05, 62, 15), Math.PI, grabbing.Match.Tick - Rules.ToTicks(0.05));
         PlayerAction grab = Prepare(grabbing, grabbing.Player, "grab");
         Advance(grabbing.Match, Rules.Step);
-        Check(grabbing.Match.Now < grab.ContactAt, "잡기가 준비 동작을 마쳤습니다");
+        Check(grabbing.Match.Tick < grab.ContactTick, "잡기가 준비 동작을 마쳤습니다");
         Near(shover.Hp, 0);
         Near(grabbing.Player.Hp, 6);
 
@@ -532,7 +534,7 @@ internal static class CombatTests
         guard.Position = new Vector2(420, 730);
         striking.Player.Position = guard.Position + beside;
         striking.Player.Aim = aim;
-        guard.Action = new EnemyAction(30053, new EnemySkill("block", 1, 0, 0.05, 62, 15), Math.PI, striking.Match.Now - 0.05);
+        guard.Action = new EnemyAction(30053, new EnemySkill("block", 1, 0, 0.05, 62, 15), Math.PI, striking.Match.Tick - Rules.ToTicks(0.05));
         PlayerAction strike = Prepare(striking, striking.Player, "strike", 0.2);
         Advance(striking.Match, Rules.Step);
         Near(guard.Hp, 1);
@@ -582,11 +584,11 @@ internal static class CombatTests
         second.Position = f.Player.Position + new Vector2(200, 0);
         PlayerAction grab = Prepare(f, f.Player, "grab");
         Advance(f.Match, 0.1);
-        Check(f.Match.Now < grab.ContactAt, "접촉 전 틱이 아닙니다");
+        Check(f.Match.Tick < grab.ContactTick, "접촉 전 틱이 아닙니다");
         // 접촉하는 틱 직전에 second가 더 가까이 들어온다. 접촉하는 틱에 가장 가까운 second를 잡아야 한다.
         second.Position = f.Player.Position + new Vector2(30, 15);
         Advance(f.Match, Rules.Step);
-        Check(f.Match.Now >= grab.ContactAt, "접촉 틱이 아닙니다");
+        Check(f.Match.Tick >= grab.ContactTick, "접촉 틱이 아닙니다");
         Near(second.Hp, 0);
         Near(first.Hp, 1);
 
@@ -598,7 +600,7 @@ internal static class CombatTests
         Advance(g.Match, Rules.Step);
         leaving.Position = g.Player.Position + new Vector2(300, 0);
         Advance(g.Match, 0.15);
-        Check(g.Match.Now >= hold.ContactAt && g.Match.Now < hold.ActiveUntil, "잡기 유효 시간이 아닙니다");
+        Check(g.Match.Tick >= hold.ContactTick && g.Match.Tick < hold.ActiveUntilTick, "잡기 유효 시간이 아닙니다");
         Enemy arriving = Target(g);
         arriving.Position = g.Player.Position + new Vector2(30, 0);
         Advance(g.Match, Rules.Step);
@@ -608,18 +610,23 @@ internal static class CombatTests
 
     private static void LongStep()
     {
+        // 서버가 가장 많이 밀렸을 때처럼 한 번에 최대 틱 수를 진행한다. 한 틱씩 따로 진행하므로
+        // 0.25초 공격 창 안에서 방어가 판정된다.
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
         Fixture f = new Fixture();
+        Room room = new Room(f.Match, null);
         Enemy enemy = Threat(f, "strike");
         Prepare(f, f.Player, "parry");
-        f.Match.Step(2);
+        host.StepRoom(f.Match.Code, room, TickClock.MaxTicksPerWake, false);
         Near(enemy.Hp, 0);
         Near(f.Player.Hp, 6);
-        // 긴 단계에서도 실제 이동 경로가 벽을 통과하지 않는다. 오른쪽 벽의 왼쪽 면은 x = 720이다.
+        // 밀린 틱을 몰아서 진행해도 이동 경로가 벽을 통과하지 않는다. 오른쪽 벽의 왼쪽 면은 x = 720이다.
         Fixture walker = new Fixture();
+        Room walkerRoom = new Room(walker.Match, null);
         walker.Player.Position = new Vector2(680, 500);
         walker.Match.Input(walker.Player, 1, 1, 0, 0, 0);
-        walker.Match.Step(2);
-        Check(walker.Player.Position.X < 720, "긴 단계에서 벽을 통과했습니다");
+        host.StepRoom(walker.Match.Code, walkerRoom, TickClock.MaxTicksPerWake, false);
+        Check(walker.Player.Position.X < 720, "밀린 틱을 진행하다 벽을 통과했습니다");
         Check(walker.Player.Position.X > 700, "벽까지 이동하지 않았습니다");
     }
 }

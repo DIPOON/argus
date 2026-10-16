@@ -9,6 +9,7 @@ internal static class Program
         EquipmentTests.Register(tests);
         CombatTests.Register(tests);
         EncounterTests.Register(tests);
+        DeterminismTests.Register(tests);
         int failed = 0;
         for (int i = 0; i < tests.Count; i++)
         {
@@ -69,12 +70,14 @@ internal static class TestTools
 {
     private static int _id = 20000;
 
+    // 운영 서버처럼 정수 틱으로만 진행한다. 한 틱에 못 미치는 나머지는 한 틱으로 올려 센다(Rules.ToTicks).
+    // 그래서 실제로 진행한 시간은 seconds 이상이고, 그보다 한 틱 미만으로 길다.
     public static void Advance(Match match, double seconds)
     {
-        double until = match.Now + seconds;
-        while (until - match.Now > 0.00000001)
+        long ticks = Rules.ToTicks(seconds);
+        for (long i = 0; i < ticks; i++)
         {
-            match.Step(Math.Min(Rules.Step, until - match.Now));
+            match.Step();
         }
     }
 
@@ -114,9 +117,10 @@ internal static class TestTools
     public static PlayerAction Prepare(Fixture fixture, Player player, string skill, double age = 0)
     {
         _id++;
-        PlayerAction action = new PlayerAction(_id, fixture.Match.Rules.Skill(skill), 1, fixture.Match.Now - age);
+        // age초 전에 시작한 기술이다. 틱으로 올려 센다.
+        PlayerAction action = new PlayerAction(_id, fixture.Match.Rules.Skill(skill), 1, fixture.Match.Tick - Rules.ToTicks(age));
         player.Actions.Add(action);
-        player.BusyUntil = action.EndsAt;
+        player.BusyUntilTick = action.EndsTick;
         return action;
     }
 
@@ -130,7 +134,7 @@ internal static class TestTools
             definition.Health, 0, definition.Skills);
         _id++;
         Enemy enemy = new Enemy(_id, fixture.Player.Position + new System.Numerics.Vector2(50, 0), still);
-        enemy.NextActionAt = double.MaxValue;
+        enemy.NextActionTick = long.MaxValue;
         fixture.Match.Enemies.Add(enemy);
         return enemy;
     }
@@ -144,7 +148,7 @@ internal static class TestTools
         }
         Enemy enemy = Target(fixture, definition);
         _id++;
-        enemy.Action = new EnemyAction(_id, new EnemySkill(kind, tier, partialDamage, arrivesIn, 85, 25), Math.PI, fixture.Match.Now);
+        enemy.Action = new EnemyAction(_id, new EnemySkill(kind, tier, partialDamage, arrivesIn, 85, 25), Math.PI, fixture.Match.Tick);
         return enemy;
     }
 }
