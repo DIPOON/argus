@@ -111,7 +111,7 @@ id, skill, kind, slot, tier, phase,
 aim, startedAt, contactAt, activeUntil, endsAt, range, halfWidth
 ```
 
-시간 필드는 서버 `now`와 같은 절대 시간이다. `phase`는 telegraph / active / followup / recovery / interrupted. 플레이어의 후속 반격은 `kind: "none"`이며 RPS가 없다. 적의 telegraph에는 이미 상성이 있고 recovery에는 없다. `slot`은 플레이어 1~4, 적은 0이다. 미래 표적 ID나 숨겨진 적의 좌표는 기술 객체에 포함하지 않는다.
+시간 필드는 서버 `now`와 같은 절대 시간이다. 서버는 시각을 1/30초 틱으로 다루므로 기술의 각 시각도 틱에 맞춘 값이다. 규칙의 기간을 틱으로 올려 센다. 예를 들어 `contactAfter`가 0.18초인 기술의 `contactAt`은 시작 6틱 뒤(0.2초)다. `phase`는 telegraph / active / followup / recovery / interrupted. 플레이어의 후속 반격은 `kind: "none"`이며 RPS가 없다. 적의 telegraph에는 이미 상성이 있고 recovery에는 없다. `slot`은 플레이어 1~4, 적은 0이다. 미래 표적 ID나 숨겨진 적의 좌표는 기술 객체에 포함하지 않는다.
 
 상성·합산·피해 규칙은 [전투 명세](combat.md)에 있다. 클라이언트는 모양·진행률·예고를 그리며 판정 결과를 결정하지 않는다. `effects.kind`는 break / partial / draw / guard / hit / hurt / heal / deploy이며 표시용이다.
 
