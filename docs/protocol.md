@@ -1,6 +1,10 @@
 # Argus protocol v3
 
-2026-10-09. JSON over HTTP + WebSocket, UTF-8. 좌표 단위는 월드 단위, 시간은 서버 초, 각도는 라디안이다. 서버는 1/30초 틱으로 진행하고, 시간 필드는 모두 틱 시각을 초로 바꿔 소수 둘째 자리로 반올림해 보낸다. 한 틱은 약 0.033초라 반올림해도 틱끼리 구분된다. 같은 틱의 시각은 `now`와 정확히 같고, 값에 30을 곱해 반올림하면 틱 번호가 된다. 원점은 왼쪽 위다. X는 오른쪽, Y는 아래쪽이다.
+2026-10-09. JSON over HTTP + WebSocket, UTF-8. 좌표 단위는 월드 단위, 시간은 서버 초, 각도는 라디안이다. 원점은 왼쪽 위다. X는 오른쪽, Y는 아래쪽이다. 서버는 1/30초 틱으로 진행하며, 시간 필드는 세 가지다.
+
+- **틱 시각과 틱 수**: `now`, `elapsed`, `nextPulse`, 기술의 `startedAt`·`contactAt`·`activeUntil`·`endsAt`, 효과의 `until`, 안내의 `at`, 대원의 `busy`·`deploy`, 보급의 `cooldown`. 틱을 초로 바꿔 소수 둘째 자리로 반올림해 보낸다. 한 틱은 약 0.033초라 반올림해도 틱끼리 구분된다. 같은 틱의 시각은 `now`와 정확히 같고, 값에 30을 곱해 반올림하면 틱 번호가 된다.
+- **규칙 값**: `rules.deploy`, `rules.parryFollowupSeconds`, `rules.skills`의 `contactAfter`·`activeSeconds`·`duration`, `extraction.duration`. 설정한 초를 그대로 보낸다. 서버는 이 기간을 틱으로 올려 센다. 예를 들어 `contactAfter` 0.18초는 6틱(0.2초)이다. 그래서 규칙 값에 30을 곱해도 틱 번호가 되지 않을 수 있다.
+- **탈출 진행도**: `extraction.progress`. 반 틱 단위로 센 값을 초로 바꿔 소수 둘째 자리로 반올림한다. 틱 번호로 되돌리는 값이 아니다.
 
 `/health`의 `protocol`과 snapshot의 `version`은 3이다.
 

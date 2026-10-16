@@ -288,9 +288,10 @@ public static class Snapshot
         return Math.Round(value, 2);
     }
 
-    // 틱 시각과 틱 수를 보낼 초로 바꾼다. 모든 시간 필드가 이것을 거쳐 같은 방식(소수 둘째 자리)으로 반올림되므로,
+    // 틱 시각과 틱 수를 보낼 초로 바꾼다. 틱으로 된 시간 필드는 모두 이것을 거쳐 같은 방식(소수 둘째 자리)으로 반올림되므로,
     // 같은 틱이면 now와 다른 시각이 정확히 같은 값이 된다. 한 틱은 약 0.033초라 반올림해도 틱끼리 구분되고,
-    // 받은 값에 30을 곱해 반올림하면 틱 번호로 돌아간다.
+    // 받은 값에 30을 곱해 반올림하면 틱 번호로 돌아간다. 규칙 값(CreateRules, Extraction.Duration)은 설정한 초를 그대로 보내고,
+    // 탈출 진행도(Extraction.Progress)는 반 틱 단위라 이 함수를 거치지 않는다.
     private static double Seconds(long ticks)
     {
         return Round(Rules.ToSeconds(ticks));
