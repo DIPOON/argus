@@ -28,7 +28,8 @@ internal static class LifecycleTests
         tests.Add(new TestCase("Snapshots omit hidden enemy actions and effects and share teammate sight", Visibility));
         tests.Add(new TestCase("Deployment never discloses hidden occupancy; a blocked arrival lands nearby without overlap", BlockedDeployment));
         tests.Add(new TestCase("A broadcast serializes the shared part once and matches a snapshot built for one recipient", SharedSnapshot));
-        tests.Add(new TestCase("Effects and notices keep their wire shape and send their tick times as seconds", TimedWireShape));
+        tests.Add(new TestCase("Effects, notices and actions keep their wire shape and send tick times as seconds rounded like now", TimedWireShape));
+        tests.Add(new TestCase("Two identical notices on the same tick keep distinct ids that keep growing", NoticeIds));
         tests.Add(new TestCase("A slot that never connects is released quickly while a dropped member keeps the long grace", FirstConnectGrace));
         tests.Add(new TestCase("A long session keeps its room for the full retention time after the last disconnect", RoomRetention));
         tests.Add(new TestCase("A room with nobody left is released soon instead of holding a slot for fifteen minutes", EmptyRoomExpiry));
@@ -284,23 +285,77 @@ internal static class LifecycleTests
 
     private static void TimedWireShape()
     {
-        // 효과와 안내는 서버에서 틱으로 다루지만 통신 형식은 초다. 전송용 자료구조를 따로 두므로 모양도 그대로인지 본다.
+        // 효과·안내·기술 시각은 서버에서 틱으로 다루지만 통신 형식은 초다. 전송용 자료구조를 따로 두므로 모양도 그대로인지 본다.
+        // 투입 시간 같은 시험 설정은 바뀔 수 있으므로 기대값은 규칙에서 구하고, 항목은 순서가 아니라 내용으로 찾는다.
         Match match = new Match("WIRE01", new Rules { MaxEnemies = 0 }, 1);
         Player player = match.Join("p", "pilot")!;
         Check(match.Deploy(player, BattleMap.Camp.X, BattleMap.Camp.Y));
-        // 5초(150틱) 뒤 착지하면서 작전 시작 안내와 0.6초(18틱)짜리 투입 효과가 나온다.
+        long landing = Rules.ToTicks(match.Rules.DeploySeconds);
         Advance(match, match.Rules.DeploySeconds);
-        Equal(match.Tick, 150L);
-        using JsonDocument json = JsonDocument.Parse(Snapshot.Create(match, player, RoomHost.Json));
-        JsonElement notices = json.RootElement.GetProperty("notices");
-        JsonElement start = notices[notices.GetArrayLength() - 1];
-        Near(start.GetProperty("at").GetDouble(), 5);
-        Check(start.GetProperty("text").GetString()!.StartsWith("작전 시작"), "마지막 안내가 작전 시작이 아닙니다");
-        Equal(PropertyNames(start), "at,text");
-        JsonElement effect = json.RootElement.GetProperty("effects")[0];
-        Equal(effect.GetProperty("kind").GetString(), "deploy");
-        Near(effect.GetProperty("until").GetDouble(), 5.6);
-        Equal(PropertyNames(effect), "id,x,y,kind,until");
+        Equal(match.Tick, landing);
+
+        // 착지한 틱에 작전 시작 안내와 투입 효과가 나온다.
+        using (JsonDocument json = JsonDocument.Parse(Snapshot.Create(match, player, RoomHost.Json)))
+        {
+            JsonElement root = json.RootElement;
+            double now = root.GetProperty("now").GetDouble();
+            CheckTickTime(now);
+            // 받은 초에 30을 곱해 반올림하면 틱 번호가 된다.
+            Equal((long)Math.Round(now * Rules.TicksPerSecond), landing);
+            JsonElement start = Find(root.GetProperty("notices"), "text", "작전 시작");
+            Equal(PropertyNames(start), "id,at,text");
+            // 같은 틱의 시각은 같은 방식으로 반올림해 보내므로 now와 정확히 같다.
+            Equal(start.GetProperty("at").GetDouble(), now);
+            JsonElement effect = Find(root.GetProperty("effects"), "kind", "deploy");
+            Equal(PropertyNames(effect), "id,x,y,kind,until");
+            double until = effect.GetProperty("until").GetDouble();
+            CheckTickTime(until);
+            // 초라면 투입 효과는 지금부터 1초 안에 사라진다. 틱 번호를 보내면 수백이 된다.
+            Check(until > now && until < now + 1, $"투입 효과의 until {until}이 초가 아닙니다");
+        }
+
+        // 다음 틱에 타격을 시작해 기술 시각도 본다.
+        player.Mana = player.MaxMana;
+        Check(match.Input(player, 1, 0, 0, 0, 1));
+        match.Step();
+        using (JsonDocument json = JsonDocument.Parse(Snapshot.Create(match, player, RoomHost.Json)))
+        {
+            JsonElement root = json.RootElement;
+            double now = root.GetProperty("now").GetDouble();
+            JsonElement action = root.GetProperty("players")[0].GetProperty("actions")[0];
+            // 방금 시작한 기술의 startedAt은 같은 틱의 now와 정확히 같다.
+            Equal(action.GetProperty("startedAt").GetDouble(), now);
+            string[] times = new string[] { "contactAt", "activeUntil", "endsAt" };
+            for (int i = 0; i < times.Length; i++)
+            {
+                double value = action.GetProperty(times[i]).GetDouble();
+                CheckTickTime(value);
+                Check(value > now && value < now + 1, $"기술의 {times[i]} {value}가 초가 아닙니다");
+            }
+        }
+    }
+
+    // 보내는 시각은 틱 시각을 초로 바꿔 소수 둘째 자리로 반올림한 값이어야 한다.
+    private static void CheckTickTime(double value)
+    {
+        Check(Math.Abs(value * 100 - Math.Round(value * 100)) < 0.000001, $"{value}가 소수 둘째 자리로 반올림되지 않았습니다");
+        // 반올림 오차는 0.005초(0.15틱) 이하라 틱 번호에서 크게 벗어나지 않는다.
+        double ticks = value * Rules.TicksPerSecond;
+        Check(Math.Abs(ticks - Math.Round(ticks)) < 0.2, $"{value}가 틱 시각이 아닙니다");
+    }
+
+    // 배열에서 name 속성이 prefix로 시작하는 첫 항목을 찾는다. 생성 순서에 기대지 않으려고 내용으로 찾는다.
+    private static JsonElement Find(JsonElement array, string name, string prefix)
+    {
+        foreach (JsonElement item in array.EnumerateArray())
+        {
+            string? value = item.GetProperty(name).GetString();
+            if (value != null && value.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                return item;
+            }
+        }
+        throw new Exception($"{name}이 {prefix}로 시작하는 항목이 없습니다");
     }
 
     // JSON 객체의 속성 이름을 순서대로 쉼표로 이어 돌려준다.
@@ -312,6 +367,32 @@ internal static class LifecycleTests
             names.Add(property.Name);
         }
         return string.Join(",", names);
+    }
+
+    private static void NoticeIds()
+    {
+        // 같은 이름의 두 대원이 같은 틱에 참가하면 문구와 시각이 같은 안내가 두 번 나온다. 순번으로 둘을 구분한다.
+        Match match = new Match("NOTE01", new Rules { MaxEnemies = 0 }, 1);
+        Player first = match.Join("a", "pilot")!;
+        Check(match.Join("b", "pilot") != null, "같은 이름의 두 번째 대원이 참가하지 못했습니다");
+        using (JsonDocument json = JsonDocument.Parse(Snapshot.Create(match, first, RoomHost.Json)))
+        {
+            JsonElement notices = json.RootElement.GetProperty("notices");
+            Equal(notices.GetArrayLength(), 2);
+            JsonElement one = notices[0];
+            JsonElement two = notices[1];
+            Equal(two.GetProperty("text").GetString(), one.GetProperty("text").GetString());
+            Equal(two.GetProperty("at").GetDouble(), one.GetProperty("at").GetDouble());
+            Check(two.GetProperty("id").GetInt32() > one.GetProperty("id").GetInt32(), "같은 안내 둘의 순번이 늘지 않았습니다");
+        }
+        // 오래된 안내가 목록에서 빠져도 순번은 계속 늘어난다. 목록에는 최근 여섯 개만 남는다.
+        for (int i = 0; i < 10; i++)
+        {
+            match.Note("시험 안내 " + i);
+        }
+        Equal(match.Notices.Count, 6);
+        Equal(match.Notices[0].Id, 7);
+        Equal(match.Notices[5].Id, 12);
     }
 
     private static void SharedSnapshot()

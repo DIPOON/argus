@@ -42,13 +42,13 @@ public static class Snapshot
     {
         SnapshotMessage message = new SnapshotMessage();
         message.Room = match.Code;
-        message.Now = Round(match.Now);
-        message.Elapsed = Round(match.Elapsed);
+        message.Now = Seconds(match.Tick);
+        message.Elapsed = Seconds(match.ElapsedTicks);
         message.Phase = match.Phase;
         message.Result = match.Result;
         message.Pulse = match.Pulse;
         long nextPulseTick = Rules.ToTicks((match.Pulse + 1) * match.Rules.PulseSeconds);
-        message.NextPulse = Round(Rules.ToSeconds(nextPulseTick - match.ElapsedTicks));
+        message.NextPulse = Seconds(nextPulseTick - match.ElapsedTicks);
         message.Extraction.X = BattleMap.Extraction.X;
         message.Extraction.Y = BattleMap.Extraction.Y;
         message.Extraction.Progress = Round(match.ExtractionProgress);
@@ -114,7 +114,7 @@ public static class Snapshot
             entry.X = effect.X;
             entry.Y = effect.Y;
             entry.Kind = effect.Kind;
-            entry.Until = Rules.ToSeconds(effect.UntilTick);
+            entry.Until = Seconds(effect.UntilTick);
             message.Effects.Add(entry);
         }
         message.Sight.Add(CreateSightPolygon(match, BattleMap.Camp, BattleMap.CampVision));
@@ -140,7 +140,8 @@ public static class Snapshot
         {
             Notice notice = match.Notices[i];
             NoticeSnapshot entry = new NoticeSnapshot();
-            entry.At = Rules.ToSeconds(notice.AtTick);
+            entry.Id = notice.Id;
+            entry.At = Seconds(notice.AtTick);
             entry.Text = notice.Text;
             message.Notices.Add(entry);
         }
@@ -176,7 +177,7 @@ public static class Snapshot
             entry.Objective = supply.Objective;
             entry.Collected = supply.Collected;
             // 보급 대기 시간은 대원마다 다르다.
-            entry.Cooldown = Round(Rules.ToSeconds(Math.Max(0, supply.ReadyTick(recipient) - match.Tick)));
+            entry.Cooldown = Seconds(Math.Max(0, supply.ReadyTick(recipient) - match.Tick));
             personal.Supplies.Add(entry);
         }
         if (includeWalls)
@@ -207,7 +208,7 @@ public static class Snapshot
         entry.MaxHp = player.MaxHp;
         entry.Mana = player.Mana;
         entry.MaxMana = player.MaxMana;
-        entry.Busy = Round(Rules.ToSeconds(Math.Max(0, player.BusyUntilTick - match.Tick)));
+        entry.Busy = Seconds(Math.Max(0, player.BusyUntilTick - match.Tick));
         for (int i = 0; i < player.Actions.Count; i++)
         {
             PlayerAction action = player.Actions[i];
@@ -233,7 +234,7 @@ public static class Snapshot
         }
         if (player.State == "deploying")
         {
-            entry.Deploy = Round(Rules.ToSeconds(Math.Max(0, player.DeployTick - match.Tick)));
+            entry.Deploy = Seconds(Math.Max(0, player.DeployTick - match.Tick));
         }
         entry.Kills = player.Kills;
         entry.Deaths = player.Deaths;
@@ -253,10 +254,10 @@ public static class Snapshot
         display.Kind = kind;
         display.Aim = aim;
         // 시각은 틱으로 다루지만 통신 형식은 초다.
-        display.StartedAt = Rules.ToSeconds(action.StartedTick);
-        display.ContactAt = Rules.ToSeconds(action.ContactTick);
-        display.ActiveUntil = Rules.ToSeconds(action.ActiveUntilTick);
-        display.EndsAt = Rules.ToSeconds(action.EndsTick);
+        display.StartedAt = Seconds(action.StartedTick);
+        display.ContactAt = Seconds(action.ContactTick);
+        display.ActiveUntil = Seconds(action.ActiveUntilTick);
+        display.EndsAt = Seconds(action.EndsTick);
         display.Range = range;
         display.HalfWidth = halfWidth;
         return display;
@@ -285,5 +286,13 @@ public static class Snapshot
     private static double Round(double value)
     {
         return Math.Round(value, 2);
+    }
+
+    // 틱 시각과 틱 수를 보낼 초로 바꾼다. 모든 시간 필드가 이것을 거쳐 같은 방식(소수 둘째 자리)으로 반올림되므로,
+    // 같은 틱이면 now와 다른 시각이 정확히 같은 값이 된다. 한 틱은 약 0.033초라 반올림해도 틱끼리 구분되고,
+    // 받은 값에 30을 곱해 반올림하면 틱 번호로 돌아간다.
+    private static double Seconds(long ticks)
+    {
+        return Round(Rules.ToSeconds(ticks));
     }
 }

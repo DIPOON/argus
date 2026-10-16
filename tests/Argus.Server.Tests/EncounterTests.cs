@@ -214,12 +214,15 @@ internal static class EncounterTests
                 EnemyAction action = enemy.Action!;
                 double expected = skill.Windup * rules.EnemyWindupMultiplier;
                 // 예고 길이는 틱으로 올려 센다. 배율 1의 0.85초 예고는 26틱(약 0.867초)이다.
-                // 클라이언트에 보내는 예고도 실제 접촉과 같은 틱을 가리켜야 한다.
+                // 클라이언트에 보내는 예고도 실제 접촉과 같은 틱을 가리켜야 한다. 보내는 시각은 반올림되어 있으므로
+                // 각각 30을 곱해 반올림해 틱으로 되돌린 뒤 비교한다.
                 long windupTicks = Rules.ToTicks(expected);
                 Equal(action.ContactTick - action.StartedTick, windupTicks);
                 SnapshotMessage snapshot = Snapshot.CreateShared(f.Match);
                 ActionSnapshot tell = snapshot.Enemies[0].Action!;
-                Near(tell.ContactAt - tell.StartedAt, Rules.ToSeconds(windupTicks));
+                long tellStart = (long)Math.Round(tell.StartedAt * Rules.TicksPerSecond);
+                long tellContact = (long)Math.Round(tell.ContactAt * Rules.TicksPerSecond);
+                Equal(tellContact - tellStart, windupTicks);
                 Equal(tell.Phase, "telegraph");
                 Advance(f.Match, expected - Rules.Step);
                 Near(f.Player.Hp, f.Player.MaxHp);

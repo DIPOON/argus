@@ -90,8 +90,11 @@ let reconnectTimer = 0;
 let sequence = 0;
 let ping = 0;
 const mouseButtons = new Set<number>();
-let lastNotice = '';
+// 마지막으로 띄운 안내의 순번이다. 0이면 이 방에서 아직 띄운 안내가 없다.
+let lastNotice = 0;
 let toastTimer = 0;
+// 알림 줄마다 3.5초 동안 보이고 최대 세 줄까지 쌓인다. 안내가 몰려 와도 앞의 것이 곧바로 지워지지 않는다.
+const toastLines: { text: string; until: number }[] = [];
 // 투입 요청을 보내고 서버의 답(투입 중 상태나 오류 안내)을 기다리는 중이다. 그동안 투입 버튼을 막아 두 번 보내지 않는다.
 let deployRequested = false;
 const keys = new Set<string>();
@@ -161,10 +164,23 @@ function sendInput(x: number, y: number, aim: number, slot: number) {
   if (send({ type: 'input', seq, moveX: x, moveY: y, aim, slot })) world?.recordInput(seq, x, y);
 }
 function status(text: string, connected = false) { $('connection').innerHTML = `<i class="${connected ? 'online' : ''}"></i> ${escape(text)}`; }
-function toast(text: string) {
-  $('toast').textContent = text; $('toast').hidden = false;
+function toast(text: string, merge = true) {
+  const now = performance.now();
+  const last = toastLines.at(-1);
+  // 빈 곳을 여러 번 누르는 것처럼 같은 말을 거듭 띄우면 줄을 늘리지 않고 시간만 늘린다. 안내는 순번이 달라 따로 띄운다.
+  if (merge && last?.text === text) last.until = now + 3500;
+  else toastLines.push({ text, until: now + 3500 });
+  if (toastLines.length > 3) toastLines.splice(0, toastLines.length - 3);
+  renderToast();
+}
+function renderToast() {
+  const now = performance.now();
+  for (let i = toastLines.length - 1; i >= 0; i--) if (toastLines[i].until <= now) toastLines.splice(i, 1);
+  const box = $('toast');
+  box.replaceChildren(...toastLines.map(line => Object.assign(document.createElement('div'), { textContent: line.text })));
+  box.hidden = toastLines.length === 0;
   window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => { $('toast').hidden = true; }, 3500);
+  if (toastLines.length > 0) toastTimer = window.setTimeout(renderToast, Math.min(...toastLines.map(line => line.until)) - now);
 }
 function clearInput() {
   keys.clear(); mouseButtons.clear(); slotOrder.length = 0; pointerBaseline = true;
@@ -256,9 +272,13 @@ function connect() {
     status('분대 연결됨', true);
     world!.update(snapshot);
     updateUi();
-    const notice = snapshot.notices.at(-1);
-    const noticeKey = notice ? `${notice.at}:${notice.text}` : '';
-    if (notice && noticeKey !== lastNotice) { lastNotice = noticeKey; toast(notice.text); }
+    // 순번이 마지막으로 띄운 것보다 큰 안내를 모두 띄운다. 한 방송에 여러 개가 와도, 같은 틱에 같은 문구가 와도 빠뜨리지 않는다.
+    // 방에 들어온 직후에는 지난 안내가 최대 여섯 개 함께 오므로 가장 최근 것만 띄운다.
+    const fresh = snapshot.notices.filter(notice => notice.id > lastNotice);
+    if (fresh.length > 0) {
+      for (const notice of lastNotice === 0 ? fresh.slice(-1) : fresh) toast(notice.text, false);
+      lastNotice = fresh[fresh.length - 1].id;
+    }
   });
   ws.addEventListener('close', event => {
     if (socket !== ws || !guest) return;
@@ -273,7 +293,7 @@ function connect() {
 }
 
 function leave() {
-  guest = undefined; snapshot = undefined; lastNotice = ''; sequence = 0;
+  guest = undefined; snapshot = undefined; lastNotice = 0; sequence = 0;
   sessionStorage.removeItem('argus-guest');
   window.clearTimeout(reconnectTimer);
   socket?.close(); socket = undefined;

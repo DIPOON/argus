@@ -31,6 +31,8 @@ public sealed partial class Match
     // 다음 증원을 보낼 임무 경과 틱이다. 첫 증원은 10초 뒤다.
     private long _nextSpawnTick = Rules.ToTicks(10);
     private int _nextId = 100;
+    // 안내 순번이다. 효과·행동의 순번(_nextId)과 따로 센다.
+    private int _nextNoticeId;
     private readonly int[] _flow = new int[BattleMap.Columns * BattleMap.Rows];
     private long _nextFlowTick;
     // 탈출 진행도다. 탈출 지점을 비우면 절반 속도로 줄어들므로 반 틱 단위로 센다.
@@ -588,9 +590,11 @@ public sealed partial class Match
         return false;
     }
 
+    // 안내는 모든 대원에게 그대로 가므로 공개된 사건에만 낸다.
     public void Note(string text)
     {
-        Notices.Add(new Notice(Tick, text));
+        _nextNoticeId++;
+        Notices.Add(new Notice(_nextNoticeId, Tick, text));
         if (Notices.Count > 6)
         {
             Notices.RemoveAt(0);

@@ -25,6 +25,7 @@ public sealed partial class Match
         hasher.AddInt(Departures);
         hasher.AddLong(_nextSpawnTick);
         hasher.AddInt(_nextId);
+        hasher.AddInt(_nextNoticeId);
         hasher.AddLong(_nextFlowTick);
         hasher.AddIntArray(_flow);
         hasher.AddLong(_random.Position);
@@ -72,6 +73,7 @@ public sealed partial class Match
         hasher.AddInt(Notices.Count);
         for (int i = 0; i < Notices.Count; i++)
         {
+            hasher.AddInt(Notices[i].Id);
             hasher.AddLong(Notices[i].AtTick);
             hasher.AddText(Notices[i].Text);
         }

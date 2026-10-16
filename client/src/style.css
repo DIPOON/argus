@@ -879,6 +879,10 @@ input::placeholder {
   pointer-events:none
 }
 
+.toast div + div {
+  margin-top:4px
+}
+
 .combat-hud {
   position:absolute;
   bottom:52px;

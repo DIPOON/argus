@@ -215,12 +215,16 @@ public sealed class Effect
 
 public sealed class Notice
 {
+    // 안내마다 1부터 늘어나는 순번이다. 같은 틱에 같은 문구가 두 번 나와도 클라이언트가 둘을 구분한다.
+    // 안내는 공개된 사건에만 나오므로 순번이 숨은 정보를 드러내지 않는다.
+    public int Id { get; }
     // 안내가 나온 틱이다. 스냅샷에는 초(at)로 바꿔 보낸다.
     public long AtTick { get; }
     public string Text { get; }
 
-    public Notice(long atTick, string text)
+    public Notice(int id, long atTick, string text)
     {
+        Id = id;
         AtTick = atTick;
         Text = text;
     }

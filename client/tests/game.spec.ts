@@ -219,6 +219,23 @@ test('the deploy button sends one request even when it is clicked twice quickly'
   expect(me.errors).toEqual([]);
 });
 
+test('notices that arrive together are all shown, even two identical ones', async ({ page, request }) => {
+  const me = observe(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: '새 작전 시작' }).click();
+  await expect(page.locator('#room-code')).not.toHaveText('------');
+  await expect.poll(() => me.player?.state).toBe('waiting');
+  const code = await page.locator('#room-code').innerText();
+  // 같은 이름의 두 대원이 거의 동시에 참가해 같은 문구의 안내가 두 번 나온다. 한 방송에 실리든 이어서 오든
+  // 마지막 안내가 앞의 것을 지우거나 같은 문구라고 하나로 합치지 않고 두 줄 모두 보여야 한다.
+  await Promise.all([
+    request.post(`/api/rooms/${code}/join`, { data: { name: 'Twin' } }),
+    request.post(`/api/rooms/${code}/join`, { data: { name: 'Twin' } })
+  ]);
+  await expect.poll(async () => ((await page.locator('#toast').innerText()).match(/Twin 합류/g) ?? []).length).toBe(2);
+  expect(me.errors).toEqual([]);
+});
+
 test('a client that closes first gets a clean close back', async ({ request }) => {
   const guest = await (await request.post('/api/rooms', { data: { name: 'Closer' } })).json();
   const url = (process.env.ARGUS_URL ?? 'http://127.0.0.1:5077').replace(/^http/, 'ws') + '/ws';

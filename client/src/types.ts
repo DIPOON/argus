@@ -37,7 +37,7 @@ export interface Snapshot {
   facilities: (Position & { id: number; hp: number; maxHp: number })[];
   supplies: (Position & { id: number; objective: boolean; collected: boolean; cooldown: number })[];
   effects: (Position & { id: number; kind: string; until: number })[];
-  sight: number[][]; notices: { at: number; text: string }[];
+  sight: number[][]; notices: { id: number; at: number; text: string }[];
 }
 // 서버가 보내는 그대로의 스냅샷. 벽은 바뀔 때만, 규칙과 맵은 접속 직후에만 담긴다(protocol v3).
 export type SnapshotWire = Omit<Snapshot, 'walls' | 'rules' | 'map'> & Partial<Pick<Snapshot, 'walls' | 'rules' | 'map'>>;

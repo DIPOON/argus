@@ -109,9 +109,10 @@ public sealed class EffectSnapshot
     public double Until { get; set; }
 }
 
-// 안내도 서버에서는 나온 틱으로 다루고 보낼 때 초(at)로 바꾼다. 클라이언트는 at과 text로 같은 안내를 두 번 띄우지 않는다.
+// 안내도 서버에서는 나온 틱으로 다루고 보낼 때 초(at)로 바꾼다. 클라이언트는 순번(id)으로 새 안내를 가린다.
 public sealed class NoticeSnapshot
 {
+    public int Id { get; set; }
     public double At { get; set; }
     public string Text { get; set; } = "";
 }
