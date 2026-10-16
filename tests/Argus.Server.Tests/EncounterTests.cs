@@ -7,11 +7,41 @@ internal static class EncounterTests
     public static void Register(List<TestCase> tests)
     {
         tests.Add(new TestCase("The first mission has only tier-one enemies, including late reinforcements", FirstMission));
+        tests.Add(new TestCase("Every initial enemy stands on open ground and is placed, in the first and the elite mission", InitialPlacement));
         tests.Add(new TestCase("AI telegraphs and actual hits both wait for the longer mission windup", LongerWindup));
         tests.Add(new TestCase("Reinforcements never appear inside the squad's shared sight", HiddenSpawns));
         tests.Add(new TestCase("An enemy whose body clips a wall corner on an open sight line still reaches the player", CornerSlip));
         tests.Add(new TestCase("The flow field has no heading inside its own source cell", FlowSource));
         tests.Add(new TestCase("An enemy touching a wall walks straight along it instead of zigzagging", WallHug));
+    }
+
+    private static void InitialPlacement()
+    {
+        // 처음 배치하는 적 셋은 모두 빈 땅에 놓여 실제로 생성되어야 한다. 자리가 막혀 있으면 AddEnemy가 조용히 빼 버린다.
+        // 예전 자리 (970, 570)는 장애물 칸 (20, 11) 안이라 그 적이 한 번도 생성되지 않았고, 엘리트 작전에서는 분쇄자가 빠졌다.
+        Match first = new Match("PLACE1", new Rules(), 73);
+        Equal(first.Enemies.Count, 3);
+        for (int i = 0; i < first.Enemies.Count; i++)
+        {
+            Equal(first.Enemies[i].Definition.Id, "grunt");
+        }
+        Match elite = new Match("PLACE2", new Rules { AllowEliteEnemies = true }, 73);
+        Equal(elite.Enemies.Count, 3);
+        bool breaker = false;
+        bool warden = false;
+        for (int i = 0; i < elite.Enemies.Count; i++)
+        {
+            if (elite.Enemies[i].Definition.Id == "breaker")
+            {
+                breaker = true;
+            }
+            if (elite.Enemies[i].Definition.Id == "warden")
+            {
+                warden = true;
+            }
+        }
+        Check(breaker, "엘리트 작전에 분쇄자가 배치되지 않았습니다");
+        Check(warden, "엘리트 작전에 철위병이 배치되지 않았습니다");
     }
 
     private static void FirstMission()
