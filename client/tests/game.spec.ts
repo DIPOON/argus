@@ -236,6 +236,23 @@ test('notices that arrive together are all shown, even two identical ones', asyn
   expect(me.errors).toEqual([]);
 });
 
+test('the bug report button marks the moment in the room recording and is rate limited', async ({ page }) => {
+  const me = observe(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: '새 작전 시작' }).click();
+  await expect(page.locator('#room-code')).not.toHaveText('------');
+  await expect.poll(() => me.player?.state).toBe('waiting');
+  const code = await page.locator('#room-code').innerText();
+  page.on('dialog', dialog => dialog.accept('브라우저 검사 제보'));
+  await page.getByRole('button', { name: '버그 제보' }).click();
+  // 서버가 기록에 남긴 틱을 방 코드와 함께 알려 준다. 이 둘로 그 순간을 다시 돌려 볼 수 있다.
+  await expect(page.locator('#toast')).toContainText(new RegExp(`제보를 남겼습니다 · 방 ${code} · \\d+틱`));
+  // 같은 대원은 5초 안에 다시 제보할 수 없다.
+  await page.getByRole('button', { name: '버그 제보' }).click();
+  await expect(page.locator('#toast')).toContainText('5초에 한 번');
+  expect(me.errors).toEqual([]);
+});
+
 test('a client that closes first gets a clean close back', async ({ request }) => {
   const guest = await (await request.post('/api/rooms', { data: { name: 'Closer' } })).json();
   const url = (process.env.ARGUS_URL ?? 'http://127.0.0.1:5077').replace(/^http/, 'ws') + '/ws';

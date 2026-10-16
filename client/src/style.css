@@ -739,6 +739,10 @@ input::placeholder {
   padding:10px 0
 }
 
+.text-button + .text-button {
+  margin-left:16px
+}
+
 .battlefield {
   flex:1;
   position:relative;

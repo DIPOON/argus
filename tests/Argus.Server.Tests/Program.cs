@@ -10,6 +10,7 @@ internal static class Program
         CombatTests.Register(tests);
         EncounterTests.Register(tests);
         DeterminismTests.Register(tests);
+        RecordingTests.Register(tests);
         int failed = 0;
         for (int i = 0; i < tests.Count; i++)
         {
