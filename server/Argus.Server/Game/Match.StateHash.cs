@@ -72,7 +72,7 @@ public sealed partial class Match
         hasher.AddInt(Notices.Count);
         for (int i = 0; i < Notices.Count; i++)
         {
-            hasher.AddDouble(Notices[i].At);
+            hasher.AddLong(Notices[i].AtTick);
             hasher.AddText(Notices[i].Text);
         }
         return hasher.Finish();

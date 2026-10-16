@@ -136,7 +136,14 @@ public static class Snapshot
             entry.MaxHp = facility.MaxHp;
             message.Facilities.Add(entry);
         }
-        message.Notices = match.Notices;
+        for (int i = 0; i < match.Notices.Count; i++)
+        {
+            Notice notice = match.Notices[i];
+            NoticeSnapshot entry = new NoticeSnapshot();
+            entry.At = Rules.ToSeconds(notice.AtTick);
+            entry.Text = notice.Text;
+            message.Notices.Add(entry);
+        }
         return message;
     }
 

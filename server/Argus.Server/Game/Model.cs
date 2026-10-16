@@ -215,12 +215,13 @@ public sealed class Effect
 
 public sealed class Notice
 {
-    public double At { get; }
+    // 안내가 나온 틱이다. 스냅샷에는 초(at)로 바꿔 보낸다.
+    public long AtTick { get; }
     public string Text { get; }
 
-    public Notice(double at, string text)
+    public Notice(long atTick, string text)
     {
-        At = at;
+        AtTick = atTick;
         Text = text;
     }
 }

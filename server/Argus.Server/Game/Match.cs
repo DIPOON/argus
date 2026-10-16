@@ -590,7 +590,7 @@ public sealed partial class Match
 
     public void Note(string text)
     {
-        Notices.Add(new Notice(Now, text));
+        Notices.Add(new Notice(Tick, text));
         if (Notices.Count > 6)
         {
             Notices.RemoveAt(0);

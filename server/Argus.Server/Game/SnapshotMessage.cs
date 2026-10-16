@@ -24,7 +24,7 @@ public sealed class SnapshotMessage
     // 정수 좌표라 double보다 직렬화가 빠르다. 전송되는 JSON은 같다.
     public List<int[]> Sight { get; set; } = new List<int[]>();
     public List<FacilitySnapshot> Facilities { get; set; } = new List<FacilitySnapshot>();
-    public List<Notice> Notices { get; set; } = new List<Notice>();
+    public List<NoticeSnapshot> Notices { get; set; } = new List<NoticeSnapshot>();
 }
 
 // 수신자마다 다른 값만 담는다. 공통 부분과 따로 직렬화해 앞에 이어 붙인다.
@@ -107,6 +107,13 @@ public sealed class EffectSnapshot
     public double Y { get; set; }
     public string Kind { get; set; } = "";
     public double Until { get; set; }
+}
+
+// 안내도 서버에서는 나온 틱으로 다루고 보낼 때 초(at)로 바꾼다. 클라이언트는 at과 text로 같은 안내를 두 번 띄우지 않는다.
+public sealed class NoticeSnapshot
+{
+    public double At { get; set; }
+    public string Text { get; set; } = "";
 }
 
 public sealed class FacilitySnapshot

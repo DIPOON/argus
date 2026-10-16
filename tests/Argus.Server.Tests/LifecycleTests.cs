@@ -28,6 +28,7 @@ internal static class LifecycleTests
         tests.Add(new TestCase("Snapshots omit hidden enemy actions and effects and share teammate sight", Visibility));
         tests.Add(new TestCase("Deployment never discloses hidden occupancy; a blocked arrival lands nearby without overlap", BlockedDeployment));
         tests.Add(new TestCase("A broadcast serializes the shared part once and matches a snapshot built for one recipient", SharedSnapshot));
+        tests.Add(new TestCase("Effects and notices keep their wire shape and send their tick times as seconds", TimedWireShape));
         tests.Add(new TestCase("A slot that never connects is released quickly while a dropped member keeps the long grace", FirstConnectGrace));
         tests.Add(new TestCase("A long session keeps its room for the full retention time after the last disconnect", RoomRetention));
         tests.Add(new TestCase("A room with nobody left is released soon instead of holding a slot for fifteen minutes", EmptyRoomExpiry));
@@ -279,6 +280,38 @@ internal static class LifecycleTests
         ally.State = "waiting";
         Equal(Snapshot.CreateShared(f.Match).Enemies.Count, 1);
         Check(visible.Hp > 0);
+    }
+
+    private static void TimedWireShape()
+    {
+        // 효과와 안내는 서버에서 틱으로 다루지만 통신 형식은 초다. 전송용 자료구조를 따로 두므로 모양도 그대로인지 본다.
+        Match match = new Match("WIRE01", new Rules { MaxEnemies = 0 }, 1);
+        Player player = match.Join("p", "pilot")!;
+        Check(match.Deploy(player, BattleMap.Camp.X, BattleMap.Camp.Y));
+        // 5초(150틱) 뒤 착지하면서 작전 시작 안내와 0.6초(18틱)짜리 투입 효과가 나온다.
+        Advance(match, match.Rules.DeploySeconds);
+        Equal(match.Tick, 150L);
+        using JsonDocument json = JsonDocument.Parse(Snapshot.Create(match, player, RoomHost.Json));
+        JsonElement notices = json.RootElement.GetProperty("notices");
+        JsonElement start = notices[notices.GetArrayLength() - 1];
+        Near(start.GetProperty("at").GetDouble(), 5);
+        Check(start.GetProperty("text").GetString()!.StartsWith("작전 시작"), "마지막 안내가 작전 시작이 아닙니다");
+        Equal(PropertyNames(start), "at,text");
+        JsonElement effect = json.RootElement.GetProperty("effects")[0];
+        Equal(effect.GetProperty("kind").GetString(), "deploy");
+        Near(effect.GetProperty("until").GetDouble(), 5.6);
+        Equal(PropertyNames(effect), "id,x,y,kind,until");
+    }
+
+    // JSON 객체의 속성 이름을 순서대로 쉼표로 이어 돌려준다.
+    private static string PropertyNames(JsonElement element)
+    {
+        List<string> names = new List<string>();
+        foreach (JsonProperty property in element.EnumerateObject())
+        {
+            names.Add(property.Name);
+        }
+        return string.Join(",", names);
     }
 
     private static void SharedSnapshot()
