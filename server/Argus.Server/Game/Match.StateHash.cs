@@ -4,24 +4,28 @@ public sealed partial class Match
 {
     // 진행 상태 전체를 SHA-256 하나로 요약한다. 같은 시드로 만들고 같은 틱마다 같은 입력을 넣은 두 방은
     // 틱마다 같은 값을 가져야 한다. 결정론 검사와, 기록을 다시 돌렸을 때 같은 길을 가는지 확인하는 데 쓴다.
-    // 규칙과 기술·적 정의는 진행 중에 바뀌지 않으므로 id만 적는다. 시드는 상태가 아니라 처음에 받은 값이므로
-    // 적지 않고, 난수를 얼마나 뽑았는지만 적는다. 연결 번호(Player.Connection)는 접속 처리가 쓰는 값이고
-    // 진행에 영향을 주지 않으므로 넣지 않는다. 시야 밖 적까지 담은 값이므로 클라이언트에 보내지 않는다.
+    // 방 코드와 규칙도 적는다. 규칙만 다른 두 방이 처음 몇 초 동안 같은 값을 내면, 재생할 때 규칙을 잘못 넣은 실수를 늦게 잡는다.
+    // 규칙은 JSON으로 적어 새 규칙 값을 추가해도 따로 챙기지 않아도 된다. 기술·적 정의는 코드에 정해진 것이므로
+    // 대원 기술은 id, 적 기술은 정의 안의 순서만 적는다. 시드는 상태가 아니라 처음에 받은 값이므로 적지 않고,
+    // 난수를 얼마나 뽑았는지만 적는다. 연결 번호(Player.Connection)는 접속 처리가 쓰는 값이고 진행에 영향을 주지 않으므로
+    // 넣지 않는다. 시야 밖 적까지 담은 값이므로 클라이언트에 보내지 않는다.
     public string StateHash()
     {
         using StateHasher hasher = new StateHasher();
+        hasher.AddText(Code);
+        hasher.AddBytes(_rulesJson);
+        // 지금 시각(Now)은 틱에서 바로 구하므로 틱만 적는다.
         hasher.AddLong(Tick);
-        hasher.AddDouble(Now);
-        hasher.AddDouble(StartedAt);
-        hasher.AddOptionalDouble(EndedAt);
+        hasher.AddLong(StartedTick);
+        hasher.AddOptionalLong(EndedTick);
         hasher.AddText(Phase);
         hasher.AddOptionalText(Result);
-        hasher.AddDouble(ExtractionProgress);
+        hasher.AddLong(_extractionHalfTicks);
         hasher.AddInt(Pulse);
         hasher.AddInt(Departures);
-        hasher.AddDouble(_nextSpawn);
+        hasher.AddLong(_nextSpawnTick);
         hasher.AddInt(_nextId);
-        hasher.AddDouble(_nextFlow);
+        hasher.AddLong(_nextFlowTick);
         hasher.AddIntArray(_flow);
         hasher.AddLong(_random.Position);
         Map.AddState(hasher);
@@ -53,7 +57,7 @@ public sealed partial class Match
             hasher.AddPoint(supply.Position);
             hasher.AddBool(supply.Objective);
             hasher.AddBool(supply.Collected);
-            hasher.AddTextDoubleMap(supply.ReadyAt);
+            hasher.AddTextLongMap(supply.ReadyTicks);
         }
         hasher.AddInt(Effects.Count);
         for (int i = 0; i < Effects.Count; i++)
@@ -63,7 +67,7 @@ public sealed partial class Match
             hasher.AddDouble(effect.X);
             hasher.AddDouble(effect.Y);
             hasher.AddText(effect.Kind);
-            hasher.AddDouble(effect.Until);
+            hasher.AddLong(effect.UntilTick);
         }
         hasher.AddInt(Notices.Count);
         for (int i = 0; i < Notices.Count; i++)
@@ -83,13 +87,13 @@ public sealed partial class Match
         hasher.AddDouble(player.Aim);
         hasher.AddText(player.State);
         hasher.AddBool(player.HasDeployed);
-        hasher.AddDouble(player.DeployAt);
+        hasher.AddLong(player.DeployTick);
         hasher.AddPoint(player.Landing);
         hasher.AddDouble(player.Hp);
         hasher.AddDouble(player.MaxHp);
         hasher.AddInt(player.Mana);
         hasher.AddInt(player.MaxMana);
-        hasher.AddDouble(player.BusyUntil);
+        hasher.AddLong(player.BusyUntilTick);
         hasher.AddInt(player.RequestedSlot);
         hasher.AddInt(player.Actions.Count);
         for (int i = 0; i < player.Actions.Count; i++)
@@ -98,10 +102,10 @@ public sealed partial class Match
             hasher.AddInt(action.Id);
             hasher.AddText(action.Skill.Id);
             hasher.AddInt(action.Slot);
-            hasher.AddDouble(action.StartedAt);
-            hasher.AddDouble(action.ContactAt);
-            hasher.AddDouble(action.ActiveUntil);
-            hasher.AddDouble(action.EndsAt);
+            hasher.AddLong(action.StartedTick);
+            hasher.AddLong(action.ContactTick);
+            hasher.AddLong(action.ActiveUntilTick);
+            hasher.AddLong(action.EndsTick);
             hasher.AddBool(action.Cancelled);
             hasher.AddOptionalInt(action.Target);
             hasher.AddBool(action.TargetLocked);
@@ -110,11 +114,11 @@ public sealed partial class Match
             hasher.AddIntSet(action.HitFacilities);
             hasher.AddIntSet(action.HitWalls);
         }
-        hasher.AddDouble(player.LastInputAt);
+        hasher.AddLong(player.LastInputTick);
         hasher.AddLong(player.LastSequence);
         hasher.AddPoint(player.Move);
         hasher.AddBool(player.Connected);
-        hasher.AddOptionalDouble(player.DisconnectedAt);
+        hasher.AddOptionalLong(player.DisconnectedTick);
         hasher.AddBool(player.AwaitingFirstConnection);
         hasher.AddInt(player.Kills);
         hasher.AddInt(player.Deaths);
@@ -126,7 +130,7 @@ public sealed partial class Match
         hasher.AddPoint(enemy.Position);
         hasher.AddText(enemy.Definition.Id);
         hasher.AddDouble(enemy.Hp);
-        hasher.AddDouble(enemy.NextActionAt);
+        hasher.AddLong(enemy.NextActionTick);
         EnemyAction? action = enemy.Action;
         hasher.AddBool(action != null);
         if (action == null)
@@ -134,17 +138,19 @@ public sealed partial class Match
             return;
         }
         hasher.AddInt(action.Id);
-        hasher.AddText(action.Skill.Kind);
-        hasher.AddInt(action.Skill.Tier);
-        hasher.AddInt(action.Skill.PartialDamage);
-        hasher.AddDouble(action.Skill.Windup);
-        hasher.AddDouble(action.Skill.Range);
-        hasher.AddDouble(action.Skill.HalfWidth);
+        // 적 기술에는 id가 없으므로 정의 안의 순서로 적는다. 값을 하나씩 적으면 나중에 추가한 값을 빠뜨리기 쉽다.
+        // 정의에 없는 기술(검사가 직접 만든 기술)이면 -1을 적고 기술 값을 JSON으로 적는다.
+        int skill = Array.IndexOf(enemy.Definition.Skills, action.Skill);
+        hasher.AddInt(skill);
+        if (skill < 0)
+        {
+            hasher.AddBytes(StateHasher.ToJson(action.Skill));
+        }
         hasher.AddDouble(action.Aim);
-        hasher.AddDouble(action.StartedAt);
-        hasher.AddDouble(action.ContactAt);
-        hasher.AddDouble(action.ActiveUntil);
-        hasher.AddDouble(action.EndsAt);
+        hasher.AddLong(action.StartedTick);
+        hasher.AddLong(action.ContactTick);
+        hasher.AddLong(action.ActiveUntilTick);
+        hasher.AddLong(action.EndsTick);
         hasher.AddTextSet(action.HitPlayers);
     }
 }

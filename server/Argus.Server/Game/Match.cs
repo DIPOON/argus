@@ -14,23 +14,27 @@ public sealed partial class Match
     public List<Supply> Supplies { get; } = new List<Supply>();
     public List<Effect> Effects { get; } = new List<Effect>();
     public List<Notice> Notices { get; } = new List<Notice>();
-    // 지금까지 진행한 틱 수다. 게임 시간은 언제나 틱의 정수배다.
+    // 지금까지 진행한 틱 수다. 시각은 모두 이 틱 번호로 저장하고 비교한다. 초는 스냅샷으로 보낼 때만 쓴다.
     public long Tick { get; private set; }
-    public double Now { get; private set; }
-    public double StartedAt { get; private set; } = -1;
-    public double? EndedAt { get; private set; }
+    // 첫 투입이 끝난 틱이다. 작전이 시작되기 전에는 -1이다.
+    public long StartedTick { get; private set; } = -1;
+    public long? EndedTick { get; private set; }
     public string Phase { get; private set; } = "staging";
     public string? Result { get; private set; }
-    public double ExtractionProgress { get; private set; }
     public int Pulse { get; private set; }
     // 대원이 방에서 빠질 때마다 늘어난다. 방 관리 쪽이 토큰 정리가 필요한지 알 때 쓴다.
     public int Departures { get; private set; }
     // 게임 진행에 쓰는 난수는 모두 이 생성기 하나에서 뽑는다. 시드가 같으면 같은 순서로 같은 수가 나온다.
     private readonly SeededRandom _random;
-    private double _nextSpawn = 10;
+    // 규칙을 JSON으로 바꾼 값이다. 규칙은 만든 뒤 바뀌지 않으므로 한 번만 만들어 상태 요약에 쓴다.
+    private readonly byte[] _rulesJson;
+    // 다음 증원을 보낼 임무 경과 틱이다. 첫 증원은 10초 뒤다.
+    private long _nextSpawnTick = Rules.ToTicks(10);
     private int _nextId = 100;
     private readonly int[] _flow = new int[BattleMap.Columns * BattleMap.Rows];
-    private double _nextFlow;
+    private long _nextFlowTick;
+    // 탈출 진행도다. 탈출 지점을 비우면 절반 속도로 줄어들므로 반 틱 단위로 센다.
+    private long _extractionHalfTicks;
     private static readonly int[] NeighborX = new int[] { 1, -1, 0, 0 };
     private static readonly int[] NeighborY = new int[] { 0, 0, 1, -1 };
 
@@ -41,6 +45,7 @@ public sealed partial class Match
         Code = code;
         Rules = rules;
         _random = new SeededRandom(seed);
+        _rulesJson = StateHasher.ToJson(rules);
         Facilities.Add(new Facility(1, new Vector2(960, 485)));
         Facilities.Add(new Facility(2, new Vector2(1210, 695)));
         Facilities.Add(new Facility(3, new Vector2(990, 920)));
@@ -67,20 +72,47 @@ public sealed partial class Match
     {
     }
 
+    // 지금 시각(초)이다. 틱 번호에서 바로 구한다.
+    public double Now
+    {
+        get
+        {
+            return Rules.ToSeconds(Tick);
+        }
+    }
+
+    // 첫 투입 이후 임무가 진행된 틱 수다. 임무가 끝나면 더 늘지 않는다.
+    public long ElapsedTicks
+    {
+        get
+        {
+            if (StartedTick < 0)
+            {
+                return 0;
+            }
+            long end = Tick;
+            if (EndedTick.HasValue)
+            {
+                end = EndedTick.Value;
+            }
+            return end - StartedTick;
+        }
+    }
+
     public double Elapsed
     {
         get
         {
-            if (StartedAt < 0)
-            {
-                return 0;
-            }
-            double end = Now;
-            if (EndedAt.HasValue)
-            {
-                end = EndedAt.Value;
-            }
-            return end - StartedAt;
+            return Rules.ToSeconds(ElapsedTicks);
+        }
+    }
+
+    // 탈출 진행도(초)다. 스냅샷으로 보낼 때 쓴다.
+    public double ExtractionProgress
+    {
+        get
+        {
+            return _extractionHalfTicks / (2.0 * Rules.TicksPerSecond);
         }
     }
 
@@ -146,7 +178,7 @@ public sealed partial class Match
             return false;
         }
         player.Landing = target;
-        player.DeployAt = Now + Rules.DeploySeconds;
+        player.DeployTick = Tick + Rules.ToTicks(Rules.DeploySeconds);
         player.State = "deploying";
         return true;
     }
@@ -167,7 +199,7 @@ public sealed partial class Match
             return false;
         }
         player.LastSequence = sequence;
-        player.LastInputAt = Now;
+        player.LastInputTick = Tick;
         player.Move = new Vector2((float)moveX, (float)moveY);
         if (player.Move.LengthSquared() > 1)
         {
@@ -181,7 +213,7 @@ public sealed partial class Match
     public void Disconnect(Player player)
     {
         player.Connected = false;
-        player.DisconnectedAt = Now;
+        player.DisconnectedTick = Tick;
         player.Move = Vector2.Zero;
         player.RequestedSlot = 0;
     }
@@ -192,8 +224,6 @@ public sealed partial class Match
     public void Step()
     {
         Tick++;
-        // 매 틱 더하면 반올림 오차가 쌓이므로 틱 번호에서 바로 구한다.
-        Now = (double)Tick / Rules.TicksPerSecond;
         double dt = Rules.Step;
         RemoveExpiredObjects();
         if (Phase == "ended" || CheckWipe())
@@ -205,7 +235,7 @@ public sealed partial class Match
         {
             return;
         }
-        while (Elapsed >= (Pulse + 1) * Rules.PulseSeconds)
+        while (ElapsedTicks >= Rules.ToTicks((Pulse + 1) * Rules.PulseSeconds))
         {
             Pulse++;
             double damage = Rules.PulseDamage * Math.Pow(2, Pulse - 1);
@@ -226,14 +256,16 @@ public sealed partial class Match
                 UpdatePlayer(Players[i], dt);
             }
         }
-        if (Elapsed >= _nextSpawn && Enemies.Count < Rules.MaxEnemies)
+        if (ElapsedTicks >= _nextSpawnTick && Enemies.Count < Rules.MaxEnemies)
         {
-            _nextSpawn = Elapsed + Math.Max(2.5, Rules.SpawnInterval - Elapsed / 240);
+            // 증원 간격은 시간이 지날수록 줄어들고 2.5초 아래로는 줄지 않는다.
+            double interval = Math.Max(2.5, Rules.SpawnInterval - Elapsed / 240);
+            _nextSpawnTick = ElapsedTicks + Rules.ToTicks(interval);
             SpawnEnemy();
         }
-        if (Now >= _nextFlow)
+        if (Tick >= _nextFlowTick)
         {
-            _nextFlow = Now + 0.5;
+            _nextFlowTick = Tick + Rules.ToTicks(0.5);
             BuildFlow();
         }
         UpdateEnemies(dt);
@@ -249,15 +281,16 @@ public sealed partial class Match
         {
             return;
         }
+        // 탈출 지점에 있으면 한 틱(반 틱 2개)씩 차고, 비우면 반 틱씩 줄어든다.
         if (ObjectivesComplete && HasPlayerAtExtraction())
         {
-            ExtractionProgress += dt;
+            _extractionHalfTicks += 2;
         }
         else
         {
-            ExtractionProgress = Math.Max(0, ExtractionProgress - dt * 0.5);
+            _extractionHalfTicks = Math.Max(0, _extractionHalfTicks - 1);
         }
-        if (ExtractionProgress >= Rules.ExtractionSeconds)
+        if (_extractionHalfTicks >= 2 * Rules.ToTicks(Rules.ExtractionSeconds))
         {
             Finish("success");
         }
@@ -265,9 +298,10 @@ public sealed partial class Match
 
     private void RemoveExpiredObjects()
     {
+        // 효과는 정한 시간만큼의 틱 동안 보이고, 마감 틱이 되면 지운다.
         for (int i = Effects.Count - 1; i >= 0; i--)
         {
-            if (Effects[i].Until < Now)
+            if (Effects[i].UntilTick <= Tick)
             {
                 Effects.RemoveAt(i);
             }
@@ -275,7 +309,7 @@ public sealed partial class Match
         for (int i = Players.Count - 1; i >= 0; i--)
         {
             Player player = Players[i];
-            if (!player.DisconnectedAt.HasValue)
+            if (!player.DisconnectedTick.HasValue)
             {
                 continue;
             }
@@ -287,7 +321,8 @@ public sealed partial class Match
                 grace = Rules.FirstConnectSeconds;
                 notice = $"{player.Name} 접속하지 않아 자리 해제";
             }
-            if (Now - player.DisconnectedAt.Value <= grace)
+            // 유예 시간을 다 채운 다음 틱에 뺀다.
+            if (Tick - player.DisconnectedTick.Value <= Rules.ToTicks(grace))
             {
                 continue;
             }
@@ -296,7 +331,7 @@ public sealed partial class Match
             Departures++;
             for (int j = 0; j < Supplies.Count; j++)
             {
-                Supplies[j].ReadyAt.Remove(player.Id);
+                Supplies[j].ReadyTicks.Remove(player.Id);
             }
         }
     }
@@ -306,7 +341,7 @@ public sealed partial class Match
         for (int i = 0; i < Players.Count; i++)
         {
             Player player = Players[i];
-            if (player.State != "deploying" || player.DeployAt > Now)
+            if (player.State != "deploying" || player.DeployTick > Tick)
             {
                 continue;
             }
@@ -322,17 +357,17 @@ public sealed partial class Match
             player.Hp = player.MaxHp;
             player.Mana = 0;
             player.Actions.Clear();
-            player.BusyUntil = Now;
+            player.BusyUntilTick = Tick;
             player.RequestedSlot = 0;
             player.State = "alive";
             player.HasDeployed = true;
             player.Move = Vector2.Zero;
-            player.LastInputAt = -100;
+            player.LastInputTick = Player.NoInputTick;
             Effect(player.Position, "deploy", 0.6);
             if (Phase == "staging")
             {
                 Phase = "active";
-                StartedAt = Now;
+                StartedTick = Tick;
                 Note("작전 시작 · 보급 상자에서 마나를 채우고 시설 3곳을 파괴하세요");
             }
         }
@@ -386,7 +421,8 @@ public sealed partial class Match
 
     private void UpdatePlayer(Player player, double dt)
     {
-        if (Now - player.LastInputAt > 0.35)
+        // 입력이 0.35초(11틱) 동안 없으면 멈춘다. 끊긴 연결이 마지막 입력으로 계속 움직이지 않게 한다.
+        if (Tick - player.LastInputTick >= Rules.ToTicks(0.35))
         {
             player.Move = Vector2.Zero;
             player.RequestedSlot = 0;
@@ -394,21 +430,21 @@ public sealed partial class Match
         player.Position = MoveBody(player.Position, player.Move * (float)(Rules.PlayerSpeed * dt), Rules.PlayerRadius, null);
         for (int i = player.Actions.Count - 1; i >= 0; i--)
         {
-            if (player.Actions[i].EndsAt <= Now)
+            if (player.Actions[i].EndsTick <= Tick)
             {
                 player.Actions.RemoveAt(i);
             }
         }
-        if (player.RequestedSlot > 0 && Now >= player.BusyUntil)
+        if (player.RequestedSlot > 0 && Tick >= player.BusyUntilTick)
         {
             SkillDefinition skill = Rules.Skill(player.Slots[player.RequestedSlot - 1]);
             if (player.Mana >= skill.Mana)
             {
                 player.Mana -= skill.Mana;
                 _nextId++;
-                PlayerAction action = new PlayerAction(_nextId, skill, player.RequestedSlot, Now);
+                PlayerAction action = new PlayerAction(_nextId, skill, player.RequestedSlot, Tick);
                 player.Actions.Add(action);
-                player.BusyUntil = action.EndsAt;
+                player.BusyUntilTick = action.EndsTick;
             }
         }
         UpdateSupplies(player);
@@ -419,7 +455,7 @@ public sealed partial class Match
         for (int i = 0; i < Supplies.Count; i++)
         {
             Supply supply = Supplies[i];
-            if (supply.Collected || supply.AvailableAt(player) > Now ||
+            if (supply.Collected || supply.ReadyTick(player) > Tick ||
                 Vector2.Distance(player.Position, supply.Position) > 35 || !Map.LineOfSight(player.Position, supply.Position))
             {
                 continue;
@@ -436,7 +472,7 @@ public sealed partial class Match
             player.Hp = player.MaxHp;
             player.Mana = player.MaxMana;
             // 난입자와 겹쳐 선 동료가 다른 사람의 보급 사용 때문에 기다리지 않게 한다.
-            supply.ReadyAt[player.Id] = Now + Rules.SupplyCooldown;
+            supply.ReadyTicks[player.Id] = Tick + Rules.ToTicks(Rules.SupplyCooldown);
             Effect(player.Position, "heal", 0.5);
         }
     }
@@ -473,7 +509,7 @@ public sealed partial class Match
     private void Finish(string result)
     {
         Phase = "ended";
-        EndedAt = Now;
+        EndedTick = Tick;
         Result = result;
         if (result == "success")
         {
@@ -563,6 +599,6 @@ public sealed partial class Match
     private void Effect(Vector2 at, string kind, double duration)
     {
         _nextId++;
-        Effects.Add(new Effect(_nextId, at.X, at.Y, kind, Now + duration));
+        Effects.Add(new Effect(_nextId, at.X, at.Y, kind, Tick + Rules.ToTicks(duration)));
     }
 }

@@ -96,7 +96,7 @@ public sealed partial class Match
         {
             return false;
         }
-        candidate.NextActionAt = Now + 1;
+        candidate.NextActionTick = Tick + Rules.ToTicks(1);
         Enemies.Add(candidate);
         return true;
     }
@@ -112,7 +112,7 @@ public sealed partial class Match
             {
                 definition = EnemyDefinition.Breaker;
             }
-            else if (roll < 0.25 && Elapsed > 45)
+            else if (roll < 0.25 && ElapsedTicks > Rules.ToTicks(45))
             {
                 definition = EnemyDefinition.Warden;
             }
@@ -258,7 +258,7 @@ public sealed partial class Match
             }
             if (enemy.Action != null)
             {
-                if (enemy.Action.EndsAt > Now)
+                if (enemy.Action.EndsTick > Tick)
                 {
                     continue;
                 }
@@ -282,13 +282,14 @@ public sealed partial class Match
             }
             Vector2 direct = target.Position - enemy.Position;
             bool sight = Map.LineOfSight(enemy.Position, target.Position);
-            if (Now >= enemy.NextActionAt && closest < 75 * 75 && sight)
+            if (Tick >= enemy.NextActionTick && closest < 75 * 75 && sight)
             {
                 int index = _random.NextInt(0, enemy.Definition.Skills.Length);
                 EnemySkill skill = enemy.Definition.Skills[index];
                 _nextId++;
-                enemy.Action = new EnemyAction(_nextId, skill, Math.Atan2(direct.Y, direct.X), Now, Rules.EnemyWindupMultiplier);
-                enemy.NextActionAt = enemy.Action.EndsAt + 0.25;
+                enemy.Action = new EnemyAction(_nextId, skill, Math.Atan2(direct.Y, direct.X), Tick, Rules.EnemyWindupMultiplier);
+                // 회복이 끝난 틱에서 0.25초(8틱) 쉰 뒤 다음 행동을 고른다.
+                enemy.NextActionTick = enemy.Action.EndsTick + Rules.ToTicks(0.25);
                 continue;
             }
 

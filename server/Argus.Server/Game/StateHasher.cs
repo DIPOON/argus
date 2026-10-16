@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace Argus.Server.Game;
 
@@ -12,6 +13,14 @@ public sealed class StateHasher : IDisposable
 {
     private readonly IncrementalHash _hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
     private readonly byte[] _buffer = new byte[8];
+    // 기본 설정으로 고정한다. 공개 속성을 선언 순서대로 쓰고, 실수는 원래 값으로 되돌릴 수 있는 가장 짧은 표기로 쓴다.
+    private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions();
+
+    // 규칙처럼 값이 많은 객체를 정해진 방식의 JSON 바이트로 바꾼다. 값을 하나씩 적으면 나중에 추가한 값을 빠뜨리기 쉽다.
+    public static byte[] ToJson<T>(T value)
+    {
+        return JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions);
+    }
 
     public void AddInt(int value)
     {
@@ -104,12 +113,12 @@ public sealed class StateHasher : IDisposable
         }
     }
 
-    public void AddOptionalDouble(double? value)
+    public void AddOptionalLong(long? value)
     {
         AddBool(value.HasValue);
         if (value.HasValue)
         {
-            AddDouble(value.Value);
+            AddLong(value.Value);
         }
     }
 
@@ -149,7 +158,7 @@ public sealed class StateHasher : IDisposable
     }
 
     // Dictionary도 순회 순서를 약속하지 않으므로 키를 정렬해서 적는다.
-    public void AddTextDoubleMap(Dictionary<string, double> values)
+    public void AddTextLongMap(Dictionary<string, long> values)
     {
         string[] keys = new string[values.Count];
         values.Keys.CopyTo(keys, 0);
@@ -158,7 +167,7 @@ public sealed class StateHasher : IDisposable
         for (int i = 0; i < keys.Length; i++)
         {
             AddText(keys[i]);
-            AddDouble(values[keys[i]]);
+            AddLong(values[keys[i]]);
         }
     }
 

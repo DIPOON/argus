@@ -47,7 +47,8 @@ public static class Snapshot
         message.Phase = match.Phase;
         message.Result = match.Result;
         message.Pulse = match.Pulse;
-        message.NextPulse = Round((match.Pulse + 1) * match.Rules.PulseSeconds - match.Elapsed);
+        long nextPulseTick = Rules.ToTicks((match.Pulse + 1) * match.Rules.PulseSeconds);
+        message.NextPulse = Round(Rules.ToSeconds(nextPulseTick - match.ElapsedTicks));
         message.Extraction.X = BattleMap.Extraction.X;
         message.Extraction.Y = BattleMap.Extraction.Y;
         message.Extraction.Progress = Round(match.ExtractionProgress);
@@ -89,11 +90,11 @@ public static class Snapshot
                     action.Skill.Range, action.Skill.HalfWidth);
                 display.Tier = action.Skill.Tier;
                 display.Phase = "recovery";
-                if (match.Now < action.ContactAt)
+                if (match.Tick < action.ContactTick)
                 {
                     display.Phase = "telegraph";
                 }
-                else if (match.Now < action.ActiveUntil)
+                else if (match.Tick < action.ActiveUntilTick)
                 {
                     display.Phase = "active";
                 }
@@ -104,10 +105,17 @@ public static class Snapshot
         for (int i = 0; i < match.Effects.Count; i++)
         {
             Effect effect = match.Effects[i];
-            if (match.Visible(new Vector2((float)effect.X, (float)effect.Y)))
+            if (!match.Visible(new Vector2((float)effect.X, (float)effect.Y)))
             {
-                message.Effects.Add(effect);
+                continue;
             }
+            EffectSnapshot entry = new EffectSnapshot();
+            entry.Id = effect.Id;
+            entry.X = effect.X;
+            entry.Y = effect.Y;
+            entry.Kind = effect.Kind;
+            entry.Until = Rules.ToSeconds(effect.UntilTick);
+            message.Effects.Add(entry);
         }
         message.Sight.Add(CreateSightPolygon(match, BattleMap.Camp, BattleMap.CampVision));
         for (int i = 0; i < match.Players.Count; i++)
@@ -161,7 +169,7 @@ public static class Snapshot
             entry.Objective = supply.Objective;
             entry.Collected = supply.Collected;
             // 보급 대기 시간은 대원마다 다르다.
-            entry.Cooldown = Round(Math.Max(0, supply.AvailableAt(recipient) - match.Now));
+            entry.Cooldown = Round(Rules.ToSeconds(Math.Max(0, supply.ReadyTick(recipient) - match.Tick)));
             personal.Supplies.Add(entry);
         }
         if (includeWalls)
@@ -192,7 +200,7 @@ public static class Snapshot
         entry.MaxHp = player.MaxHp;
         entry.Mana = player.Mana;
         entry.MaxMana = player.MaxMana;
-        entry.Busy = Round(Math.Max(0, player.BusyUntil - match.Now));
+        entry.Busy = Round(Rules.ToSeconds(Math.Max(0, player.BusyUntilTick - match.Tick)));
         for (int i = 0; i < player.Actions.Count; i++)
         {
             PlayerAction action = player.Actions[i];
@@ -205,11 +213,11 @@ public static class Snapshot
             {
                 display.Phase = "interrupted";
             }
-            else if (action.IsActive(match.Now))
+            else if (action.IsActive(match.Tick))
             {
                 display.Phase = "active";
             }
-            else if (action.IsFollowup(match.Now, match.Rules.ParryFollowupSeconds))
+            else if (action.IsFollowup(match.Tick, match.Rules.ParryFollowupSeconds))
             {
                 display.Phase = "followup";
                 display.Kind = "none";
@@ -218,7 +226,7 @@ public static class Snapshot
         }
         if (player.State == "deploying")
         {
-            entry.Deploy = Round(Math.Max(0, player.DeployAt - match.Now));
+            entry.Deploy = Round(Rules.ToSeconds(Math.Max(0, player.DeployTick - match.Tick)));
         }
         entry.Kills = player.Kills;
         entry.Deaths = player.Deaths;
@@ -237,10 +245,11 @@ public static class Snapshot
         display.Skill = skill;
         display.Kind = kind;
         display.Aim = aim;
-        display.StartedAt = action.StartedAt;
-        display.ContactAt = action.ContactAt;
-        display.ActiveUntil = action.ActiveUntil;
-        display.EndsAt = action.EndsAt;
+        // 시각은 틱으로 다루지만 통신 형식은 초다.
+        display.StartedAt = Rules.ToSeconds(action.StartedTick);
+        display.ContactAt = Rules.ToSeconds(action.ContactTick);
+        display.ActiveUntil = Rules.ToSeconds(action.ActiveUntilTick);
+        display.EndsAt = Rules.ToSeconds(action.EndsTick);
         display.Range = range;
         display.HalfWidth = halfWidth;
         return display;

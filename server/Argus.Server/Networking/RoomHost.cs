@@ -165,6 +165,9 @@ public sealed class TickClock
 {
     // 한 번 깨어날 때 진행하는 틱 수의 상한이다. 8틱은 약 0.27초다.
     public const int MaxTicksPerWake = 8;
+    // 서버 타이머의 실제 주기다. PeriodicTimer는 주기를 밀리초 단위로 내려 쓰므로 1/30초(33.3ms)가 33ms가 된다.
+    // 타이머와 검사가 이 값을 함께 써서, 틱 빈도를 바꿔도 검사가 실제 타이머와 어긋나지 않게 한다.
+    public static readonly TimeSpan TimerPeriod = TimeSpan.FromMilliseconds(Math.Floor(Rules.Step * 1000));
     // 시작한 뒤 지금까지 진행하기로 한 틱 수다.
     private long _ticked;
 
@@ -440,7 +443,7 @@ public sealed class RoomHost : BackgroundService
             room.Tokens[token] = player;
             // HTTP 참가 후 WebSocket으로 접속하지 않으면 짧은 유예 뒤에 자리를 비운다.
             // 방 코드를 아는 사람이 참가만 반복해 자리를 막아 두지 못하게 한다.
-            player.DisconnectedAt = room.Match.Now;
+            player.DisconnectedTick = room.Match.Tick;
             player.AwaitingFirstConnection = true;
             room.LastVisit = DateTime.UtcNow;
             return new Guest(room.Match.Code, player.Id, token);
@@ -500,7 +503,7 @@ public sealed class RoomHost : BackgroundService
             room.Peers[player.Id] = peer;
             player.Connection = peer.Connection;
             player.Connected = true;
-            player.DisconnectedAt = null;
+            player.DisconnectedTick = null;
             player.AwaitingFirstConnection = false;
             room.LastVisit = DateTime.UtcNow;
             byte[] snapshot = Snapshot.Create(room.Match, player, Json);
@@ -529,7 +532,7 @@ public sealed class RoomHost : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // await로 다음 틱을 기다리는 동안 스레드는 다른 작업에 사용될 수 있다.
-        using PeriodicTimer timer = new PeriodicTimer(TimeSpan.FromSeconds(Rules.Step));
+        using PeriodicTimer timer = new PeriodicTimer(TickClock.TimerPeriod);
         Stopwatch watch = Stopwatch.StartNew();
         TickClock clock = new TickClock();
         PublishSchedule schedule = new PublishSchedule();

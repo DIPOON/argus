@@ -73,14 +73,14 @@ internal static class LifecycleTests
         Player player = match.Join("p", "pilot")!;
         Check(match.Deploy(player, 1200, 500));
         Vector2 landing = player.Landing;
-        double arrives = player.DeployAt;
+        long arrives = player.DeployTick;
         Advance(match, 1);
         // 투입 버튼을 두 번 눌러도 거절로 답하지 않는다. 자리와 도착 시각은 처음 요청대로다.
         Check(match.Deploy(player, 1100, 520), "투입 중인 대원의 재요청을 거절했습니다");
         Equal(player.State, "deploying");
         Near(player.Landing.X, landing.X);
         Near(player.Landing.Y, landing.Y);
-        Near(player.DeployAt, arrives);
+        Equal(player.DeployTick, arrives);
         Advance(match, match.Rules.DeploySeconds);
         Equal(player.State, "alive");
         // 살아 있는 대원의 투입 요청은 여전히 거절한다.
@@ -152,7 +152,7 @@ internal static class LifecycleTests
         Check(f.Match.Deploy(f.Player, 400, 730));
         Player late = f.Match.Join("late", "late")!;
         Check(f.Match.Deploy(late, 440, 730));
-        Near(f.Player.DeployAt, late.DeployAt);
+        Equal(f.Player.DeployTick, late.DeployTick);
         Advance(f.Match, 4.95);
         Equal(f.Player.State, "deploying");
         Advance(f.Match, 0.1);
@@ -230,7 +230,7 @@ internal static class LifecycleTests
         (Room Room, Player Player, Peer Peer) again = host.Attach(guest.Room, guest.Token)!.Value;
         Check(ReferenceEquals(player, again.Player));
         Equal(player.State, "deploying");
-        Near(player.DeployAt - room.Match.Now, 3);
+        Equal(player.DeployTick - room.Match.Tick, Rules.ToTicks(3));
         Advance(room.Match, 3.1);
         player.Mana = 7;
         player.Hp = 3;
@@ -265,9 +265,9 @@ internal static class LifecycleTests
         Fixture f = new Fixture();
         Enemy visible = Target(f);
         Enemy hidden = new Enemy(9001, new Vector2(1300, 1100), EnemyDefinition.Warden);
-        hidden.Action = new EnemyAction(9002, hidden.Definition.Skills[1], 1, f.Match.Now);
+        hidden.Action = new EnemyAction(9002, hidden.Definition.Skills[1], 1, f.Match.Tick);
         f.Match.Enemies.Add(hidden);
-        f.Match.Effects.Add(new Effect(9003, 1300, 1100, "break", f.Match.Now + 1));
+        f.Match.Effects.Add(new Effect(9003, 1300, 1100, "break", f.Match.Tick + Rules.ToTicks(1)));
         string serialized = Encoding.UTF8.GetString(Snapshot.Create(f.Match, f.Player, RoomHost.Json));
         using JsonDocument json = JsonDocument.Parse(serialized);
         Equal(json.RootElement.GetProperty("version").GetInt32(), 3);
@@ -286,7 +286,7 @@ internal static class LifecycleTests
         Fixture f = new Fixture();
         Player ally = Ally(f, "scout");
         // 한 대원만 보급 대기 중이게 해서 수신자마다 값이 달라지게 한다.
-        f.Match.Supplies[0].ReadyAt[f.Player.Id] = f.Match.Now + 10;
+        f.Match.Supplies[0].ReadyTicks[f.Player.Id] = f.Match.Tick + Rules.ToTicks(10);
         byte[] body = Snapshot.SerializeShared(Snapshot.CreateShared(f.Match), RoomHost.Json);
         JsonObject shared = JsonNode.Parse(body)!.AsObject();
         // 공통 몸통에는 수신자별 값이 들어가지 않는다. SnapshotMessage에 그런 속성이 없다.
@@ -374,7 +374,7 @@ internal static class LifecycleTests
         // HTTP로 방을 만들고 참가만 한 뒤 한 번도 접속하지 않은 방이다.
         Room squatted = new Room("SQUAT1", "local");
         Player squatter = squatted.Match.Join("q", "squatter")!;
-        squatter.DisconnectedAt = squatted.Match.Now;
+        squatter.DisconnectedTick = squatted.Match.Tick;
         squatter.AwaitingFirstConnection = true;
         Check(!squatted.Expired(DateTime.UtcNow), "막 만든 방이 바로 삭제 대상입니다");
         Advance(squatted.Match, squatted.Match.Rules.FirstConnectSeconds + 0.1);
@@ -605,13 +605,13 @@ internal static class LifecycleTests
                 }
                 id++;
                 Enemy blocker = new Enemy(id, at, still);
-                blocker.NextActionAt = double.MaxValue;
+                blocker.NextActionTick = long.MaxValue;
                 f.Match.Enemies.Add(blocker);
             }
         }
         // 캠프도 막는다.
         Enemy guard = new Enemy(id + 1, BattleMap.Camp, still);
-        guard.NextActionAt = double.MaxValue;
+        guard.NextActionTick = long.MaxValue;
         f.Match.Enemies.Add(guard);
         Check(f.Match.Deploy(late, landing.X, landing.Y));
         Advance(f.Match, f.Match.Rules.DeploySeconds + 0.1);
@@ -640,14 +640,15 @@ internal static class LifecycleTests
 
     private static void PublishRate()
     {
-        // 서버의 PeriodicTimer와 같은 주기로 깨어난다. PeriodicTimer는 주기를 밀리초 단위로 내리므로 1/30초가 33ms가 되어
+        // 서버 타이머와 같은 주기로 깨어난다. PeriodicTimer는 주기를 밀리초 단위로 내리므로 1/30초가 33ms가 되어
         // 세 번이 0.1초에 조금 못 미친다. 깨어나는 시각은 예정보다 0~2ms 늦을 수 있다. 10초 동안 방송은 100번 안팎이어야 한다.
-        double period = 0.033;
+        double period = TickClock.TimerPeriod.TotalSeconds;
+        int wakes = (int)(10 / period);
         Random random = new Random(7);
         PublishSchedule schedule = new PublishSchedule();
         int published = 0;
         double current = 0;
-        for (int tick = 1; tick <= 303; tick++)
+        for (int tick = 1; tick <= wakes; tick++)
         {
             current = tick * period + random.NextDouble() * 0.002;
             if (schedule.Due(current))

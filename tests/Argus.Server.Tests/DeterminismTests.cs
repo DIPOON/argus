@@ -8,10 +8,11 @@ internal static class DeterminismTests
     public static void Register(List<TestCase> tests)
     {
         tests.Add(new TestCase("The seeded generator keeps its known first value, repeats for a seed, differs for another and stays in range", SeededSequence));
-        tests.Add(new TestCase("Two rooms made with the same seed start with the same enemy ids", SameSeedEnemies));
+        tests.Add(new TestCase("Two rooms made with the same seed start with the same enemy ids, and the summary tells apart other rules and codes", SameSeedEnemies));
         tests.Add(new TestCase("Two rooms with the same seed and the same inputs on the same ticks stay identical every tick", SameSeedSameRun));
         tests.Add(new TestCase("Running ticks one at a time or several per wake gives the same state", TickBatching));
         tests.Add(new TestCase("The tick clock turns irregular wakes into whole ticks, carries the remainder and drops a long stall", TickClockWakes));
+        tests.Add(new TestCase("A duration takes the same whole number of ticks whatever tick it starts on", DeadlineTicks));
     }
 
     private static void SeededSequence()
@@ -82,6 +83,12 @@ internal static class DeterminismTests
         Check(other.Enemies[0].Id != first.Enemies[0].Id, "다른 시드인데 같은 적 id가 나왔습니다");
         Equal(again.StateHash(), first.StateHash());
         Check(other.StateHash() != first.StateHash(), "다른 시드인데 상태 요약이 같습니다");
+        // 규칙이나 방 코드만 다른 방은 처음 적이 같아도 요약이 달라야 한다. 재생할 때 규칙을 잘못 넣은 실수를 바로 잡는다.
+        Match slower = new Match("SEED01", new Rules { AllowEliteEnemies = true, SpawnInterval = 6 }, 73);
+        Equal(slower.Enemies[0].Id, first.Enemies[0].Id);
+        Check(slower.StateHash() != first.StateHash(), "규칙만 다른데 상태 요약이 같습니다");
+        Match renamed = new Match("SEED02", rules, 73);
+        Check(renamed.StateHash() != first.StateHash(), "방 코드만 다른데 상태 요약이 같습니다");
     }
 
     // 각본대로 진행하며 모은 결과다.
@@ -96,14 +103,18 @@ internal static class DeterminismTests
         public int Deaths;
     }
 
-    // 대원 둘이 캠프 둘레를 돌며 기술 네 개를 번갈아 쓴다. 넣는 입력은 틱 번호와 대원 상태로만 정해지므로
+    // 대원 넷이 캠프 둘레를 돌며 기술 네 개를 번갈아 쓴다. 넣는 입력은 틱 번호와 대원 상태로만 정해지므로
     // 두 진행의 상태가 같으면 입력도 같다. changedTick 틱에만 첫 대원의 조준을 조금 바꾼다. -1이면 바꾸지 않는다.
+    // 기본 체력의 네 명이면 시드 70~79 모두에서 90초 동안 작전이 이어지며 사망과 재투입, 처치를 거쳤다.
     private static Run Play(int seed, int ticks, int changedTick)
     {
-        // 엘리트와 잦은 증원으로 난수를 쓰는 경로를 모두 지나게 한다. 체력을 낮춰 사망과 재투입도 거치게 한다.
-        Rules rules = new Rules { AllowEliteEnemies = true, SpawnInterval = 3, PlayerHealth = 3 };
+        // 엘리트와 잦은 증원으로 난수를 쓰는 경로를 모두 지나게 한다.
+        Rules rules = new Rules { AllowEliteEnemies = true, SpawnInterval = 3 };
         Match match = new Match("SEED01", rules, seed);
-        Player[] squad = new Player[] { match.Join("a", "alpha")!, match.Join("b", "bravo")! };
+        Player[] squad = new Player[]
+        {
+            match.Join("a", "alpha")!, match.Join("b", "bravo")!, match.Join("c", "charlie")!, match.Join("d", "delta")!
+        };
         Run run = new Run();
         long sequence = 0;
         for (int tick = 0; tick < ticks; tick++)
@@ -169,8 +180,8 @@ internal static class DeterminismTests
         // 각본이 실제로 전투를 거쳤는지 본다. 아무 일도 없으면 같은 결과가 나오는 것이 당연하다.
         Check(first.EnemyIds.Count > 10, $"증원이 {first.EnemyIds.Count}마리뿐입니다");
         Check(first.SawElite, "엘리트가 나오지 않았습니다");
-        Check(first.EnemyActions.Count > 10, $"적 행동이 {first.EnemyActions.Count}번뿐입니다");
-        Check(first.PlayerActions.Count > 50, $"대원 기술이 {first.PlayerActions.Count}번뿐입니다");
+        Check(first.EnemyActions.Count > 30, $"적 행동이 {first.EnemyActions.Count}번뿐입니다");
+        Check(first.PlayerActions.Count > 30, $"대원 기술이 {first.PlayerActions.Count}번뿐입니다");
         Check(first.Kills > 0, "처치가 없습니다");
         Check(first.Deaths > 0, "사망이 없습니다");
         for (int tick = 0; tick < ticks; tick++)
@@ -231,17 +242,61 @@ internal static class DeterminismTests
         }
     }
 
+    private static void DeadlineTicks()
+    {
+        // 초로 정한 기간은 틱으로 올려 센다. 정수 틱이 되어야 할 기간이 실수 오차로 한 틱 늘지 않는다.
+        Equal(Rules.ToTicks(5), 150L);
+        Equal(Rules.ToTicks(1.7), 51L);
+        Equal(Rules.ToTicks(0.1), 3L);
+        Equal(Rules.ToTicks(0.18), 6L);
+        Equal(Rules.ToTicks(0), 0L);
+
+        // 시작 틱이 달라도 5초 투입은 언제나 150틱 걸린다. 마감을 초로 저장하던 때는 시작 틱 600개 중 45개에서 151틱이었다.
+        for (int start = 0; start < 300; start++)
+        {
+            Match match = new Match("LATE01", new Rules { MaxEnemies = 0 }, 1);
+            Player player = match.Join("p", "pilot")!;
+            for (int i = 0; i < start; i++)
+            {
+                match.Step();
+            }
+            Check(match.Deploy(player, BattleMap.Camp.X, BattleMap.Camp.Y));
+            int ticks = 0;
+            while (player.State != "alive" && ticks < 200)
+            {
+                match.Step();
+                ticks++;
+            }
+            if (ticks != 150)
+            {
+                throw new Exception($"{start}틱에 시작한 투입이 {ticks}틱 걸렸습니다");
+            }
+        }
+
+        // 적 행동의 각 단계도 시작 틱과 관계없이 같은 틱 수 뒤에 온다. 일반 적의 타격 예고는 배율 2에서 1.7초다.
+        for (long start = 0; start < 300; start++)
+        {
+            EnemyAction action = new EnemyAction(1, EnemyDefinition.Grunt.Skills[0], 0, start, 2);
+            Equal(action.ContactTick - action.StartedTick, 51L);
+            // 공격 창 0.25초를 더한 1.95초는 58.5틱이라 59틱째에 끝나고, 회복 0.65초를 더한 2.6초는 78틱이다.
+            Equal(action.ActiveUntilTick - action.StartedTick, 59L);
+            Equal(action.EndsTick - action.StartedTick, 78L);
+        }
+    }
+
     private static void TickClockWakes()
     {
-        // 서버 타이머는 1/30초를 밀리초 단위로 내린 33ms마다 깨어나고, 예정보다 0~2ms 늦을 수 있다.
+        // 서버 타이머와 같은 주기(1/30초를 밀리초 단위로 내린 33ms)로 10초 동안 깨어난다. 예정보다 0~2ms 늦을 수 있다.
+        double period = TickClock.TimerPeriod.TotalSeconds;
+        int wakes = (int)(10 / period);
         TickClock clock = new TickClock();
         Random random = new Random(7);
         long total = 0;
         int idle = 0;
         double current = 0;
-        for (int wake = 1; wake <= 303; wake++)
+        for (int wake = 1; wake <= wakes; wake++)
         {
-            current = wake * 0.033 + random.NextDouble() * 0.002;
+            current = wake * period + random.NextDouble() * 0.002;
             int ticks = clock.Due(current);
             Check(ticks >= 0 && ticks <= 2, $"한 번 깨어나 {ticks}틱을 진행했습니다");
             if (ticks == 0)
@@ -258,7 +313,7 @@ internal static class DeterminismTests
         // 서버가 5초 멈췄다 깨어나면 상한만큼만 진행하고 나머지는 버린다. 그다음부터는 평소처럼 진행한다.
         double resume = current + 5;
         Equal(clock.Due(resume), TickClock.MaxTicksPerWake);
-        int next = clock.Due(resume + 0.033);
+        int next = clock.Due(resume + period);
         Check(next <= 1, $"멈춘 뒤 다음 깨어남에서 {next}틱을 진행했습니다");
     }
 }

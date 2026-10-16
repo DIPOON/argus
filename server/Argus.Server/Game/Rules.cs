@@ -6,6 +6,20 @@ public sealed class Rules
     // 게임은 1초에 30틱, 한 틱에 정확히 Step초씩 진행한다.
     public const int TicksPerSecond = 30;
     public const double Step = 1.0 / TicksPerSecond;
+
+    // 초로 정한 기간을 틱 수로 바꾼다. 그 시간이 다 지나는 첫 틱까지 세므로 올림한다. 0.18초는 6틱이다.
+    // 실수 곱셈의 오차로 정수여야 할 값이 150.00000000000003처럼 나와 한 틱 늘지 않도록 아주 작은 여유를 뺀다.
+    // 시각은 모두 틱 번호로 저장하고 비교한다. 초로 저장한 마감을 비교하면 같은 5초가 시작 틱에 따라 150틱도 되고 151틱도 된다.
+    public static long ToTicks(double seconds)
+    {
+        return (long)Math.Ceiling(seconds * TicksPerSecond - 0.000001);
+    }
+
+    // 틱 수를 초로 바꾼다. 스냅샷처럼 초로 보여 줄 때만 쓴다.
+    public static double ToSeconds(long ticks)
+    {
+        return (double)ticks / TicksPerSecond;
+    }
     public const int MaxPlayers = 4;
     public const float PlayerRadius = 13;
     public double DeploySeconds { get; init; } = 5;
