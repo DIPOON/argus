@@ -54,18 +54,17 @@ public sealed partial class Match
         Supplies.Add(new Supply(3, new Vector2(1150, 835), true));
         Supplies.Add(new Supply(4, new Vector2(815, 985), false));
         Supplies.Add(new Supply(5, new Vector2(1080, 740), false));
-        // 자리가 벽이나 다른 몸에 막혀 있으면 AddEnemy가 그 적을 조용히 뺀다. 처음 배치는 빈 땅에 둔다.
-        // (970, 600)은 시설 1 아래 장애물 칸 (19~20, 11) 바로 남쪽이다. 장애물 면에서 24 떨어져 있어 이 자리에 오는 분쇄자(반지름 22)도 닿지 않는다.
-        AddEnemy(new Vector2(610, 730), EnemyDefinition.Grunt);
+        // 처음 배치하는 적의 종류다. 첫 작전은 모두 병사이고, 엘리트를 켠 작전은 뒤의 둘이 분쇄자와 철위병이다.
+        // 자리는 InitialEnemySpots 한 곳에서 정하고 여기서는 종류만 고른다.
+        EnemyDefinition[] kinds = new EnemyDefinition[] { EnemyDefinition.Grunt, EnemyDefinition.Grunt, EnemyDefinition.Grunt };
         if (Rules.AllowEliteEnemies)
         {
-            AddEnemy(new Vector2(970, 600), EnemyDefinition.Breaker);
-            AddEnemy(new Vector2(1260, 770), EnemyDefinition.Warden);
+            kinds[1] = EnemyDefinition.Breaker;
+            kinds[2] = EnemyDefinition.Warden;
         }
-        else
+        for (int i = 0; i < InitialEnemySpots.Count; i++)
         {
-            AddEnemy(new Vector2(970, 600), EnemyDefinition.Grunt);
-            AddEnemy(new Vector2(1260, 770), EnemyDefinition.Grunt);
+            PlaceInitialEnemy(InitialEnemySpots[i], kinds[i]);
         }
     }
 

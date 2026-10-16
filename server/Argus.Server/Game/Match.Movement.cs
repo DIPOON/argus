@@ -84,6 +84,31 @@ public sealed partial class Match
         }
     }
 
+    // 처음 배치하는 적의 자리다. 엘리트를 켠 작전도 같은 자리에 종류만 바꿔 둔다.
+    // 셋 모두 가장 가까운 벽에서 60 넘게 떨어진 빈 땅이라, 가장 큰 적(철위병, 반지름 24)도 넉넉히 들어간다.
+    // (970, 640)은 시설 1 아래 장애물의 남쪽이다.
+    public static IReadOnlyList<Vector2> InitialEnemySpots { get; } = new Vector2[]
+    {
+        new Vector2(610, 730),
+        new Vector2(970, 640),
+        new Vector2(1260, 770)
+    };
+
+    // 처음 배치는 정해진 자료이므로 자리가 막혀 있으면 결함이다. AddEnemy처럼 조용히 빼지 않고 예외를 낸다.
+    // 이 시점에는 대원도 숨은 정보도 없으므로 실패를 알려도 안개 속을 엿보는 수단이 되지 않는다.
+    // 규칙이 적을 두지 않게 한 경우(검사의 MaxEnemies = 0 등)는 결함이 아니므로 그냥 넘어간다.
+    private void PlaceInitialEnemy(Vector2 spot, EnemyDefinition definition)
+    {
+        if (Enemies.Count >= Rules.MaxEnemies)
+        {
+            return;
+        }
+        if (!AddEnemy(spot, definition))
+        {
+            throw new InvalidOperationException($"처음 배치 자리 {spot}에 {definition.Id}을 둘 수 없습니다. 벽이나 다른 적과 겹칩니다.");
+        }
+    }
+
     // 자리가 비어 있으면 적을 추가하고 true를 돌려준다.
     private bool AddEnemy(Vector2 position, EnemyDefinition definition)
     {
