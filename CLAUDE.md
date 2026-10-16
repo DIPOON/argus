@@ -24,6 +24,11 @@ dotnet run --project server/Argus.Server --urls http://127.0.0.1:5077
 # 서버 단위 검사
 dotnet run --project tests/Argus.Server.Tests
 
+# 기록 재생: 파일 하나 / 그 틱에서 멈춰 상태 보기 / 폴더 전체 확인
+dotnet run --project tools/Argus.Replay -- server/Argus.Server/recordings/<기록>.jsonl.gz
+dotnet run --project tools/Argus.Replay -- <기록> --until <틱> --snapshot <대원 id>
+dotnet run --project tools/Argus.Replay -- server/Argus.Server/recordings
+
 # 브라우저 검사 (서버가 5077에서 실행 중이어야 한다)
 cd client && npx playwright install --with-deps chromium && npm run test:e2e
 ```
@@ -36,7 +41,7 @@ cd client && npx playwright install --with-deps chromium && npm run test:e2e
 
 ### 검사 하나만 실행하기
 
-서버 검사는 xUnit이 아니라 `tests/Argus.Server.Tests/Program.cs`의 자체 콘솔 하네스다. 필터 인자가 없고 `Main()`이 다섯 개의 `Register` 호출로 모든 검사를 등록한 뒤 순서대로 실행한다. 전체가 수 초면 끝나므로 보통 그대로 돌린다. 하나만 보려면 `Program.cs`의 `Register` 호출을 임시로 줄이거나 해당 `*Tests.cs`의 `Register`에서 `tests.Add` 줄을 임시로 주석 처리한다. **임시 수정을 되돌리고 전체를 다시 통과시킨 뒤 커밋한다.**
+서버 검사는 xUnit이 아니라 `tests/Argus.Server.Tests/Program.cs`의 자체 콘솔 하네스다. 필터 인자가 없고 `Main()`이 여섯 개의 `Register` 호출로 모든 검사를 등록한 뒤 순서대로 실행한다. 전체가 수 초면 끝나므로 보통 그대로 돌린다. 하나만 보려면 `Program.cs`의 `Register` 호출을 임시로 줄이거나 해당 `*Tests.cs`의 `Register`에서 `tests.Add` 줄을 임시로 주석 처리한다. **임시 수정을 되돌리고 전체를 다시 통과시킨 뒤 커밋한다.**
 
 Playwright는 이름으로 고를 수 있다.
 
@@ -105,7 +110,17 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 - 운영 방의 시드는 `Room`이 `RandomNumberGenerator`로 만든 32바이트다. 정수 시드(`new Match(code, rules, 73)`)는 검사와 재현용이다.
 - `HashSet`과 `Dictionary`의 순회 순서에 진행을 맡기지 않는다. 지금은 포함 여부 확인에만 쓴다. 순회해야 하면 정렬하거나 `List`를 쓴다.
 - 상태 필드를 새로 추가하면 `Match.StateHash`에도 넣는다. 빠뜨리면 그 필드가 갈라져도 검사가 잡지 못한다. 요약에는 방 코드와 규칙도 들어간다. 규칙은 JSON으로 통째로 적으므로 규칙 값을 추가할 때는 따로 챙기지 않아도 된다. 적 기술은 id가 없어 정의 안의 순서로 적는다.
-- 남은 한계: 진행 계산은 `float` 벡터와 `Math.Sin`·`Cos`·`Atan2`·`Pow`를 쓴다. 같은 기계에서는 결과가 같지만, 운영체제나 CPU가 다르면 수학 함수 결과의 마지막 자리가 달라질 수 있다. 입력이 도착한 틱도 아직 기록하지 않는다.
+- 남은 한계: 진행 계산은 `float` 벡터와 `Math.Sin`·`Cos`·`Atan2`·`Pow`를 쓴다. 같은 기계에서는 결과가 같지만, 운영체제나 CPU가 다르면 수학 함수 결과의 마지막 자리가 달라질 수 있다.
+
+### 기록과 재생
+
+방마다 진행을 그대로 다시 돌릴 수 있는 기록을 남긴다. 버그 제보를 받으면 그 순간을 재현하는 데 쓴다.
+
+- **무엇을 적나**: `Match`의 바깥 요청 메서드(`Join`·`SetLoadout`·`Deploy`·`Input`·`Disconnect`·`AwaitConnection`·`Connect`)가 들어온 틱과 받은 값을 스스로 적는다(`Match.Recorder`). 거절되는 요청도 적는다. 다시 돌릴 때도 똑같이 거절되므로 결과가 같다. **바깥에서 `Match` 상태를 바꾸는 메서드를 새로 만들면 기록도 함께 넣는다.** 빠뜨리면 그 요청이 재생에서 빠져 기록과 갈라진다. `RoomHost`가 `Player`의 접속 값을 직접 바꾸지 않고 `AwaitConnection`·`Connect`를 부르는 것도 이 때문이다. 1초(30틱)마다 상태 요약값(`hash`)도 함께 적는다. 연결 번호(`Player.Connection`)는 진행에 쓰이지 않아 적지 않는다.
+- **파일**: 방마다 `recordings/<만든 시각>-<방 코드>.jsonl.gz` 하나다. 첫 줄은 헤더(코드 버전·방 코드·시드·규칙)이고 그 뒤로 한 줄에 기록 하나씩 JSON으로 적어 gzip으로 압축한다. 폴더는 설정 `Argus:Recordings:Folder`(기본은 앱 폴더 아래 `recordings`, `dotnet run`이면 `server/Argus.Server/recordings`)다. 일반 기록은 최근 `Argus:Recordings:MaxFiles`개(기본 200)까지, 제보가 들어온 기록(`.reported` 표시 파일이 있는 기록)은 따로 같은 수까지 남긴다. `MaxFiles`를 0으로 두면 기록하지 않는다. 폴더를 쓸 수 없으면 한 번 알리고 기록 없이 방을 연다.
+- **쓰는 방식**: `Match`는 방 잠금 안에서 기록 줄을 통로에 넣기만 하고, 직렬화와 디스크 쓰기는 `RecordingFile`의 작업이 따로 한다. 1초마다 압축 스트림까지 비우므로 서버가 갑자기 꺼져도 그때까지는 읽힌다. 방이 지워지거나(`expired`) 연속 실패로 닫히거나(`failed`) 만든 직후 참가에 실패하거나(`unused`) 서버가 꺼지면(`shutdown`) 끝 줄을 쓰고 닫는다. 서버를 끌 때는 기록이 다 쓰일 때까지 5초까지 기다린다. **정상 종료는 SIGTERM으로 한다.** 백그라운드로 띄운 프로세스는 SIGINT를 무시하도록 시작되고 .NET도 그대로 따른다.
+- **재생**: `MatchReplay`가 헤더로 방을 처음 상태로 만들고 기록 줄을 같은 틱에 다시 반영하며, 요약값이 처음 달라진 틱에서 멈춘다. 진행 중 예외는 서버처럼 기록해 두고 다음 틱을 계속 진행한다. `tools/Argus.Replay`가 이것을 명령으로 쓴다. 같은 코드 버전(헤더의 `version`, 어셈블리 버전 뒤의 커밋)이어야 같은 결과가 나온다. CI는 브라우저 검사가 끝나면 서버를 SIGTERM으로 끄고 남은 기록을 모두 재생해, 하나라도 갈라지면 실패한다.
+- **버그 제보**: 화면의 "버그 제보" 버튼이 `report` 메시지를 보내면 `RoomHost.Report`가 지금 틱과 내용을 기록에 남기고 `reported`(틱)로 답한다. 게임 상태는 바꾸지 않는다. 대원마다 5초에 한 번, 방마다 20개까지 받는다. 제보한 사람이 알려 준 방 코드와 틱으로 기록을 찾아 `--until <틱> --snapshot <대원 id>`로 그 순간과 그 대원의 화면을 본다.
 
 ### 전투 — 근접 RPS
 
@@ -139,6 +154,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 - 서드파티 클라이언트를 허용하므로 공식 클라이언트에서만 동작하는 장치로 규칙을 강제하지 않는다.
 - **보이지 않는 곳에서 일어나는 사건에 공개 순번을 쓰지 않는다.** 효과와 행동의 id는 `Match._nextId` 순번이다. 안개 속 생성처럼 숨은 사건이 같은 순번을 쓰면, 보이는 id 사이의 빈 번호로 그 횟수가 드러난다. 그래서 적 id는 `NewEnemyId`가 방의 시드에서 무작위로 뽑는다.
 - **시드를 클라이언트에 보내지 않는다.** 시드를 알면 적이 고를 행동과 안개 속에서 생길 적의 위치를 미리 계산할 수 있다. 시드에서 뽑은 값(적 id 등)은 공개해도 된다. 출력으로 다음 값을 알 수 없는 생성기(`SeededRandom`)이기 때문이다.
+- **재현용 기록 파일을 서버 밖으로 내보내지 않는다.** 헤더에 방의 비밀 시드가 들어 있어, 진행 중인 방의 기록을 보면 숨은 적의 행동과 생성 위치를 미리 알 수 있다. HTTP로 내려받는 경로를 만들지 않고, 기록 폴더는 git에서도 뺀다. 제보 내용은 기록에만 남고 다른 대원에게 가지 않는다.
 - WebSocket 압축(permessage-deflate)을 켜 두었다. **서버가 보내는 메시지에 토큰 같은 비밀을 넣지 않는다.** 비밀이 플레이어 이름처럼 다른 사람이 정할 수 있는 값과 같은 압축 문맥에 들어가면 압축된 크기로 비밀을 추측할 수 있다(CRIME/BREACH). 지금은 숨겨진 적이 직렬화 전에 빠지고 토큰은 HTTP 응답으로만 나가므로 안전하다.
 
 `client/tests/game.spec.ts`의 위조 상태·잘못된 장비·순번 재생·신원 탈취 검사가 이 경계를 지킨다.
@@ -164,7 +180,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 
 ### 운영 범위
 
-메모리 기반 **단일 인스턴스**다. DB도 영구 저장도 없고 서버를 재시작하면 방과 토큰이 사라진다. 여러 복제본 사이에 방 상태를 공유하지 않으므로 수평 확장하려면 방 배정과 연결 라우팅이 먼저 필요하다. 방 32개·방당 적 60마리는 설정 상한이지 부하 보장값이 아니다.
+메모리 기반 **단일 인스턴스**다. DB도 영구 저장도 없고 서버를 재시작하면 방과 토큰이 사라진다. 디스크에 남는 것은 재현용 기록뿐이며, 이것으로 방을 되살리지는 않는다. 여러 복제본 사이에 방 상태를 공유하지 않으므로 수평 확장하려면 방 배정과 연결 라우팅이 먼저 필요하다. 방 32개·방당 적 60마리는 설정 상한이지 부하 보장값이 아니다.
 
 ## 문서
 
@@ -179,6 +195,6 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 
 ## Docker
 
-`docker compose up --build`는 클라이언트 빌드와 서버 publish를 한 이미지로 묶어 `127.0.0.1:5077`에 노출한다. 컨테이너 내부 포트는 8080이다.
+`docker compose up --build`는 클라이언트 빌드와 서버 publish를 한 이미지로 묶어 `127.0.0.1:5077`에 노출한다. 컨테이너 내부 포트는 8080이다. 재현용 기록은 컨테이너의 `/app/recordings`에 쓰며, compose는 이름 있는 볼륨(`recordings`)을 붙여 컨테이너를 다시 만들어도 남긴다. 이미지는 앱 사용자(`APP_UID`)로 실행되므로 Dockerfile이 이 폴더를 그 사용자 것으로 만든다. GKE 같은 곳에서는 이 경로에 영구 볼륨을 붙여야 재배포 뒤에도 기록이 남는다.
 
 이 구성에서는 서버가 모든 요청을 Docker 브리지 주소(172.17.0.1 등)에서 온 것으로 본다. 127.0.0.1에 연 포트는 docker-proxy를 거치고, Docker Desktop도 마찬가지다. 그래서 주소 기준 제한이 사용자를 구분하지 못한다. 브리지 주소는 사설망이라 방 수 상한에서 빠지고, 참가 제한(분당 30회)은 모든 사용자가 함께 쓴다. 지금은 같은 기계에서만 접속하므로 문제가 없다. **공개 배포 전에는 실제 접속 주소가 서버에 닿게 해야 한다.** 앞에 역방향 프록시를 두고 `ASPNETCORE_FORWARDEDHEADERS_ENABLED=true`를 켜는 방법이 있다. Linux에서 공개 주소에 포트를 여는 방법도 있는데, 이때는 보통 iptables가 원래 주소를 그대로 넘긴다. 어느 쪽이든 배포 환경에서 서버가 보는 주소를 먼저 확인한다.

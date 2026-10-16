@@ -69,6 +69,9 @@ dotnet run --project server/Argus.Server --urls http://127.0.0.1:5077
 | `Game/BattleMap.cs` | 벽 충돌·정확한 타일 사선 검사·벽 파괴 |
 | `Game/Snapshot.cs`, `Game/SnapshotMessage.cs` | 공개 상태와 통신 데이터 구조 |
 | `Networking/RoomHost.cs`, `Program.cs` | 방·복구 토큰·실행 루프·접속과 입력 경로 |
+| `Game/MatchRecord.cs`, `Game/MatchReplay.cs` | 재현용 기록 한 줄과 기록 재생 |
+| `Recording/` | 기록 파일 쓰기·보관 개수 정리·읽기 |
+| `tools/Argus.Replay/` | 기록을 다시 돌려 보는 명령(저장소 루트 기준) |
 | `client/src/main.ts` | 로비·네 슬롯 조작·HUD·재접속 |
 | `client/src/world.ts` | 단순한 도형, 예고, 보간·이동 예측 |
 
@@ -91,8 +94,25 @@ npm run test:e2e
 
 다른 포트에는 `ARGUS_URL`을 설정한다. 검증 결과와 범위는 [검증 기록](docs/verification.md)에 있다.
 
+## 버그 제보와 재현
+
+서버는 방마다 진행을 그대로 다시 돌릴 수 있는 기록을 `server/Argus.Server/recordings/`(Docker에서는 `/app/recordings`)에 남긴다. 최근 200개 방까지 보관하고, 제보가 들어온 방은 따로 200개까지 남긴다. 기록에는 방의 비밀 시드가 들어 있으므로 공개하지 않는다.
+
+플레이 중 이상한 일이 생기면 왼쪽 패널 아래쪽의 "버그 제보"를 누른다. 알림에 나온 방 코드와 틱을 알려 주면 그 순간을 그대로 다시 볼 수 있다.
+
+```bash
+# 기록 파일 하나를 끝까지 다시 돌려 재현되는지 보고, 제보 목록을 본다
+dotnet run --project tools/Argus.Replay -- server/Argus.Server/recordings/<시각>-<방 코드>.jsonl.gz
+# 제보한 틱에서 멈춰 방 상태와 그 대원이 받은 스냅샷을 본다
+dotnet run --project tools/Argus.Replay -- <기록> --until <틱> --snapshot <대원 id>
+# 폴더의 기록을 모두 확인한다
+dotnet run --project tools/Argus.Replay -- server/Argus.Server/recordings
+```
+
+같은 코드 버전으로 재생해야 같은 결과가 나온다. 기록 첫 줄에 기록한 서버의 커밋이 적혀 있다.
+
 ## 운영 범위
 
-메모리 기반 단일 서버다. DB·영구 저장·성장·보상은 없으며 서버 재시작 시 방과 토큰이 사라진다. 시뮬레이션은 1/30초 고정 틱으로 진행하고 상태 전송은 약 10Hz다. 서버 처리가 늦어지면 밀린 틱을 한 번에 8틱까지 이어서 진행한다. 방마다 비밀 시드가 있어, 같은 시드로 같은 틱에 같은 입력을 넣으면 같은 결과가 나온다(지금은 같은 기계에서만 보장). 브라우저는 이동을 예측하고 서버 위치로 보정한다. 하드웨어 WebGL이 없으면 PixiJS Canvas 렌더러를 사용한다.
+메모리 기반 단일 서버다. DB·영구 저장·성장·보상은 없으며 서버 재시작 시 방과 토큰이 사라진다. 디스크에는 재현용 기록만 남는다. 시뮬레이션은 1/30초 고정 틱으로 진행하고 상태 전송은 약 10Hz다. 서버 처리가 늦어지면 밀린 틱을 한 번에 8틱까지 이어서 진행한다. 방마다 비밀 시드가 있어, 같은 시드로 같은 틱에 같은 입력을 넣으면 같은 결과가 나온다(지금은 같은 기계에서만 보장). 브라우저는 이동을 예측하고 서버 위치로 보정한다. 하드웨어 WebGL이 없으면 PixiJS Canvas 렌더러를 사용한다.
 
 방 32개·방당 적 60마리는 설정 상한이며 부하 보장값이 아니다. 사운드와 정교한 밸런스는 아직 없다. Docker 설정은 로컬 5077을 노출한다. GKE 확장 전 방 배정·연결 라우팅·종료 절차·관측·부하 검증이 필요하다. 현재 여러 복제본 사이에 방 상태를 공유하지 않으므로 단일 인스턴스로 운영한다.
