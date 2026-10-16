@@ -1,12 +1,14 @@
 # Argus protocol v3
 
-2026-10-09. JSON over HTTP + WebSocket, UTF-8. 좌표 단위는 월드 단위, 시간은 서버 초, 각도는 라디안이다. 원점은 왼쪽 위다. X는 오른쪽, Y는 아래쪽이다.
+2026-10-09. JSON over HTTP + WebSocket, UTF-8. 좌표 단위는 월드 단위, 시간은 서버 초, 각도는 라디안이다. 서버는 1/30초 틱으로 진행하고, 시간 필드는 모두 틱 시각을 초로 바꿔 소수 둘째 자리로 반올림해 보낸다. 한 틱은 약 0.033초라 반올림해도 틱끼리 구분된다. 같은 틱의 시각은 `now`와 정확히 같고, 값에 30을 곱해 반올림하면 틱 번호가 된다. 원점은 왼쪽 위다. X는 오른쪽, Y는 아래쪽이다.
 
 `/health`의 `protocol`과 snapshot의 `version`은 3이다.
 
 v2 → v3(2026-10-14): `walls`는 수신자가 아직 받지 못한 판일 때만, `rules`와 `map`은 수신자가 아직 받지 못했을 때만 스냅샷에 담긴다. 빠진 값은 같은 방의 이전 스냅샷 값을 그대로 쓴다. `rules.skills`에 기술별 동작(`guardsFront`, `hasFollowup`, `singleTarget`, `breaksStructures`)이 추가되었고, 적 `id`는 무작위가 되었다.
 
 v3 안에서 추가(2026-10-15): `rules.skills`에 `followupBreaksStructures`가 늘었다. 값이 하나 추가되기만 해서 버전은 그대로 3이다.
+
+v3 안에서 추가(2026-10-16): `notices`에 순번 `id`가 늘었다. 기술·효과·안내의 시각도 다른 시간 필드처럼 소수 둘째 자리로 반올림해 보낸다. 이전에는 이 시각들만 반올림 없이 나갔다. 값이 하나 추가되고 정밀도만 바뀌어 버전은 그대로 3이다.
 
 v1 → v2: 총기·탄창·재장전·보조 장비·패시브 필드를 제거하고 네 슬롯의 근접 기술과 마나로 전환했다.
 
@@ -79,11 +81,11 @@ slots를 생략하면 `["strike","parry","grab","strike"]`. 길이는 정확히 
 | sight | 팀 시야 다각형 배열. 다각형은 `[x0,y0,x1,y1,…]`이며 좌표는 정수다 |
 | players | 분대 전체 상태 |
 | enemies | 팀 시야에 실제 들어온 적과 기술 예고 |
-| effects | 시야 안의 효과: id, x, y, kind, until |
+| effects | 시야 안의 효과: id, x, y, kind, until(사라지는 시각, 초) |
 | facilities | 공개 목표: id, x, y, hp, maxHp |
 | supplies | 공개 보급: id, x, y, objective, collected, cooldown. cooldown은 수신 대원 기준 |
 | extraction | x, y, progress, duration, unlocked |
-| notices | 최근 안내 최대 6개: at, text |
+| notices | 최근 안내 최대 6개: id, at(나온 시각, 초), text. id는 방마다 1부터 늘어나는 순번이라 같은 틱에 같은 문구가 와도 다르다. 클라이언트는 id로 새 안내를 가린다 |
 
 `rules.skills`는 기본기별 `id, kind, mana, contactAfter, activeSeconds, duration, range, halfWidth, guardsFront, hasFollowup, singleTarget, breaksStructures, followupBreaksStructures`를 제공한다. kind는 strike / block / channel이다. 뒤의 다섯 값은 기술별 동작이다. `guardsFront`는 먼저 치지 않고 앞에서 들어오는 공격에만 반응함, `hasFollowup`은 유효 시간 뒤 상성 없는 반격, `singleTarget`은 가장 가까운 한 명만 판정, `breaksStructures`는 접촉 중에 시설과 벽을 부숨, `followupBreaksStructures`는 반격이 시설과 벽을 부숨을 뜻한다. 동작은 id가 아니라 이 값으로 정해진다. 이 수치를 클라이언트가 돌려보내도 서버 설정을 바꾸지 않는다.
 
