@@ -42,7 +42,7 @@ cd client && npx playwright install --with-deps chromium && npm run test:e2e
 
 ### 검사 하나만 실행하기
 
-서버 검사는 xUnit이 아니라 `tests/Argus.Server.Tests/Program.cs`의 자체 콘솔 하네스다. 인자 없이 돌리면 `Main()`이 여섯 개의 `Register` 호출로 모든 검사를 등록한 뒤 순서대로 실행한다. 이름으로 고르는 필터는 없고, `-- determinism`을 주면 결정론 검사(`DeterminismTests`)만 돌린다. 전체가 수 초면 끝나므로 보통 그대로 돌린다. 하나만 보려면 `Program.cs`의 `Register` 호출을 임시로 줄이거나 해당 `*Tests.cs`의 `Register`에서 `tests.Add` 줄을 임시로 주석 처리한다. **임시 수정을 되돌리고 전체를 다시 통과시킨 뒤 커밋한다.**
+서버 검사는 xUnit이 아니라 `tests/Argus.Server.Tests/Program.cs`의 자체 콘솔 하네스다. 인자 없이 돌리면 `Main()`이 일곱 개의 `Register` 호출로 모든 검사를 등록한 뒤 순서대로 실행한다. 이름으로 고르는 필터는 없고, `-- determinism`을 주면 결정론 검사(`DeterminismTests`, `FixedTests`)만 돌린다. 전체가 수 초면 끝나므로 보통 그대로 돌린다. 하나만 보려면 `Program.cs`의 `Register` 호출을 임시로 줄이거나 해당 `*Tests.cs`의 `Register`에서 `tests.Add` 줄을 임시로 주석 처리한다. **임시 수정을 되돌리고 전체를 다시 통과시킨 뒤 커밋한다.**
 
 Playwright는 이름으로 고를 수 있다.
 
@@ -111,6 +111,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 - 운영 방의 시드는 `Room`이 `RandomNumberGenerator`로 만든 32바이트다. 정수 시드(`new Match(code, rules, 73)`)는 검사와 재현용이다.
 - `HashSet`과 `Dictionary`의 순회 순서에 진행을 맡기지 않는다. 지금은 포함 여부 확인에만 쓴다. 순회해야 하면 정렬하거나 `List`를 쓴다.
 - 상태 필드를 새로 추가하면 `Match.StateHash`에도 넣는다. 빠뜨리면 그 필드가 갈라져도 검사가 잡지 못한다. 요약에는 방 코드와 규칙도 들어간다. 규칙은 JSON으로 통째로 적으므로 규칙 값을 추가할 때는 따로 챙기지 않아도 된다. 적 기술은 id가 없어 정의 안의 순서로 적는다.
+- **고정소수점 수(3단계 진행 중)**: `Game/Fixed.cs`는 4096분의 1 단위 정수(`Raw`)로 된 수다. 곱셈·나눗셈·제곱근은 가장 가까운 값으로 반올림하고, 딱 절반이면 0에서 먼 쪽으로 간다. 그래서 부호만 바꾼 값의 결과는 부호만 바뀐다. 범위를 넘으면 값이 감기지 않고 예외를 낸다. `FixedVector`는 그 수 두 개로 된 벡터다. `Angle`은 한 바퀴를 65536칸으로 나눈 방향이며, 사인·코사인·아크탄젠트를 운영체제의 수학 라이브러리 없이 정수 급수로 구한다. 실수에서 바꾸는 `FromDouble`·`FromRadians`는 설정 값과 클라이언트 입력처럼 바깥에서 온 값에만 쓴다. 단위는 브라우저(JavaScript)가 같은 계산을 할 수 있게 골랐다. 맵 좌표끼리 곱해도 2^46이라 JavaScript가 정확히 다루는 2^53보다 작다. 초당 값을 틱당 값으로 바꿀 때는 `1/30`을 곱하지 말고 정수 `Rules.TicksPerSecond`로 나눈다. 1/30을 고정소수점으로 반올림하면 0.3% 어긋난다. `FixedTests`가 모든 각도의 사인·코사인과 넓은 범위의 아크탄젠트를 참값과 반 칸 안에서 비교하고, 결과 전체를 섞은 고정값과 맞춰 본다. 이 검사는 결정론 묶음(`-- determinism`)에도 들어 있어 CI가 Windows·macOS에서도 같은 고정값인지 확인한다. 아직 게임 계산에는 쓰지 않으며 다음 PR에서 옮긴다.
 - 남은 한계: 진행 계산은 `float` 벡터와 `Math.Sin`·`Cos`·`Atan2`·`Pow`를 쓴다. 이 수학 함수는 운영체제의 라이브러리가 계산하므로, 운영체제나 CPU가 다르면 결과의 마지막 자리가 달라질 수 있다. CI는 리눅스(x64)에서 남긴 기록을 Windows(x64)와 macOS(ARM64)에서 다시 돌려 확인한다(아래 "재생"). 2026-10-18 처음 잴 때는 기록 10개가 모두 같았지만, 이것은 보장이 아니다. 결정론 3단계에서 고정소수점 정수 계산으로 바꾼다.
 
 ### 기록과 재생

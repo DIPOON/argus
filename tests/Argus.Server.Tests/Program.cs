@@ -16,10 +16,12 @@ internal static class Program
             EncounterTests.Register(tests);
             DeterminismTests.Register(tests);
             RecordingTests.Register(tests);
+            FixedTests.Register(tests);
         }
         else if (args.Length == 1 && args[0] == "determinism")
         {
             DeterminismTests.Register(tests);
+            FixedTests.Register(tests);
         }
         else
         {
