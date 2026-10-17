@@ -103,9 +103,9 @@ public sealed partial class Match
             enemy.Position, enemy.Definition.Radius);
     }
 
-    private bool InReach(Vector2 origin, double aim, double range, double halfWidth, Vector2 target, float radius)
+    private bool InReach(Vector2 origin, Angle aim, double range, double halfWidth, Vector2 target, float radius)
     {
-        Vector2 forward = new Vector2((float)Math.Cos(aim), (float)Math.Sin(aim));
+        Vector2 forward = Direction(aim);
         Vector2 offset = target - origin;
         double along = Vector2.Dot(offset, forward);
         double side = Math.Abs(offset.X * forward.Y - offset.Y * forward.X);
@@ -119,12 +119,10 @@ public sealed partial class Match
 
     // origin에서 aim 방향을 기준으로 target이 전방 120°(방어 각도) 안에 있는지 본다.
     // 대원의 방어, 적 방어의 반격 차단, 측면 공격 판정이 모두 이 계산을 쓴다.
-    private bool Faces(Vector2 origin, double aim, Vector2 target)
+    private bool Faces(Vector2 origin, Angle aim, Vector2 target)
     {
-        Vector2 offset = target - origin;
-        double angle = Math.Atan2(offset.Y, offset.X);
-        double difference = Math.Abs(Math.IEEERemainder(angle - aim, Math.Tau));
-        return difference <= Rules.GuardHalfAngle;
+        Angle direction = Heading(target - origin);
+        return Angle.Between(direction, aim) <= _guardHalfAngle;
     }
 
     private bool GuardFaces(Player player, Enemy enemy)
@@ -449,7 +447,7 @@ public sealed partial class Match
                         DamageFacility(facility);
                     }
                 }
-                Vector2 facing = new Vector2((float)Math.Cos(player.Aim), (float)Math.Sin(player.Aim));
+                Vector2 facing = Direction(player.Aim);
                 WallHit wall = Map.RayWall(player.Position, player.Position + facing * (float)action.Skill.Range);
                 if (wall.Tile >= 0 && !action.HitWalls.Contains(wall.Tile))
                 {

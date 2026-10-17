@@ -13,6 +13,63 @@ internal static class DeterminismTests
         tests.Add(new TestCase("Running ticks one at a time or several per wake gives the same state", TickBatching));
         tests.Add(new TestCase("The tick clock turns irregular wakes into whole ticks, carries the remainder and drops a long stall", TickClockWakes));
         tests.Add(new TestCase("A duration takes the same whole number of ticks whatever tick it starts on", DeadlineTicks));
+        tests.Add(new TestCase("Game code calls no operating-system math functions, clocks or unseeded random generators", PortableGameCode));
+    }
+
+    private static void PortableGameCode()
+    {
+        // 게임 진행 코드는 운영체제의 수학 라이브러리, 시계, 시드 없는 난수를 쓰지 않는다. 이런 함수의 결과는 기계나 실행마다 달라진다.
+        // 삼각함수는 Angle, 제곱근은 Fixed, 난수는 SeededRandom을 쓴다. 주석은 빼고 코드만 본다.
+        // 실제로 Windows의 Math.Atan2가 리눅스와 마지막 자리를 다르게 계산해, 같은 기록이 510틱부터 갈라진 적이 있다(docs/verification.md).
+        string[] banned = new string[]
+        {
+            "Math.Sin(", "Math.Cos(", "Math.Tan(", "Math.Asin(", "Math.Acos(", "Math.Atan(", "Math.Atan2(",
+            "Math.Sinh(", "Math.Cosh(", "Math.Tanh(", "Math.Exp(", "Math.Log(", "Math.Log2(", "Math.Log10(",
+            "Math.Pow(", "Math.Cbrt(", "Math.IEEERemainder(", "MathF.", "Vector2.Lerp(",
+            "new Random(", "Random.Shared", "RandomNumberGenerator", "DateTime.Now", "DateTime.UtcNow", "Stopwatch", "Environment.TickCount"
+        };
+        string folder = FindGameFolder();
+        string[] files = Directory.GetFiles(folder, "*.cs");
+        Array.Sort(files, StringComparer.Ordinal);
+        Check(files.Length >= 10, $"게임 코드 파일을 찾지 못했습니다: {folder}");
+        List<string> found = new List<string>();
+        for (int i = 0; i < files.Length; i++)
+        {
+            string[] lines = File.ReadAllLines(files[i]);
+            for (int j = 0; j < lines.Length; j++)
+            {
+                string code = lines[j];
+                int comment = code.IndexOf("//", StringComparison.Ordinal);
+                if (comment >= 0)
+                {
+                    code = code.Substring(0, comment);
+                }
+                for (int k = 0; k < banned.Length; k++)
+                {
+                    if (code.Contains(banned[k], StringComparison.Ordinal))
+                    {
+                        found.Add($"{Path.GetFileName(files[i])}:{j + 1} {banned[k]}");
+                    }
+                }
+            }
+        }
+        Check(found.Count == 0, "게임 코드가 기계마다 다를 수 있는 함수를 씁니다: " + string.Join(", ", found));
+    }
+
+    // 검사 실행 파일이 있는 곳에서 위로 올라가며 게임 코드 폴더를 찾는다. 어느 폴더에서 검사를 실행해도 같은 곳을 본다.
+    private static string FindGameFolder()
+    {
+        DirectoryInfo? directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory != null)
+        {
+            string candidate = Path.Combine(directory.FullName, "server", "Argus.Server", "Game");
+            if (Directory.Exists(candidate))
+            {
+                return candidate;
+            }
+            directory = directory.Parent;
+        }
+        throw new Exception("server/Argus.Server/Game 폴더를 찾지 못했습니다");
     }
 
     private static void SeededSequence()
@@ -276,7 +333,7 @@ internal static class DeterminismTests
         // 적 행동의 각 단계도 시작 틱과 관계없이 같은 틱 수 뒤에 온다. 일반 적의 타격 예고는 배율 2에서 1.7초다.
         for (long start = 0; start < 300; start++)
         {
-            EnemyAction action = new EnemyAction(1, EnemyDefinition.Grunt.Skills[0], 0, start, 2);
+            EnemyAction action = new EnemyAction(1, EnemyDefinition.Grunt.Skills[0], Angle.Zero, start, 2);
             Equal(action.ContactTick - action.StartedTick, 51L);
             // 공격 창 0.25초를 더한 1.95초는 58.5틱이라 59틱째에 끝나고, 회복 0.65초를 더한 2.6초는 78틱이다.
             Equal(action.ActiveUntilTick - action.StartedTick, 59L);

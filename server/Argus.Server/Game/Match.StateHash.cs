@@ -86,7 +86,7 @@ public sealed partial class Match
         hasher.AddText(player.Name);
         hasher.AddTextArray(player.Slots);
         hasher.AddPoint(player.Position);
-        hasher.AddDouble(player.Aim);
+        hasher.AddInt(player.Aim.Units);
         hasher.AddText(player.State);
         hasher.AddBool(player.HasDeployed);
         hasher.AddLong(player.DeployTick);
@@ -148,7 +148,7 @@ public sealed partial class Match
         {
             hasher.AddBytes(StateHasher.ToJson(action.Skill));
         }
-        hasher.AddDouble(action.Aim);
+        hasher.AddInt(action.Aim.Units);
         hasher.AddLong(action.StartedTick);
         hasher.AddLong(action.ContactTick);
         hasher.AddLong(action.ActiveUntilTick);

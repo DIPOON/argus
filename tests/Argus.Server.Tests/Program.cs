@@ -166,7 +166,7 @@ internal static class TestTools
         }
         Enemy enemy = Target(fixture, definition);
         _id++;
-        enemy.Action = new EnemyAction(_id, new EnemySkill(kind, tier, partialDamage, arrivesIn, 85, 25), Math.PI, fixture.Match.Tick);
+        enemy.Action = new EnemyAction(_id, new EnemySkill(kind, tier, partialDamage, arrivesIn, 85, 25), Angle.FromRadians(Math.PI), fixture.Match.Tick);
         return enemy;
     }
 }

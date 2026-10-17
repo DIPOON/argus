@@ -289,7 +289,7 @@ internal static class Program
             Player player = match.Players[i];
             StringBuilder line = new StringBuilder();
             line.Append($"  대원 {player.Id} {player.Name} · {player.State} · 체력 {player.Hp:0.#}/{player.MaxHp:0.#} · 마나 {player.Mana}/{player.MaxMana}");
-            line.Append($" · 위치 ({player.Position.X:0.0}, {player.Position.Y:0.0}) · 조준 {player.Aim:0.00} · 연결 {player.Connected}");
+            line.Append($" · 위치 ({player.Position.X:0.0}, {player.Position.Y:0.0}) · 조준 {player.Aim.ToRadians():0.00} · 연결 {player.Connected}");
             for (int j = 0; j < player.Actions.Count; j++)
             {
                 PlayerAction action = player.Actions[j];
