@@ -2,15 +2,30 @@ using Argus.Server.Game;
 
 internal static class Program
 {
-    public static int Main()
+    public static int Main(string[] args)
     {
+        // 인자 없이 돌리면 모든 검사를 등록한다. "determinism"을 주면 운영체제와 CPU에 따라 달라질 수 있는 계산의 검사만 돌린다.
+        // CI는 리눅스에서 모두 돌리고, Windows와 macOS에서는 이것만 돌린다. 서버는 리눅스에서만 운영하고,
+        // 실제 시간과 소켓에 기대는 검사는 공유 실행기의 타이머 해상도와 일정 흔들림 때문에 가끔 실패할 수 있어서다.
         List<TestCase> tests = new List<TestCase>();
-        LifecycleTests.Register(tests);
-        EquipmentTests.Register(tests);
-        CombatTests.Register(tests);
-        EncounterTests.Register(tests);
-        DeterminismTests.Register(tests);
-        RecordingTests.Register(tests);
+        if (args.Length == 0)
+        {
+            LifecycleTests.Register(tests);
+            EquipmentTests.Register(tests);
+            CombatTests.Register(tests);
+            EncounterTests.Register(tests);
+            DeterminismTests.Register(tests);
+            RecordingTests.Register(tests);
+        }
+        else if (args.Length == 1 && args[0] == "determinism")
+        {
+            DeterminismTests.Register(tests);
+        }
+        else
+        {
+            Console.Error.WriteLine("사용법: dotnet run --project tests/Argus.Server.Tests [-- determinism]");
+            return 2;
+        }
         int failed = 0;
         for (int i = 0; i < tests.Count; i++)
         {
