@@ -9,8 +9,14 @@ on:
 
 jobs:
   server:
-    name: 서버 검사
-    runs-on: ubuntu-latest
+    name: 서버 검사 (${{ matrix.os }})
+    # 운영체제마다 수학 함수와 파일·타이머 동작이 다를 수 있으므로 세 운영체제에서 모두 돌린다.
+    # macOS 실행기는 ARM64라 CPU 종류도 하나 더 본다. 한 곳이 실패해도 나머지 결과를 볼 수 있게 끝까지 돌린다.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
@@ -80,6 +86,14 @@ jobs:
           # 실제 브라우저와 네트워크로 진행한 방이 모두 같은 상태로 재현되어야 한다. 정상 종료했으므로 모든 기록에 끝 줄이 있어야 하고
           # 진행 중 예외도 없어야 한다(--strict). 재현한 기록이 하나도 없어도 실패한다.
           dotnet run --project tools/Argus.Replay -- server/Argus.Server/recordings --strict
+      # 리눅스에서 남긴 기록을 다른 운영체제에서 재생하려고 넘긴다. 시드가 들어 있지만 검사에서 쓰고 버리는 방이라 괜찮다(CLAUDE.md의 예외).
+      - name: 다른 운영체제에서 재생할 기록 올리기
+        uses: actions/upload-artifact@v7
+        with:
+          name: recordings-linux
+          path: server/Argus.Server/recordings/
+          if-no-files-found: error
+          retention-days: 3
       # 실패를 분석하려고 검사 방의 기록도 올린다. 시드가 들어 있지만 검사에서 쓰고 버리는 방이라 괜찮다(CLAUDE.md의 예외).
       - name: 실패 기록 업로드
         if: failure()
@@ -91,3 +105,26 @@ jobs:
             client/test-results/
             server/Argus.Server/recordings/
           if-no-files-found: ignore
+
+  # 결정론의 목표는 하드웨어와 소프트웨어가 달라도 같은 결과다. 리눅스(x64) 서버가 실제 브라우저 검사로 남긴 기록을
+  # Windows(x64)와 macOS(ARM64)에서 다시 돌려, 틱마다의 상태 요약값이 기록과 같은지 본다.
+  # 같은 커밋을 빌드하므로 기록의 코드 버전도 같다.
+  replay:
+    name: 다른 운영체제에서 기록 재생 (${{ matrix.os }})
+    needs: browser
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/download-artifact@v8
+        with:
+          name: recordings-linux
+          path: recordings
+      - name: 리눅스에서 남긴 기록을 이 운영체제에서 재생
+        run: dotnet run --project tools/Argus.Replay -- recordings --strict
