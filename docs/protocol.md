@@ -2,9 +2,9 @@
 
 2026-10-09. JSON over HTTP + WebSocket, UTF-8. 좌표 단위는 월드 단위, 시간은 서버 초, 각도는 라디안이다. 원점은 왼쪽 위다. X는 오른쪽, Y는 아래쪽이다. 서버는 1/30초 틱으로 진행하며, 시간 필드는 세 가지다.
 
-- **틱 시각과 틱 수**: `now`, `elapsed`, `nextPulse`, 기술의 `startedAt`·`contactAt`·`activeUntil`·`endsAt`, 효과의 `until`, 안내의 `at`, 대원의 `busy`·`deploy`, 보급의 `cooldown`. 틱을 초로 바꿔 소수 둘째 자리로 반올림해 보낸다. 한 틱은 약 0.033초라 반올림해도 틱끼리 구분된다. 같은 틱의 시각은 `now`와 정확히 같고, 값에 30을 곱해 반올림하면 틱 번호가 된다.
-- **규칙 값**: `rules.deploy`, `rules.parryFollowupSeconds`, `rules.skills`의 `contactAfter`·`activeSeconds`·`duration`, `extraction.duration`. 설정한 초를 그대로 보낸다. 서버는 이 기간을 틱으로 올려 센다. 예를 들어 `contactAfter` 0.18초는 6틱(0.2초)이다. 그래서 규칙 값에 30을 곱해도 틱 번호가 되지 않을 수 있다.
-- **탈출 진행도**: `extraction.progress`. 반 틱 단위로 센 값을 초로 바꿔 소수 둘째 자리로 반올림한다. 틱 번호로 되돌리는 값이 아니다.
+- **틱 시각과 틱 수**: `now`, `elapsed`, `nextPulse`, 기술의 `startedAt`·`contactAt`·`activeUntil`·`followupUntil`·`endsAt`, 효과의 `until`, 안내의 `at`, 대원의 `busy`·`deploy`, 보급의 `cooldown`. 틱을 초로 바꿔 소수 둘째 자리로 반올림해 보낸다. 한 틱은 약 0.033초라 반올림해도 틱끼리 구분된다. 같은 틱의 시각은 `now`와 정확히 같고, 값에 30을 곱해 반올림하면 틱 번호가 된다.
+- **규칙 값**: `rules.deploy`, `rules.parryFollowupSeconds`, `rules.skills`의 `contactAfter`·`activeSeconds`·`duration`, `extraction.duration`. 설정한 초를 그대로 보낸다. 서버는 이 기간을 틱으로 올려 세므로, 30을 곱해도 틱 수가 되지 않을 수 있다. 기술의 기간은 모두 `startedAt`부터 잰 초이고 각각 올린다. 예를 들어 `contactAfter` 0.18초는 6틱(0.2초)이다. `parryFollowupSeconds`만은 따로 올리지 않는다. `startedAt`부터 `activeSeconds + parryFollowupSeconds`를 합친 뒤 틱으로 올리고, 그 시각을 기술 객체의 `followupUntil`로 보낸다. `activeUntil`에 반격 시간을 따로 더하면 반격 끝이 한 틱까지 어긋나므로 `followupUntil`을 쓴다. 지금 수치로 센 예는 [전투 명세의 코드 읽기 절](combat.md#코드-읽기)에 있다.
+- **탈출 진행도**: `extraction.progress`. 반 틱 단위로 센 값을 초로 바꿔 소수 둘째 자리로 반올림한다. 반 틱 간격(1/60초 ≈ 0.017초)이 반올림 오차(최대 0.005초)의 두 배보다 크므로, 값에 60을 곱해 반올림하면 정확한 반 틱 수가 된다.
 
 `/health`의 `protocol`과 snapshot의 `version`은 3이다.
 
@@ -15,6 +15,8 @@ v3 안에서 추가(2026-10-15): `rules.skills`에 `followupBreaksStructures`가
 v3 안에서 추가(2026-10-16, 버그 제보): 클라이언트 메시지 `report`·`reportNote`와 서버의 답 `reported`·`reportNoted`가 늘었다. 이 메시지를 모르는 서버는 무시하므로 버전은 그대로 3이다.
 
 v3 안에서 추가(2026-10-16): `notices`에 순번 `id`가 늘었다. 기술·효과·안내의 시각도 다른 시간 필드처럼 소수 둘째 자리로 반올림해 보낸다. 이전에는 이 시각들만 반올림 없이 나갔다. 값이 하나 추가되고 정밀도만 바뀌어 버전은 그대로 3이다.
+
+v3 안에서 추가(2026-10-17): 기술 객체에 반격이 끝나는 시각 `followupUntil`이 늘었다. 이전에는 `activeUntil`에 `parryFollowupSeconds`를 더해 반격 끝을 구해야 했다. 서버는 두 기간을 합친 초를 한 번에 틱으로 올리므로, 이렇게 구한 끝은 서버와 한 틱 미만만큼 어긋났다. 값이 하나 추가되기만 해서 버전은 그대로 3이다.
 
 v1 → v2: 총기·탄창·재장전·보조 장비·패시브 필드를 제거하고 네 슬롯의 근접 기술과 마나로 전환했다.
 
@@ -82,7 +84,7 @@ slots를 생략하면 `["strike","parry","grab","strike"]`. 길이는 정확히 
 | 필드 | 내용 |
 | --- | --- |
 | type, version, room, you | snapshot, 3, 방 코드, 수신자 공개 ID |
-| now, elapsed | 방 시간 / 첫 투입 이후 임무 시간. 임무 종료 후 elapsed 고정. 서버는 1/30초 틱 단위로만 진행하고, 보낼 때는 소수 둘째 자리로 반올림한다 |
+| now, elapsed | 방 시간 / 첫 투입 이후 임무 시간. 임무 종료 후 elapsed 고정. 둘 다 틱 시각이다(맨 위 시간 필드 참고) |
 | phase, result | staging / active / ended, null / success / failure |
 | pulse, nextPulse | 전역 피해 회차 / 다음 피해까지 초 |
 | map | width, height, cell, columns, rows, campX, campY. 아직 받지 못했을 때만 온다 |
@@ -120,10 +122,10 @@ tiers([타격, 방어, 채널]), action(null 또는 기술 객체)
 
 ```text
 id, skill, kind, slot, tier, phase,
-aim, startedAt, contactAt, activeUntil, endsAt, range, halfWidth
+aim, startedAt, contactAt, activeUntil, followupUntil, endsAt, range, halfWidth
 ```
 
-시간 필드는 서버 `now`와 같은 절대 시간이다. 서버는 시각을 1/30초 틱으로 다루므로 기술의 각 시각도 틱에 맞춘 값이다. 규칙의 기간을 틱으로 올려 센다. 예를 들어 `contactAfter`가 0.18초인 기술의 `contactAt`은 시작 6틱 뒤(0.2초)다. `phase`는 telegraph / active / followup / recovery / interrupted. 플레이어의 후속 반격은 `kind: "none"`이며 RPS가 없다. 적의 telegraph에는 이미 상성이 있고 recovery에는 없다. `slot`은 플레이어 1~4, 적은 0이다. 미래 표적 ID나 숨겨진 적의 좌표는 기술 객체에 포함하지 않는다.
+시간 필드는 서버 `now`와 같은 절대 시간이며 틱 시각이다(맨 위 시간 필드 참고). 반격은 `activeUntil`부터 `followupUntil` 전까지다. 반격이 없는 기술과 적의 행동은 두 값이 같다. `phase`는 telegraph / active / followup / recovery / interrupted. 플레이어의 후속 반격은 `kind: "none"`이며 RPS가 없다. 적의 telegraph에는 이미 상성이 있고 recovery에는 없다. `slot`은 플레이어 1~4, 적은 0이다. 미래 표적 ID나 숨겨진 적의 좌표는 기술 객체에 포함하지 않는다.
 
 상성·합산·피해 규칙은 [전투 명세](combat.md)에 있다. 클라이언트는 모양·진행률·예고를 그리며 판정 결과를 결정하지 않는다. `effects.kind`는 break / partial / draw / guard / hit / hurt / heal / deploy이며 표시용이다.
 
