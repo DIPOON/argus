@@ -17,8 +17,8 @@ internal static class Program
               --snapshot을 주면 그 대원이 그 순간 받은 스냅샷 JSON도 출력한다.
           dotnet run --project tools/Argus.Replay -- <폴더> [--strict]
               폴더의 기록을 모두 확인한다. 갈라지거나 읽지 못한 기록이 있거나, 재현한 기록이 하나도 없으면 실패다.
-              --strict를 주면 끝 줄이 없거나 잘렸거나 진행 중 예외가 난 기록도 실패로 친다.
-              서버를 정상 종료한 뒤 확인할 때(CI) 쓴다.
+              --strict를 주면 끝 줄이 없거나 잘렸거나 진행 중 예외가 난 기록, 다른 코드 버전이라 건너뛴 기록도 실패로 친다.
+              서버를 정상 종료한 뒤 같은 커밋으로 확인할 때(CI) 쓴다.
         종료 코드: 모두 재현되면 0, 실패가 있으면 1, 사용법이 틀리면 2
         """;
 
@@ -74,6 +74,7 @@ internal static class Program
     {
         string[] files = Directory.GetFiles(folder, "*" + RecordingFormat.Extension);
         Array.Sort(files, StringComparer.Ordinal);
+        List<CheckOutcome> outcomes = new List<CheckOutcome>();
         int reproduced = 0;
         int incomplete = 0;
         int failed = 0;
@@ -82,6 +83,7 @@ internal static class Program
         {
             string name = Path.GetFileName(files[i]);
             CheckResult check = RecordingCheck.Check(files[i]);
+            outcomes.Add(check.Outcome);
             string detail = check.Reason;
             if (check.Replay != null)
             {
@@ -118,26 +120,24 @@ internal static class Program
             }
         }
         Console.WriteLine($"기록 {files.Length}개 · 재현 {reproduced}개 · 끝나지 않음 {incomplete}개 · 실패 {failed}개 · 건너뜀 {skipped}개");
-        // 엄격하게 볼 때는 끝나지 않은 기록도 실패다. 서버를 정상 종료했다면 모든 기록에 끝 줄이 있어야 한다.
-        if (strict)
+        // 통과 기준은 RecordingCheck.FolderPasses 한 곳에서 정한다. 실패하면 까닭을 한 줄 더 알린다.
+        if (RecordingCheck.FolderPasses(outcomes, strict))
         {
-            failed += incomplete;
-        }
-        else
-        {
-            reproduced += incomplete;
+            return 0;
         }
         if (failed > 0)
         {
-            return 1;
+            Console.WriteLine("갈라졌거나 읽지 못한 기록이 있습니다");
         }
-        // 확인한 기록이 하나도 없으면 아무것도 보장하지 못한 것이므로 실패로 끝낸다.
-        if (reproduced == 0)
+        else if (strict && incomplete + skipped > 0)
+        {
+            Console.WriteLine("--strict: 끝나지 않았거나 다른 코드 버전이라 건너뛴 기록이 있습니다");
+        }
+        else
         {
             Console.WriteLine($"재현한 기록이 없습니다: {folder}");
-            return 1;
         }
-        return 0;
+        return 1;
     }
 
     private static int ReplayFile(string path, long? untilTick, string? snapshotPlayer)

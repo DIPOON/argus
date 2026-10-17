@@ -8,6 +8,7 @@ on:
   pull_request:
 
 jobs:
+  # 서버는 리눅스에서 운영하므로 모든 검사는 리눅스에서 돌린다. 다른 운영체제에서는 결정론만 본다(아래 cross-os).
   server:
     name: 서버 검사
     runs-on: ubuntu-latest
@@ -80,6 +81,17 @@ jobs:
           # 실제 브라우저와 네트워크로 진행한 방이 모두 같은 상태로 재현되어야 한다. 정상 종료했으므로 모든 기록에 끝 줄이 있어야 하고
           # 진행 중 예외도 없어야 한다(--strict). 재현한 기록이 하나도 없어도 실패한다.
           dotnet run --project tools/Argus.Replay -- server/Argus.Server/recordings --strict
+      # 리눅스에서 남긴 기록을 다른 운영체제에서 재생하려고 넘긴다. 시드가 들어 있지만 검사에서 쓰고 버리는 방이라 괜찮다(CLAUDE.md의 예외).
+      # 실패한 작업만 다시 돌리면 같은 실행 안에서 같은 이름으로 다시 올리게 되므로 덮어쓰기를 켠다.
+      # 다른 운영체제 작업만 나중에 다시 돌려도 받을 수 있게 14일 둔다.
+      - name: 다른 운영체제에서 재생할 기록 올리기
+        uses: actions/upload-artifact@v7
+        with:
+          name: recordings-linux
+          path: server/Argus.Server/recordings/
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
       # 실패를 분석하려고 검사 방의 기록도 올린다. 시드가 들어 있지만 검사에서 쓰고 버리는 방이라 괜찮다(CLAUDE.md의 예외).
       - name: 실패 기록 업로드
         if: failure()
@@ -91,3 +103,31 @@ jobs:
             client/test-results/
             server/Argus.Server/recordings/
           if-no-files-found: ignore
+          overwrite: true
+
+  # 결정론의 목표는 하드웨어와 소프트웨어가 달라도 같은 결과다. Windows(x64)와 macOS(ARM64)에서 두 가지를 본다.
+  # 1) 결정론 검사: 시드 난수의 고정값처럼 계산 결과 자체를 고정값과 비교하는 검사다.
+  # 2) 기록 재생: 리눅스(x64) 서버가 실제 브라우저 검사로 남긴 기록을 다시 돌려, 틱마다의 상태 요약값이 기록과 같은지 본다.
+  #    같은 커밋을 빌드하므로 코드 버전도 같아야 한다. 버전이 어긋나 건너뛴 기록이 있으면 --strict가 실패로 친다.
+  # 실제 시간과 소켓에 기대는 나머지 검사는 공유 실행기에서 흔들리기 쉽고 서버도 리눅스에서만 운영하므로 여기서는 돌리지 않는다.
+  cross-os:
+    name: 다른 운영체제에서 결정론 확인 (${{ matrix.os }})
+    needs: browser
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+      - name: 결정론 검사
+        run: dotnet run --project tests/Argus.Server.Tests -- determinism
+      - uses: actions/download-artifact@v8
+        with:
+          name: recordings-linux
+          path: recordings
+      - name: 리눅스에서 남긴 기록을 이 운영체제에서 재생
+        run: dotnet run --project tools/Argus.Replay -- recordings --strict

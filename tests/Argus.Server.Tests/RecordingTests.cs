@@ -19,6 +19,7 @@ internal static class RecordingTests
         tests.Add(new TestCase("A room nobody connected to leaves no recording to push real ones out", UnconnectedRecordingDeleted));
         tests.Add(new TestCase("A room whose recording failed refuses bug reports instead of claiming to keep them", FailedRecordingRefusesReports));
         tests.Add(new TestCase("The recording check tells reproduced, unfinished, diverged, unreadable and other-version recordings apart", CheckOutcomes));
+        tests.Add(new TestCase("A folder check fails on diverged or unreadable recordings, and with --strict also on unfinished or skipped ones", FolderVerdicts));
         tests.Add(new TestCase("Names and report notes keep whole characters and drop control characters", CleanTexts));
     }
 
@@ -504,6 +505,32 @@ internal static class RecordingTests
         {
             Directory.Delete(folder, true);
         }
+    }
+
+    private static void FolderVerdicts()
+    {
+        // 재현한 기록만 있으면 통과한다.
+        CheckFolderVerdict(new CheckOutcome[] { CheckOutcome.Reproduced }, true, true);
+        // 끝나지 않은 기록은 쓰는 중이거나 서버가 갑자기 꺼진 기록일 수 있어 평소에는 통과로 치지만, CI(--strict)에서는 실패다.
+        CheckFolderVerdict(new CheckOutcome[] { CheckOutcome.Reproduced, CheckOutcome.Incomplete }, true, false);
+        CheckFolderVerdict(new CheckOutcome[] { CheckOutcome.Incomplete }, true, false);
+        // 다른 코드 버전이라 건너뛴 기록은 평소에는 넘어가지만, 같은 커밋으로 확인하는 CI에서는 실패다.
+        // 대부분 건너뛰고 하나만 재현돼도 통과하면, 거의 비교하지 않았는데 결정론을 확인한 것처럼 보인다.
+        CheckFolderVerdict(new CheckOutcome[] { CheckOutcome.Reproduced, CheckOutcome.Skipped, CheckOutcome.Skipped }, true, false);
+        // 재현한 기록이 하나도 없으면 아무것도 확인하지 못했으므로 실패다.
+        CheckFolderVerdict(new CheckOutcome[] { CheckOutcome.Skipped }, false, false);
+        CheckFolderVerdict(Array.Empty<CheckOutcome>(), false, false);
+        // 갈라졌거나 읽지 못한 기록은 언제나 실패다.
+        CheckFolderVerdict(new CheckOutcome[] { CheckOutcome.Reproduced, CheckOutcome.Diverged }, false, false);
+        CheckFolderVerdict(new CheckOutcome[] { CheckOutcome.Unreadable, CheckOutcome.Reproduced }, false, false);
+    }
+
+    // 같은 판정 목록을 평소(relaxed)와 엄격하게(strict) 볼 때의 통과 여부를 확인한다.
+    private static void CheckFolderVerdict(CheckOutcome[] outcomes, bool relaxed, bool strict)
+    {
+        string list = string.Join(",", outcomes);
+        Check(RecordingCheck.FolderPasses(outcomes, false) == relaxed, $"[{list}]를 평소대로 본 판정이 틀렸습니다");
+        Check(RecordingCheck.FolderPasses(outcomes, true) == strict, $"[{list}]를 엄격하게 본 판정이 틀렸습니다");
     }
 
     private static void CleanTexts()

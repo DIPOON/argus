@@ -15,6 +15,8 @@ public enum CheckOutcome
     // 파일을 읽지 못했다.
     Unreadable,
     // 다른 코드 버전으로 만든 기록이라 확인하지 않았다. 코드가 다르면 같은 결과가 나오지 않을 수 있다.
+    // 엄격하게 볼 때(CI)는 이것도 실패다. 같은 커밋으로 새로 만든 기록인데 건너뛰었다면 코드 버전 표시가 어긋난 것이고,
+    // 그대로 두면 거의 아무것도 비교하지 않은 채 통과한다.
     Skipped
 }
 
@@ -78,5 +80,38 @@ public static class RecordingCheck
             return new CheckResult(CheckOutcome.Incomplete, string.Join(", ", missing), replay);
         }
         return new CheckResult(CheckOutcome.Reproduced, "", replay);
+    }
+
+    // 폴더의 기록을 모두 확인한 판정을 모아 통과인지 정한다.
+    // 갈라졌거나 읽지 못한 기록이 하나라도 있으면 실패다. 엄격하게 볼 때(strict, CI)는 끝나지 않은 기록과 건너뛴 기록도 실패다.
+    // 서버를 정상 종료한 새 폴더라면 모든 기록에 끝 줄이 있고, 모두 이 코드 버전으로 만들어졌어야 하기 때문이다.
+    // 재현한 기록이 하나도 없어도 아무것도 확인하지 못한 것이므로 실패다. 엄격하지 않을 때는 끝나지 않은 기록도 재현한 것으로 센다.
+    public static bool FolderPasses(IReadOnlyList<CheckOutcome> outcomes, bool strict)
+    {
+        int reproduced = 0;
+        for (int i = 0; i < outcomes.Count; i++)
+        {
+            CheckOutcome outcome = outcomes[i];
+            if (outcome == CheckOutcome.Diverged || outcome == CheckOutcome.Unreadable)
+            {
+                return false;
+            }
+            if (outcome == CheckOutcome.Incomplete || outcome == CheckOutcome.Skipped)
+            {
+                if (strict)
+                {
+                    return false;
+                }
+            }
+            if (outcome == CheckOutcome.Reproduced)
+            {
+                reproduced++;
+            }
+            else if (outcome == CheckOutcome.Incomplete)
+            {
+                reproduced++;
+            }
+        }
+        return reproduced > 0;
     }
 }
