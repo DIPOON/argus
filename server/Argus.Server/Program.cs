@@ -430,6 +430,36 @@ internal static class Program
                     }
                     peer.Control.Writer.TryWrite(new OutgoingMessage(message, -1, false));
                 }
+                else if (type == "reportNote")
+                {
+                    // 제보 뒤에 적은 내용을 그 제보(틱)에 덧붙인다. 숫자가 아닌 틱은 받지 않는다.
+                    string failure = "덧붙일 제보의 틱이 없습니다.";
+                    bool noted = false;
+                    long tick = -1;
+                    if (root.TryGetProperty("tick", out JsonElement about) && about.ValueKind == JsonValueKind.Number &&
+                        about.TryGetInt64(out tick))
+                    {
+                        noted = host.ReportNote(room, player, tick, Text(root, "text"), out failure);
+                    }
+                    byte[] message;
+                    if (noted)
+                    {
+                        message = JsonSerializer.SerializeToUtf8Bytes(new
+                        {
+                            type = "reportNoted",
+                            tick = tick
+                        }, RoomHost.Json);
+                    }
+                    else
+                    {
+                        message = JsonSerializer.SerializeToUtf8Bytes(new
+                        {
+                            type = "error",
+                            message = failure
+                        }, RoomHost.Json);
+                    }
+                    peer.Control.Writer.TryWrite(new OutgoingMessage(message, -1, false));
+                }
                 else if (type == "ping")
                 {
                     byte[] message = JsonSerializer.SerializeToUtf8Bytes(new

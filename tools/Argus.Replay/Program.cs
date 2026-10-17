@@ -15,9 +15,11 @@ internal static class Program
           dotnet run --project tools/Argus.Replay -- <기록 파일> --until <틱> [--snapshot <대원 id>]
               그 틱을 진행하고 그 틱의 요청까지 반영한 순간에 멈춰 방 상태를 보여 준다.
               --snapshot을 주면 그 대원이 그 순간 받은 스냅샷 JSON도 출력한다.
-          dotnet run --project tools/Argus.Replay -- <폴더>
-              폴더의 기록을 모두 확인한다. 하나라도 갈라지거나 읽지 못하면 실패로 끝난다.
-        종료 코드: 모두 재현되면 0, 갈라졌거나 읽지 못했으면 1, 사용법이 틀리면 2
+          dotnet run --project tools/Argus.Replay -- <폴더> [--strict]
+              폴더의 기록을 모두 확인한다. 갈라지거나 읽지 못한 기록이 있거나, 재현한 기록이 하나도 없으면 실패다.
+              --strict를 주면 끝 줄이 없거나 잘렸거나 진행 중 예외가 난 기록도 실패로 친다.
+              서버를 정상 종료한 뒤 확인할 때(CI) 쓴다.
+        종료 코드: 모두 재현되면 0, 실패가 있으면 1, 사용법이 틀리면 2
         """;
 
     public static int Main(string[] args)
@@ -29,8 +31,9 @@ internal static class Program
             return 2;
         }
         string path = args[0];
-        long untilTick = long.MaxValue;
+        long? untilTick = null;
         string? snapshotPlayer = null;
+        bool strict = false;
         for (int i = 1; i < args.Length; i++)
         {
             if (args[i] == "--until" && i + 1 < args.Length && long.TryParse(args[i + 1], out long tick) && tick >= 0)
@@ -43,6 +46,10 @@ internal static class Program
                 snapshotPlayer = args[i + 1];
                 i++;
             }
+            else if (args[i] == "--strict")
+            {
+                strict = true;
+            }
             else
             {
                 Console.Error.WriteLine($"알 수 없는 인자: {args[i]}");
@@ -52,7 +59,7 @@ internal static class Program
         }
         if (Directory.Exists(path))
         {
-            return CheckFolder(path);
+            return CheckFolder(path, strict);
         }
         if (File.Exists(path))
         {
@@ -63,55 +70,77 @@ internal static class Program
     }
 
     // 폴더의 기록을 모두 다시 돌린다. 다른 코드 버전으로 만든 기록은 같은 결과가 나오지 않을 수 있어 건너뛴다.
-    private static int CheckFolder(string folder)
+    private static int CheckFolder(string folder, bool strict)
     {
         string[] files = Directory.GetFiles(folder, "*" + RecordingFormat.Extension);
         Array.Sort(files, StringComparer.Ordinal);
-        if (files.Length == 0)
-        {
-            Console.WriteLine($"확인할 기록이 없습니다: {folder}");
-            return 1;
-        }
+        int reproduced = 0;
+        int incomplete = 0;
         int failed = 0;
         int skipped = 0;
         for (int i = 0; i < files.Length; i++)
         {
             string name = Path.GetFileName(files[i]);
-            RecordingContent content;
-            try
+            CheckResult check = RecordingCheck.Check(files[i]);
+            string detail = check.Reason;
+            if (check.Replay != null)
             {
-                content = RecordingReader.Read(files[i]);
+                detail = Describe(check.Replay, null);
+                if (check.Reason.Length > 0)
+                {
+                    detail = check.Reason + " · " + detail;
+                }
             }
-            catch (Exception error)
+            if (check.Outcome == CheckOutcome.Reproduced)
             {
-                failed++;
-                Console.WriteLine($"읽지 못함  {name}: {error.Message}");
-                continue;
+                reproduced++;
+                Console.WriteLine($"재현됨      {name}: {detail}");
             }
-            if (content.Header.Version != RecordingFormat.CodeVersion)
+            else if (check.Outcome == CheckOutcome.Incomplete)
+            {
+                incomplete++;
+                Console.WriteLine($"끝나지 않음 {name}: {detail}");
+            }
+            else if (check.Outcome == CheckOutcome.Skipped)
             {
                 skipped++;
-                Console.WriteLine($"건너뜀    {name}: 다른 코드 버전({content.Header.Version})으로 만든 기록");
-                continue;
+                Console.WriteLine($"건너뜀      {name}: {detail}");
             }
-            ReplayResult result = MatchReplay.Run(content.Header, content.Records);
-            if (result.DivergedAt.HasValue || result.Problems.Count > 0)
+            else if (check.Outcome == CheckOutcome.Diverged)
             {
                 failed++;
-                Console.WriteLine($"갈라짐    {name}: {Describe(result, false)}");
-                continue;
+                Console.WriteLine($"갈라짐      {name}: {detail}");
             }
-            Console.WriteLine($"재현됨    {name}: {Describe(result, false)}");
+            else
+            {
+                failed++;
+                Console.WriteLine($"읽지 못함   {name}: {detail}");
+            }
         }
-        Console.WriteLine($"기록 {files.Length}개 · 재현 {files.Length - failed - skipped}개 · 실패 {failed}개 · 건너뜀 {skipped}개");
+        Console.WriteLine($"기록 {files.Length}개 · 재현 {reproduced}개 · 끝나지 않음 {incomplete}개 · 실패 {failed}개 · 건너뜀 {skipped}개");
+        // 엄격하게 볼 때는 끝나지 않은 기록도 실패다. 서버를 정상 종료했다면 모든 기록에 끝 줄이 있어야 한다.
+        if (strict)
+        {
+            failed += incomplete;
+        }
+        else
+        {
+            reproduced += incomplete;
+        }
         if (failed > 0)
         {
+            return 1;
+        }
+        // 확인한 기록이 하나도 없으면 아무것도 보장하지 못한 것이므로 실패로 끝낸다.
+        if (reproduced == 0)
+        {
+            Console.WriteLine($"재현한 기록이 없습니다: {folder}");
             return 1;
         }
         return 0;
     }
 
-    private static int ReplayFile(string path, long untilTick, string? snapshotPlayer)
+    private static int ReplayFile(string path, long? untilTick, string? snapshotPlayer)
     {
         RecordingContent content = RecordingReader.Read(path);
         RecordingHeader header = content.Header;
@@ -127,8 +156,13 @@ internal static class Program
         }
         PrintPlayers(content.Records);
 
-        ReplayResult result = MatchReplay.Run(header, content.Records, untilTick);
-        Console.WriteLine($"결과: {Describe(result, untilTick != long.MaxValue)}");
+        long stopAt = long.MaxValue;
+        if (untilTick.HasValue)
+        {
+            stopAt = untilTick.Value;
+        }
+        ReplayResult result = MatchReplay.Run(header, content.Records, stopAt);
+        Console.WriteLine($"결과: {Describe(result, untilTick)}");
         if (result.DivergedAt.HasValue)
         {
             Console.WriteLine($"  기록한 요약값 {result.ExpectedHash}");
@@ -143,8 +177,8 @@ internal static class Program
         {
             Console.WriteLine($"읽지 못한 줄: {result.Problems[i]}");
         }
-        PrintReports(content.Records);
-        if (untilTick != long.MaxValue)
+        PrintReports(MatchReplay.Reports(content.Records));
+        if (untilTick.HasValue)
         {
             PrintState(result.Match);
             if (snapshotPlayer != null)
@@ -159,8 +193,8 @@ internal static class Program
         return 0;
     }
 
-    // stopped는 --until로 멈추게 했는지다. 그때는 끝 줄이 없는 것이 당연하다.
-    private static string Describe(ReplayResult result, bool stopped)
+    // requestedUntil은 --until로 요청한 틱이다. 주지 않았으면 null이다.
+    private static string Describe(ReplayResult result, long? requestedUntil)
     {
         StringBuilder text = new StringBuilder();
         if (result.DivergedAt.HasValue)
@@ -176,21 +210,25 @@ internal static class Program
         {
             text.Append($" · 끝: {result.EndReason}");
         }
-        else if (stopped && !result.DivergedAt.HasValue)
-        {
-            text.Append($" · --until {result.Match.Tick}에서 멈춤");
-        }
-        else
+        else if (!requestedUntil.HasValue || result.Match.Tick < requestedUntil.Value)
         {
             text.Append(" · 끝 줄 없음(쓰는 중이었거나 서버가 갑자기 꺼짐)");
+        }
+        // 요청한 틱에 닿지 못했으면 그렇다고 분명히 적는다. 그 뒤의 입력은 기록에 없어 더 갈 수 없다.
+        if (requestedUntil.HasValue && !result.DivergedAt.HasValue)
+        {
+            if (result.Match.Tick < requestedUntil.Value)
+            {
+                text.Append($" · 기록이 {result.Match.Tick}틱에서 끝나 요청한 {requestedUntil.Value}틱까지 가지 못함");
+            }
+            else
+            {
+                text.Append($" · --until {requestedUntil.Value}에서 멈춤");
+            }
         }
         if (result.Failures.Count > 0)
         {
             text.Append($" · 진행 중 예외 {result.Failures.Count}번");
-        }
-        if (result.Reports.Count > 0)
-        {
-            text.Append($" · 제보 {result.Reports.Count}건");
         }
         return text.ToString();
     }
@@ -222,17 +260,24 @@ internal static class Program
         Console.WriteLine(text.ToString());
     }
 
-    // 제보 목록과, 그 순간을 다시 보는 명령을 보여 준다.
-    private static void PrintReports(List<MatchRecord> records)
+    // 제보 목록과, 그 순간을 다시 보는 명령을 보여 준다. 틱은 버튼을 누른 순간이다.
+    private static void PrintReports(List<ReplayReport> reports)
     {
-        for (int i = 0; i < records.Count; i++)
+        for (int i = 0; i < reports.Count; i++)
         {
-            MatchRecord record = records[i];
-            if (record.Type != "report")
+            ReplayReport report = reports[i];
+            StringBuilder line = new StringBuilder();
+            line.Append($"제보: {report.Tick}틱({Clock(report.Tick)}) 대원 {report.Player}");
+            if (report.Text != null)
             {
-                continue;
+                line.Append($": \"{report.Text}\"");
             }
-            Console.WriteLine($"제보: {record.Tick}틱({Clock(record.Tick)}) 대원 {record.Player}: \"{record.Text}\" → 다시 보기 --until {record.Tick} --snapshot {record.Player}");
+            if (report.Note != null && report.NoteTick.HasValue)
+            {
+                line.Append($" · 덧붙인 내용({report.NoteTick.Value}틱): \"{report.Note}\"");
+            }
+            line.Append($" → 다시 보기 --until {report.Tick} --snapshot {report.Player}");
+            Console.WriteLine(line.ToString());
         }
     }
 

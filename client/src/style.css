@@ -743,6 +743,34 @@ input::placeholder {
   margin-left:16px
 }
 
+.report-note {
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  margin-top:6px
+}
+
+.report-note label {
+  font-size:10px;
+  color:#97aa90
+}
+
+.report-note input {
+  padding:7px 9px;
+  font-size:11px
+}
+
+.report-actions {
+  display:flex;
+  align-items:center;
+  gap:14px
+}
+
+.report-actions .secondary {
+  padding:6px 12px;
+  font-size:11px
+}
+
 .battlefield {
   flex:1;
   position:relative;

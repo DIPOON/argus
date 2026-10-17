@@ -2,7 +2,7 @@ namespace Argus.Server.Game;
 
 // 방의 진행을 다시 돌릴 수 있게 남기는 기록 한 줄이다. 종류(Type)는 다음 가운데 하나다.
 // 바깥 요청: join, loadout, deploy, input, disconnect, await, connect
-// 확인용 상태 요약값: hash / 버그 제보: report / 기록의 끝: end
+// 확인용 상태 요약값: hash / 버그 제보: report(그 순간), reportNote(나중에 덧붙인 내용) / 기록의 끝: end
 // 파일에는 JSON 한 줄로 저장하며, 종류에 따라 쓰지 않는 값은 비워 둔다(null).
 public sealed class MatchRecord
 {
@@ -22,6 +22,8 @@ public sealed class MatchRecord
     public string? Hash { get; set; }
     // 제보 내용, 또는 기록이 끝난 이유다.
     public string? Text { get; set; }
+    // reportNote가 내용을 덧붙이는 제보의 틱이다.
+    public long? About { get; set; }
 
     public MatchRecord(long tick, string type)
     {

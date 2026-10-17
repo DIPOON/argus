@@ -77,8 +77,10 @@ jobs:
             if ! pgrep -f "Argus.Server --urls http://127.0.0.1:5077" > /dev/null; then break; fi
             sleep 1
           done
-          # 실제 브라우저와 네트워크로 진행한 방이 모두 같은 상태로 재현되어야 한다. 기록이 하나도 없어도 실패한다.
-          dotnet run --project tools/Argus.Replay -- server/Argus.Server/recordings
+          # 실제 브라우저와 네트워크로 진행한 방이 모두 같은 상태로 재현되어야 한다. 정상 종료했으므로 모든 기록에 끝 줄이 있어야 하고
+          # 진행 중 예외도 없어야 한다(--strict). 재현한 기록이 하나도 없어도 실패한다.
+          dotnet run --project tools/Argus.Replay -- server/Argus.Server/recordings --strict
+      # 실패를 분석하려고 검사 방의 기록도 올린다. 시드가 들어 있지만 검사에서 쓰고 버리는 방이라 괜찮다(CLAUDE.md의 예외).
       - name: 실패 기록 업로드
         if: failure()
         uses: actions/upload-artifact@v7

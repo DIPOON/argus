@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using Argus.Server.Game;
@@ -212,6 +213,8 @@ public sealed class Room
     // 대원마다 마지막으로 제보를 받은 틱과, 이 방에서 받은 제보 수다. 제보로 기록을 부풀리지 못하게 센다.
     public Dictionary<string, long> ReportTicks { get; } = new Dictionary<string, long>();
     public int Reports { get; set; }
+    // 대원마다 내용을 덧붙인 마지막 제보의 틱이다. 제보 하나에 내용은 한 번만 덧붙인다.
+    public Dictionary<string, long> NotedTicks { get; } = new Dictionary<string, long>();
 
     // 방마다 비밀 시드를 새로 만든다. 시드는 서버 밖으로 보내지 않는다.
     public Room(string code, string? address)
@@ -466,7 +469,7 @@ public sealed class RoomHost : BackgroundService
                 failure = EntryFailure.Unavailable;
                 return null;
             }
-            string name = CleanName(request.Name);
+            string name = CleanText(request.Name, 16, "대원");
             string id = Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant();
             Player? player = room.Match.Join(id, name);
             if (player == null)
@@ -490,29 +493,49 @@ public sealed class RoomHost : BackgroundService
         }
     }
 
-    private static string CleanName(string? requestedName)
+    // 대원 이름과 제보 내용처럼 사람이 적은 글을 정리한다. 앞뒤 공백과 제어 문자를 빼고 maxLength(UTF-16 단위)까지 남긴다.
+    // 이모지처럼 두 단위로 된 글자(서로게이트 쌍)는 반으로 자르지 않고 통째로 넣거나 뺀다. 짝이 없는 반쪽은 버린다.
+    // 남은 글이 없으면 fallback을 돌려준다.
+    private static string CleanText(string? text, int maxLength, string fallback)
     {
-        if (requestedName == null)
+        if (text == null)
         {
-            return "대원";
+            return fallback;
         }
-
-        string name = requestedName.Trim();
-        char[] letters = new char[16];
-        int length = 0;
-        for (int i = 0; i < name.Length && length < letters.Length; i++)
+        string trimmed = text.Trim();
+        StringBuilder result = new StringBuilder();
+        int index = 0;
+        while (index < trimmed.Length)
         {
-            if (!char.IsControl(name[i]))
+            char letter = trimmed[index];
+            bool pair = char.IsHighSurrogate(letter) && index + 1 < trimmed.Length && char.IsLowSurrogate(trimmed[index + 1]);
+            if (pair)
             {
-                letters[length] = name[i];
-                length++;
+                if (result.Length + 2 > maxLength)
+                {
+                    break;
+                }
+                result.Append(letter);
+                result.Append(trimmed[index + 1]);
+                index += 2;
+                continue;
             }
+            index++;
+            if (char.IsSurrogate(letter) || char.IsControl(letter))
+            {
+                continue;
+            }
+            if (result.Length + 1 > maxLength)
+            {
+                break;
+            }
+            result.Append(letter);
         }
-        if (length == 0)
+        if (result.Length == 0)
         {
-            return "대원";
+            return fallback;
         }
-        return new string(letters, 0, length);
+        return result.ToString();
     }
 
     // 성공하면 방, 대원, 연결 정보를 묶어 반환한다. 실패하면 null을 반환한다.
@@ -681,10 +704,9 @@ public sealed class RoomHost : BackgroundService
     // 방 잠금 안에서 부른다. 제보는 게임 상태를 바꾸지 않고 기록에 표시만 남긴다. 다른 대원에게도 알리지 않는다.
     public long? Report(Room room, Player player, string text, out string failure)
     {
-        failure = "";
-        if (room.Recording == null)
+        RecordingFile? recording = AcceptingRecording(room, out failure);
+        if (recording == null)
         {
-            failure = "이 서버는 기록을 남기지 않아 제보를 받을 수 없습니다.";
             return null;
         }
         if (room.Reports >= MaxReportsPerRoom)
@@ -701,26 +723,66 @@ public sealed class RoomHost : BackgroundService
         room.Reports++;
         MatchRecord record = new MatchRecord(room.Match.Tick, "report");
         record.Player = player.Id;
-        record.Text = CleanReport(text);
-        room.Recording.Write(record);
+        // 공식 클라이언트는 버튼을 누른 순간 내용 없이 보내고, 내용은 ReportNote로 덧붙인다. 내용을 함께 보내는 클라이언트도 받는다.
+        string cleaned = CleanText(text, MaxReportLength, "");
+        if (cleaned.Length > 0)
+        {
+            record.Text = cleaned;
+        }
+        recording.Write(record);
         return room.Match.Tick;
     }
 
-    // 제보 내용에서 제어 문자를 빼고 길이를 줄인다. 기록 파일에만 남고 다른 대원에게는 가지 않는다.
-    private static string CleanReport(string text)
+    // 제보 뒤에 적은 내용을 그 제보에 덧붙인다. 그 대원의 마지막 제보에 한 번만 받는다. 방 잠금 안에서 부른다.
+    // 제보한 틱은 버튼을 누른 순간이고, 내용을 적는 동안 지난 틱은 덧붙인 줄의 틱으로 따로 남는다.
+    public bool ReportNote(Room room, Player player, long tick, string text, out string failure)
     {
-        string trimmed = text.Trim();
-        char[] letters = new char[Math.Min(trimmed.Length, MaxReportLength)];
-        int length = 0;
-        for (int i = 0; i < trimmed.Length && length < letters.Length; i++)
+        RecordingFile? recording = AcceptingRecording(room, out failure);
+        if (recording == null)
         {
-            if (!char.IsControl(trimmed[i]))
-            {
-                letters[length] = trimmed[i];
-                length++;
-            }
+            return false;
         }
-        return new string(letters, 0, length);
+        if (!room.ReportTicks.TryGetValue(player.Id, out long last) || last != tick)
+        {
+            failure = "내용을 덧붙일 제보를 찾지 못했습니다.";
+            return false;
+        }
+        if (room.NotedTicks.TryGetValue(player.Id, out long noted) && noted == tick)
+        {
+            failure = "이미 내용을 덧붙인 제보입니다.";
+            return false;
+        }
+        string cleaned = CleanText(text, MaxReportLength, "");
+        if (cleaned.Length == 0)
+        {
+            failure = "덧붙일 내용이 비어 있습니다.";
+            return false;
+        }
+        room.NotedTicks[player.Id] = tick;
+        MatchRecord record = new MatchRecord(room.Match.Tick, "reportNote");
+        record.Player = player.Id;
+        record.About = tick;
+        record.Text = cleaned;
+        recording.Write(record);
+        return true;
+    }
+
+    // 제보를 받을 수 있는 이 방의 기록을 돌려준다. 기록하지 않거나, 쓰기에 실패해 기록을 멈춘 방이면 null이다.
+    // 받지 못한 제보를 받은 것처럼 답하면, 제보가 남았다고 믿은 사람이 그 기록을 찾지 못한다.
+    private static RecordingFile? AcceptingRecording(Room room, out string failure)
+    {
+        failure = "";
+        if (room.Recording == null)
+        {
+            failure = "이 서버는 기록을 남기지 않아 제보를 받을 수 없습니다.";
+            return null;
+        }
+        if (!room.Recording.Accepting)
+        {
+            failure = "지금 이 작전의 기록을 남기지 못하고 있어 제보를 받을 수 없습니다.";
+            return null;
+        }
+        return room.Recording;
     }
 
     // 방을 목록에서 지우고 연결을 닫는다. 보낼 통로를 닫으면 Send가 끝나고 연결 처리가 소켓을 닫는다.

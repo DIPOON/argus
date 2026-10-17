@@ -16,6 +16,10 @@ internal static class RecordingTests
         tests.Add(new TestCase("A room recorded to disk through RoomHost replays from its file, with its bug report", DiskRecording));
         tests.Add(new TestCase("Old recordings are pruned while reported ones are kept apart", Retention));
         tests.Add(new TestCase("A recording cut off by a crash still replays up to where it was written", TruncatedRecording));
+        tests.Add(new TestCase("A room nobody connected to leaves no recording to push real ones out", UnconnectedRecordingDeleted));
+        tests.Add(new TestCase("A room whose recording failed refuses bug reports instead of claiming to keep them", FailedRecordingRefusesReports));
+        tests.Add(new TestCase("The recording check tells reproduced, unfinished, diverged, unreadable and other-version recordings apart", CheckOutcomes));
+        tests.Add(new TestCase("Names and report notes keep whole characters and drop control characters", CleanTexts));
     }
 
     // 기록을 메모리에 모은다. 서버에서는 파일에 쓰는 쪽이 같은 자리에 들어간다.
@@ -242,12 +246,21 @@ internal static class RecordingTests
                     }
                     if (tick == 400)
                     {
-                        long? reported = host.Report(room, player, "  적이 벽을 지나간 것 같아요\n", out string failure);
+                        // 공식 클라이언트처럼 버튼을 누른 순간 내용 없이 제보해 틱을 찍는다.
+                        long? reported = host.Report(room, player, "", out string failure);
                         Check(reported.HasValue, failure);
                         reportTick = reported!.Value;
                         // 같은 대원은 5초 안에 다시 제보할 수 없다.
                         Check(host.Report(room, player, "또", out string again) == null, "곧바로 다시 낸 제보를 받았습니다");
                         Check(again.Length > 0, "제보를 거절한 이유가 없습니다");
+                    }
+                    if (tick == 450)
+                    {
+                        // 내용은 적는 데 걸린 시간만큼 뒤에 덧붙인다. 제보한 틱은 그대로다.
+                        Check(host.ReportNote(room, player, reportTick, "  적이 벽을 지나간 것 같아요\n", out string failure), failure);
+                        Check(!host.ReportNote(room, player, reportTick, "한 번 더", out string twice), "같은 제보에 내용을 두 번 덧붙였습니다");
+                        Check(!host.ReportNote(room, player, reportTick + 1, "다른 틱", out string other), "없는 제보에 내용을 덧붙였습니다");
+                        Check(twice.Length > 0 && other.Length > 0, "덧붙이기를 거절한 이유가 없습니다");
                     }
                 }
                 host.StepRoom(room.Match.Code, room, 1, false);
@@ -285,11 +298,14 @@ internal static class RecordingTests
             Equal(result.EndReason, "shutdown");
             Equal(result.Problems.Count, 0);
             Equal(result.Match.StateHash(), liveHash);
-            // 제보는 지금 틱과 함께 남고, 제어 문자와 앞뒤 공백은 빠진다.
-            Equal(result.Reports.Count, 1);
-            Equal(result.Reports[0].Tick, reportTick);
-            Equal(result.Reports[0].Player, player.Id);
-            Equal(result.Reports[0].Text, "적이 벽을 지나간 것 같아요");
+            // 제보는 버튼을 누른 틱으로 남고, 나중에 덧붙인 내용은 그 제보에 이어진다. 제어 문자와 앞뒤 공백은 빠진다.
+            List<ReplayReport> reports = MatchReplay.Reports(content.Records);
+            Equal(reports.Count, 1);
+            Equal(reports[0].Tick, reportTick);
+            Equal(reports[0].Player, player.Id);
+            Equal(reports[0].Text, (string?)null);
+            Equal(reports[0].Note, "적이 벽을 지나간 것 같아요");
+            Equal(reports[0].NoteTick, (long?)450);
         }
         finally
         {
@@ -310,6 +326,8 @@ internal static class RecordingTests
             {
                 RecordingFile file = store.Open("ROOM" + i, seed, new Rules())!;
                 paths[i] = file.Path;
+                // 한 번도 접속하지 않은 방의 기록은 닫을 때 지워지므로 접속 줄을 넣는다.
+                file.Write(new MatchRecord(0, "connect"));
                 if (i == 1)
                 {
                     MatchRecord report = new MatchRecord(0, "report");
@@ -359,6 +377,165 @@ internal static class RecordingTests
             Check(result.DivergedAt == null, "잘린 부분까지는 기록과 같아야 합니다");
             Check(result.Checkpoints > 0, "잘린 파일에서 요약값을 하나도 확인하지 못했습니다");
             Check(!result.Ended, "잘린 기록에 끝 줄이 있습니다");
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
+    }
+
+    private static void UnconnectedRecordingDeleted()
+    {
+        string folder = TemporaryFolder();
+        try
+        {
+            RecordingStore store = new RecordingStore(folder, 200, NullLogger<RecordingStore>.Instance);
+            using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance, store);
+            // HTTP로 방만 만들고 접속하지 않은 방과, 접속한 방이다.
+            Guest drifter = host.Create(new EntryRequest("drifter"))!;
+            Guest pilot = host.Create(new EntryRequest("pilot"))!;
+            Check(host.Attach(pilot.Room, pilot.Token) != null, "접속하지 못했습니다");
+            host.StopAsync(CancellationToken.None).GetAwaiter().GetResult();
+            // 접속이 없었던 방의 기록은 지워져 보관 자리를 차지하지 않는다.
+            string[] files = Directory.GetFiles(folder, "*" + RecordingFormat.Extension);
+            Equal(files.Length, 1);
+            Check(files[0].Contains(pilot.Room), "접속한 방의 기록이 남지 않았습니다");
+            Check(!files[0].Contains(drifter.Room), "접속하지 않은 방의 기록이 남았습니다");
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
+    }
+
+    private static void FailedRecordingRefusesReports()
+    {
+        string folder = TemporaryFolder();
+        try
+        {
+            // 없는 폴더에 쓰게 해 기록 파일을 만들지 못하게 한다. 디스크가 가득 찬 것과 같다.
+            RecordingHeader header = new RecordingHeader();
+            RecordingFile file = new RecordingFile(Path.Combine(folder, "missing", "FAIL01" + RecordingFormat.Extension),
+                header, NullLogger.Instance, ignored => { });
+            file.Completion.GetAwaiter().GetResult();
+            Check(!file.Accepting, "쓰기에 실패한 기록이 아직 받고 있다고 합니다");
+            Match match = new Match("FAIL01", new Rules { MaxEnemies = 0 }, 1);
+            Room room = new Room(match, null);
+            room.Recording = file;
+            match.Recorder = file;
+            Player player = match.Join("p", "pilot")!;
+            match.Connect(player);
+            using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+            // 남기지 못할 제보를 받았다고 답하면, 제보가 남았다고 믿은 사람이 그 기록을 찾지 못한다.
+            Check(host.Report(room, player, "", out string failure) == null, "기록이 실패한 방이 제보를 받았습니다");
+            Check(failure.Contains("기록을 남기지 못하고"), $"거절한 이유가 맞지 않습니다: {failure}");
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
+    }
+
+    // 검사용 기록 파일을 서버와 같은 형식(헤더 다음 줄마다 기록 하나, gzip)으로 직접 쓴다.
+    private static void WriteRecording(string path, RecordingHeader header, List<MatchRecord> records)
+    {
+        using FileStream file = new FileStream(path, FileMode.CreateNew, FileAccess.Write);
+        using System.IO.Compression.GZipStream zip = new System.IO.Compression.GZipStream(file, System.IO.Compression.CompressionLevel.Fastest);
+        using StreamWriter writer = new StreamWriter(zip, new System.Text.UTF8Encoding(false));
+        writer.WriteLine(System.Text.Json.JsonSerializer.Serialize(header, RecordingFormat.Json));
+        for (int i = 0; i < records.Count; i++)
+        {
+            writer.WriteLine(System.Text.Json.JsonSerializer.Serialize(records[i], RecordingFormat.Json));
+        }
+    }
+
+    private static RecordingHeader CopyHeader(RecordingHeader source, string version)
+    {
+        RecordingHeader header = new RecordingHeader();
+        header.Version = version;
+        header.Room = source.Room;
+        header.Seed = source.Seed;
+        header.Rules = source.Rules;
+        return header;
+    }
+
+    private static void CheckOutcomes()
+    {
+        string folder = TemporaryFolder();
+        try
+        {
+            Session session = Recorded();
+            RecordingHeader current = CopyHeader(session.Header, RecordingFormat.CodeVersion);
+            List<MatchRecord> unfinished = new List<MatchRecord>(session.Records);
+            unfinished.RemoveAt(unfinished.Count - 1);
+            Equal(session.Records[session.Records.Count - 1].Type, "end");
+            List<MatchRecord> diverged = new List<MatchRecord>(session.Records);
+            MatchRecord original = diverged[session.TamperIndex];
+            MatchRecord changed = new MatchRecord(original.Tick, original.Type);
+            changed.Player = original.Player;
+            changed.Sequence = original.Sequence;
+            changed.MoveX = -original.MoveX;
+            changed.MoveY = -original.MoveY;
+            changed.Aim = original.Aim;
+            changed.Slot = original.Slot;
+            diverged[session.TamperIndex] = changed;
+
+            string complete = Path.Combine(folder, "complete" + RecordingFormat.Extension);
+            string open = Path.Combine(folder, "open" + RecordingFormat.Extension);
+            string bad = Path.Combine(folder, "diverged" + RecordingFormat.Extension);
+            string older = Path.Combine(folder, "older" + RecordingFormat.Extension);
+            string broken = Path.Combine(folder, "broken" + RecordingFormat.Extension);
+            WriteRecording(complete, current, session.Records);
+            WriteRecording(open, current, unfinished);
+            WriteRecording(bad, current, diverged);
+            WriteRecording(older, CopyHeader(session.Header, "0.0.0+other"), session.Records);
+            File.WriteAllText(broken, "gzip가 아닌 파일");
+
+            Equal(RecordingCheck.Check(complete).Outcome, CheckOutcome.Reproduced);
+            // 끝 줄이 없는 기록은 요약값이 모두 맞아도 끝나지 않은 기록이다. CI(--strict)는 이것도 실패로 친다.
+            CheckResult unfinishedCheck = RecordingCheck.Check(open);
+            Equal(unfinishedCheck.Outcome, CheckOutcome.Incomplete);
+            Check(unfinishedCheck.Reason.Contains("끝 줄 없음"), $"끝나지 않은 까닭이 맞지 않습니다: {unfinishedCheck.Reason}");
+            Equal(RecordingCheck.Check(bad).Outcome, CheckOutcome.Diverged);
+            Equal(RecordingCheck.Check(older).Outcome, CheckOutcome.Skipped);
+            Equal(RecordingCheck.Check(broken).Outcome, CheckOutcome.Unreadable);
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
+    }
+
+    private static void CleanTexts()
+    {
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        // 이름은 16단위까지다. 15글자 뒤의 이모지(2단위)는 반만 들어갈 수 없으므로 통째로 뺀다.
+        string[] requested = new string[] { "ABCDEFGHIJKLMNO\U0001F600", "가\u0007나", "A\uD800B", "  \u0001  " };
+        string[] expected = new string[] { "ABCDEFGHIJKLMNO", "가나", "AB", "대원" };
+        for (int i = 0; i < requested.Length; i++)
+        {
+            Guest guest = host.Create(new EntryRequest(requested[i]))!;
+            (Room room, Player player, Peer peer) = host.Attach(guest.Room, guest.Token)!.Value;
+            Equal(player.Name, expected[i]);
+        }
+
+        // 제보 내용은 200단위까지다. 199글자 뒤의 이모지는 들어가지 않고, 198글자 뒤의 이모지는 들어간다.
+        string folder = TemporaryFolder();
+        try
+        {
+            RecordingStore store = new RecordingStore(folder, 200, NullLogger<RecordingStore>.Instance);
+            using RoomHost recorded = new RoomHost(NullLogger<RoomHost>.Instance, store);
+            Guest guest = recorded.Create(new EntryRequest("pilot"))!;
+            (Room room, Player player, Peer peer) = recorded.Attach(guest.Room, guest.Token)!.Value;
+            lock (room.Gate)
+            {
+                long tick = recorded.Report(room, player, "", out string failure)!.Value;
+                Check(recorded.ReportNote(room, player, tick, new string('x', 199) + "\U0001F600", out failure), failure);
+            }
+            recorded.StopAsync(CancellationToken.None).GetAwaiter().GetResult();
+            RecordingContent content = RecordingReader.Read(Directory.GetFiles(folder, "*" + RecordingFormat.Extension)[0]);
+            List<ReplayReport> reports = MatchReplay.Reports(content.Records);
+            Equal(reports[0].Note, new string('x', 199));
         }
         finally
         {
