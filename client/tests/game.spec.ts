@@ -236,6 +236,40 @@ test('notices that arrive together are all shown, even two identical ones', asyn
   expect(me.errors).toEqual([]);
 });
 
+test('the bug report button stamps the moment at once and takes a note without freezing the game', async ({ page }) => {
+  const me = observe(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: '새 작전 시작' }).click();
+  await expect(page.locator('#room-code')).not.toHaveText('------');
+  await expect.poll(() => me.player?.state).toBe('waiting');
+  const code = await page.locator('#room-code').innerText();
+  // 살아 있는 동안 제보해야 내용을 적는 동안 게임 키가 대원을 움직이지 않는지 볼 수 있다.
+  await page.getByRole('button', { name: '캠프 선택' }).click();
+  await page.locator('#deploy').click();
+  await expect.poll(() => me.player?.state, { timeout: 8000 }).toBe('alive');
+  await page.getByRole('button', { name: '버그 제보' }).click();
+  // 누른 순간 서버가 기록에 남긴 틱을 방 코드와 함께 알려 주고, 내용을 적을 입력란을 연다.
+  await expect(page.locator('#toast')).toContainText(new RegExp(`제보를 남겼습니다 · 방 ${code} · \\d+틱`));
+  await expect(page.locator('#report-note')).toBeVisible();
+  const before = { x: me.player!.x, y: me.player!.y };
+  await page.locator('#report-text').click();
+  // 입력란에서 W를 누르고 있어도 대원은 움직이지 않는다. 게임 키로 받으면 0.4초 동안 70 남짓 움직인다.
+  // 눌렀다 바로 떼는 타자로는 33ms마다 입력을 읽는 쪽이 눌린 키를 거의 보지 못하므로 누르고 있는다.
+  await page.keyboard.down('KeyW');
+  await page.waitForTimeout(400);
+  await page.keyboard.up('KeyW');
+  await page.waitForTimeout(300);
+  expect(Math.hypot(me.player!.x - before.x, me.player!.y - before.y)).toBeLessThan(1);
+  await page.locator('#report-text').pressSequentially(' 적이 벽을 지나갔어요');
+  await page.getByRole('button', { name: '덧붙이기' }).click();
+  await expect(page.locator('#toast')).toContainText('제보에 내용을 덧붙였습니다');
+  await expect(page.locator('#report-note')).toBeHidden();
+  // 같은 대원은 5초 안에 다시 제보할 수 없다.
+  await page.getByRole('button', { name: '버그 제보' }).click();
+  await expect(page.locator('#toast')).toContainText('5초에 한 번');
+  expect(me.errors).toEqual([]);
+});
+
 test('a client that closes first gets a clean close back', async ({ request }) => {
   const guest = await (await request.post('/api/rooms', { data: { name: 'Closer' } })).json();
   const url = (process.env.ARGUS_URL ?? 'http://127.0.0.1:5077').replace(/^http/, 'ws') + '/ws';

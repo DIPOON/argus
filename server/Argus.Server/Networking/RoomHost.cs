@@ -2,9 +2,11 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using Argus.Server.Game;
+using Argus.Server.Recording;
 
 namespace Argus.Server.Networking;
 
@@ -206,6 +208,13 @@ public sealed class Room
     public int SeenDepartures { get; set; }
     // 진행에 연속해서 실패한 횟수다.
     public int Failures { get; set; }
+    // 이 방의 기록 파일이다. 기록하지 않으면 null이다.
+    public RecordingFile? Recording { get; set; }
+    // 대원마다 마지막으로 제보를 받은 틱과, 이 방에서 받은 제보 수다. 제보로 기록을 부풀리지 못하게 센다.
+    public Dictionary<string, long> ReportTicks { get; } = new Dictionary<string, long>();
+    public int Reports { get; set; }
+    // 대원마다 내용을 덧붙인 마지막 제보의 틱이다. 제보 하나에 내용은 한 번만 덧붙인다.
+    public Dictionary<string, long> NotedTicks { get; } = new Dictionary<string, long>();
 
     // 방마다 비밀 시드를 새로 만든다. 시드는 서버 밖으로 보내지 않는다.
     public Room(string code, string? address)
@@ -218,6 +227,18 @@ public sealed class Room
     {
         Match = match;
         Address = address;
+    }
+
+    // 기록을 끝 줄과 함께 닫고 방에서 뗀다. 방 잠금 안에서 부른다. 이미 닫았으면 아무것도 하지 않는다.
+    public void CloseRecording(string reason)
+    {
+        if (Recording == null)
+        {
+            return;
+        }
+        Recording.Close(Match.Tick, reason);
+        Match.Recorder = null;
+        Recording = null;
     }
 
     // 대원이 모두 떠난 방에는 복구할 자리가 없으므로 곧바로 지운다. 오래 남기면 빈 방으로 방 생성을 막을 수 있다.
@@ -297,6 +318,8 @@ public sealed class RoomHost : BackgroundService
     public static readonly JsonSerializerOptions Json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
     private readonly ConcurrentDictionary<string, Room> _rooms = new ConcurrentDictionary<string, Room>();
     private readonly ILogger<RoomHost> _logger;
+    // 방마다 기록 파일을 만드는 곳이다. 검사처럼 기록하지 않을 때는 null이다.
+    private readonly RecordingStore? _recordings;
     private long _connection;
     // 연속해서 이만큼 진행에 실패한 방은 닫는다. 30번이면 약 1초다.
     private const int MaxRoomFailures = 30;
@@ -306,10 +329,15 @@ public sealed class RoomHost : BackgroundService
     public const int MaxRoomsPerAddress = 4;
     // 방 수 확인과 추가가 따로 일어나면 동시 요청으로 상한을 넘을 수 있으므로 함께 잠근다.
     private readonly object _createGate = new object();
+    // 버그 제보는 대원마다 이 간격에 한 번, 방마다 이 수까지만 받는다. 내용은 이 길이까지만 남긴다.
+    private const double ReportIntervalSeconds = 5;
+    private const int MaxReportsPerRoom = 20;
+    private const int MaxReportLength = 200;
 
-    public RoomHost(ILogger<RoomHost> logger)
+    public RoomHost(ILogger<RoomHost> logger, RecordingStore? recordings = null)
     {
         _logger = logger;
+        _recordings = recordings;
     }
 
     // 주소별 상한을 적용하지 않고 만든다. 검사처럼 접속 주소가 없을 때 쓴다.
@@ -331,6 +359,7 @@ public sealed class RoomHost : BackgroundService
         }
 
         Room room;
+        byte[] seed;
         lock (_createGate)
         {
             if (_rooms.Count >= 32)
@@ -353,8 +382,22 @@ public sealed class RoomHost : BackgroundService
                     letters[i] = alphabet[bytes[i] % alphabet.Length];
                 }
                 string code = new string(letters);
-                room = new Room(code, address);
+                // 방마다 비밀 시드를 새로 만든다. 시드는 기록 파일에만 적고 클라이언트에는 보내지 않는다.
+                seed = RandomNumberGenerator.GetBytes(SeededRandom.SeedLength);
+                room = new Room(new Match(code, new Rules(), seed), address);
             } while (!_rooms.TryAdd(room.Match.Code, room));
+        }
+
+        // 기록 파일은 첫 참가보다 먼저 연다. 파일을 만드는 일이라 생성 잠금 밖에서 하고,
+        // 진행 루프와 겹치지 않도록 방 잠금 안에서 붙인다. 붙이기 전에 진행한 틱은 재생할 때도 그대로 진행된다.
+        if (_recordings != null)
+        {
+            RecordingFile? recording = _recordings.Open(room.Match.Code, seed, room.Match.Rules);
+            lock (room.Gate)
+            {
+                room.Recording = recording;
+                room.Match.Recorder = recording;
+            }
         }
 
         Guest? guest = Join(room.Match.Code, request, out failure);
@@ -364,6 +407,7 @@ public sealed class RoomHost : BackgroundService
             // 방 삭제는 그 방의 잠금 안에서 한다.
             lock (room.Gate)
             {
+                room.CloseRecording("unused");
                 _rooms.TryRemove(room.Match.Code, out _);
             }
         }
@@ -425,7 +469,7 @@ public sealed class RoomHost : BackgroundService
                 failure = EntryFailure.Unavailable;
                 return null;
             }
-            string name = CleanName(request.Name);
+            string name = CleanText(request.Name, 16, "대원");
             string id = Convert.ToHexString(RandomNumberGenerator.GetBytes(6)).ToLowerInvariant();
             Player? player = room.Match.Join(id, name);
             if (player == null)
@@ -443,36 +487,55 @@ public sealed class RoomHost : BackgroundService
             room.Tokens[token] = player;
             // HTTP 참가 후 WebSocket으로 접속하지 않으면 짧은 유예 뒤에 자리를 비운다.
             // 방 코드를 아는 사람이 참가만 반복해 자리를 막아 두지 못하게 한다.
-            player.DisconnectedTick = room.Match.Tick;
-            player.AwaitingFirstConnection = true;
+            room.Match.AwaitConnection(player);
             room.LastVisit = DateTime.UtcNow;
             return new Guest(room.Match.Code, player.Id, token);
         }
     }
 
-    private static string CleanName(string? requestedName)
+    // 대원 이름과 제보 내용처럼 사람이 적은 글을 정리한다. 앞뒤 공백과 제어 문자를 빼고 maxLength(UTF-16 단위)까지 남긴다.
+    // 이모지처럼 두 단위로 된 글자(서로게이트 쌍)는 반으로 자르지 않고 통째로 넣거나 뺀다. 짝이 없는 반쪽은 버린다.
+    // 남은 글이 없으면 fallback을 돌려준다.
+    private static string CleanText(string? text, int maxLength, string fallback)
     {
-        if (requestedName == null)
+        if (text == null)
         {
-            return "대원";
+            return fallback;
         }
-
-        string name = requestedName.Trim();
-        char[] letters = new char[16];
-        int length = 0;
-        for (int i = 0; i < name.Length && length < letters.Length; i++)
+        string trimmed = text.Trim();
+        StringBuilder result = new StringBuilder();
+        int index = 0;
+        while (index < trimmed.Length)
         {
-            if (!char.IsControl(name[i]))
+            char letter = trimmed[index];
+            bool pair = char.IsHighSurrogate(letter) && index + 1 < trimmed.Length && char.IsLowSurrogate(trimmed[index + 1]);
+            if (pair)
             {
-                letters[length] = name[i];
-                length++;
+                if (result.Length + 2 > maxLength)
+                {
+                    break;
+                }
+                result.Append(letter);
+                result.Append(trimmed[index + 1]);
+                index += 2;
+                continue;
             }
+            index++;
+            if (char.IsSurrogate(letter) || char.IsControl(letter))
+            {
+                continue;
+            }
+            if (result.Length + 1 > maxLength)
+            {
+                break;
+            }
+            result.Append(letter);
         }
-        if (length == 0)
+        if (result.Length == 0)
         {
-            return "대원";
+            return fallback;
         }
-        return new string(letters, 0, length);
+        return result.ToString();
     }
 
     // 성공하면 방, 대원, 연결 정보를 묶어 반환한다. 실패하면 null을 반환한다.
@@ -502,9 +565,7 @@ public sealed class RoomHost : BackgroundService
             Peer peer = new Peer(Interlocked.Increment(ref _connection));
             room.Peers[player.Id] = peer;
             player.Connection = peer.Connection;
-            player.Connected = true;
-            player.DisconnectedTick = null;
-            player.AwaitingFirstConnection = false;
+            room.Match.Connect(player);
             room.LastVisit = DateTime.UtcNow;
             byte[] snapshot = Snapshot.Create(room.Match, player, Json);
             peer.Outgoing.Writer.TryWrite(new OutgoingMessage(snapshot, room.Match.Map.Revision, true));
@@ -609,15 +670,126 @@ public sealed class RoomHost : BackgroundService
             // 진행에 실패한 틱에도 만료 검사는 한다.
             if (room.Expired(DateTime.UtcNow))
             {
+                room.CloseRecording("expired");
                 _rooms.TryRemove(code, out _);
             }
         }
+    }
+
+    // 서버를 끌 때 진행 루프를 멈추고, 방마다 기록을 끝 줄과 함께 닫은 뒤 다 쓰일 때까지 5초까지 기다린다.
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await base.StopAsync(cancellationToken);
+        CloseRecordings("shutdown");
+        if (_recordings != null)
+        {
+            Task written = _recordings.WhenAllWritten();
+            await Task.WhenAny(written, Task.Delay(TimeSpan.FromSeconds(5), cancellationToken));
+        }
+    }
+
+    // 모든 방의 기록을 닫는다. 방은 그대로 두며, 그 뒤의 진행은 기록하지 않는다.
+    public void CloseRecordings(string reason)
+    {
+        foreach (KeyValuePair<string, Room> entry in _rooms)
+        {
+            lock (entry.Value.Gate)
+            {
+                entry.Value.CloseRecording(reason);
+            }
+        }
+    }
+
+    // 버그 제보를 그 방의 기록에 남기고 지금 틱을 돌려준다. 남길 수 없으면 null을 돌려주고 failure에 이유를 담는다.
+    // 방 잠금 안에서 부른다. 제보는 게임 상태를 바꾸지 않고 기록에 표시만 남긴다. 다른 대원에게도 알리지 않는다.
+    public long? Report(Room room, Player player, string text, out string failure)
+    {
+        RecordingFile? recording = AcceptingRecording(room, out failure);
+        if (recording == null)
+        {
+            return null;
+        }
+        if (room.Reports >= MaxReportsPerRoom)
+        {
+            failure = "이 작전에서는 제보를 더 받을 수 없습니다.";
+            return null;
+        }
+        if (room.ReportTicks.TryGetValue(player.Id, out long last) && room.Match.Tick - last < Rules.ToTicks(ReportIntervalSeconds))
+        {
+            failure = "제보는 5초에 한 번만 보낼 수 있습니다.";
+            return null;
+        }
+        room.ReportTicks[player.Id] = room.Match.Tick;
+        room.Reports++;
+        MatchRecord record = new MatchRecord(room.Match.Tick, "report");
+        record.Player = player.Id;
+        // 공식 클라이언트는 버튼을 누른 순간 내용 없이 보내고, 내용은 ReportNote로 덧붙인다. 내용을 함께 보내는 클라이언트도 받는다.
+        string cleaned = CleanText(text, MaxReportLength, "");
+        if (cleaned.Length > 0)
+        {
+            record.Text = cleaned;
+        }
+        recording.Write(record);
+        return room.Match.Tick;
+    }
+
+    // 제보 뒤에 적은 내용을 그 제보에 덧붙인다. 그 대원의 마지막 제보에 한 번만 받는다. 방 잠금 안에서 부른다.
+    // 제보한 틱은 버튼을 누른 순간이고, 내용을 적는 동안 지난 틱은 덧붙인 줄의 틱으로 따로 남는다.
+    public bool ReportNote(Room room, Player player, long tick, string text, out string failure)
+    {
+        RecordingFile? recording = AcceptingRecording(room, out failure);
+        if (recording == null)
+        {
+            return false;
+        }
+        if (!room.ReportTicks.TryGetValue(player.Id, out long last) || last != tick)
+        {
+            failure = "내용을 덧붙일 제보를 찾지 못했습니다.";
+            return false;
+        }
+        if (room.NotedTicks.TryGetValue(player.Id, out long noted) && noted == tick)
+        {
+            failure = "이미 내용을 덧붙인 제보입니다.";
+            return false;
+        }
+        string cleaned = CleanText(text, MaxReportLength, "");
+        if (cleaned.Length == 0)
+        {
+            failure = "덧붙일 내용이 비어 있습니다.";
+            return false;
+        }
+        room.NotedTicks[player.Id] = tick;
+        MatchRecord record = new MatchRecord(room.Match.Tick, "reportNote");
+        record.Player = player.Id;
+        record.About = tick;
+        record.Text = cleaned;
+        recording.Write(record);
+        return true;
+    }
+
+    // 제보를 받을 수 있는 이 방의 기록을 돌려준다. 기록하지 않거나, 쓰기에 실패해 기록을 멈춘 방이면 null이다.
+    // 받지 못한 제보를 받은 것처럼 답하면, 제보가 남았다고 믿은 사람이 그 기록을 찾지 못한다.
+    private static RecordingFile? AcceptingRecording(Room room, out string failure)
+    {
+        failure = "";
+        if (room.Recording == null)
+        {
+            failure = "이 서버는 기록을 남기지 않아 제보를 받을 수 없습니다.";
+            return null;
+        }
+        if (!room.Recording.Accepting)
+        {
+            failure = "지금 이 작전의 기록을 남기지 못하고 있어 제보를 받을 수 없습니다.";
+            return null;
+        }
+        return room.Recording;
     }
 
     // 방을 목록에서 지우고 연결을 닫는다. 보낼 통로를 닫으면 Send가 끝나고 연결 처리가 소켓을 닫는다.
     // 방 잠금 안에서 불러야 한다.
     private void CloseRoom(string code, Room room)
     {
+        room.CloseRecording("failed");
         _rooms.TryRemove(code, out _);
         foreach (KeyValuePair<string, Peer> entry in room.Peers)
         {

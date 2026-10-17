@@ -64,7 +64,7 @@ $('app').innerHTML = `
         <div class="progress"><i id="extract-progress"></i></div>
       </div>
       <div class="side-section"><div class="section-label">SQUAD <span id="team-count">1 / 4</span></div><div id="roster"></div></div>
-      <div class="side-bottom"><div class="section-label">FIELD NOTES</div><p>밝은 구역은 분대의 공유 시야입니다. 어두운 곳에도 적이 있을 수 있습니다.</p><p class="combat-legend"><span class="skill-strike">타격</span>은 잡기를 이깁니다.<br><span class="skill-block">방어</span>는 타격을 이깁니다.<br><span class="skill-channel">잡기</span>는 방어를 이깁니다.</p><p>첫 작전에는 1티어 적만 등장합니다. 타격 예고가 끝날 무렵 받아치세요. 너무 일찍 쓰면 방어가 먼저 끝납니다.</p><button id="leave" class="text-button">작전에서 나가기 ↗</button></div>
+      <div class="side-bottom"><div class="section-label">FIELD NOTES</div><p>밝은 구역은 분대의 공유 시야입니다. 어두운 곳에도 적이 있을 수 있습니다.</p><p class="combat-legend"><span class="skill-strike">타격</span>은 잡기를 이깁니다.<br><span class="skill-block">방어</span>는 타격을 이깁니다.<br><span class="skill-channel">잡기</span>는 방어를 이깁니다.</p><p>첫 작전에는 1티어 적만 등장합니다. 타격 예고가 끝날 무렵 받아치세요. 너무 일찍 쓰면 방어가 먼저 끝납니다.</p><button id="report" class="text-button">버그 제보 ↗</button><button id="leave" class="text-button">작전에서 나가기 ↗</button><form id="report-note" class="report-note" hidden><label for="report-text">무엇이 이상했나요? 비워 둬도 제보는 남았습니다.</label><input id="report-text" maxlength="200" autocomplete="off" placeholder="예: 적이 벽을 지나갔어요"><div class="report-actions"><button type="submit" class="secondary">덧붙이기</button><button type="button" id="report-close" class="text-button">닫기</button></div></form></div>
     </aside>
     <section id="battlefield" class="battlefield" aria-label="작전 지도">
       <div id="canvas-host" class="canvas-host"></div>
@@ -92,6 +92,8 @@ let ping = 0;
 const mouseButtons = new Set<number>();
 // 마지막으로 띄운 안내의 순번이다. 0이면 이 방에서 아직 띄운 안내가 없다.
 let lastNotice = 0;
+// 내용을 덧붙일 버그 제보의 틱이다. 입력란을 닫으면 비운다.
+let reportTick: number | null = null;
 let toastTimer = 0;
 // 알림 줄마다 3.5초 동안 보이고 최대 세 줄까지 쌓인다. 안내가 몰려 와도 앞의 것이 곧바로 지워지지 않는다.
 const toastLines: { text: string; until: number }[] = [];
@@ -253,6 +255,15 @@ function connect() {
     const message = JSON.parse(event.data);
     if (message.type === 'pong') { ping = Math.round(performance.now() - message.sent); return; }
     if (message.type === 'error') { deployRequested = false; toast(message.message); updateUi(); return; }
+    // 서버가 제보를 이 방의 기록에 남겼다. 방 코드와 틱을 알려 주면 그 순간을 그대로 다시 돌려 볼 수 있다.
+    // 내용을 적을 입력란을 연다. 싸우는 중일 수 있으므로 키보드를 빼앗지 않도록 입력란으로 커서를 옮기지는 않는다.
+    if (message.type === 'reported') {
+      toast(`제보를 남겼습니다 · 방 ${guest?.room ?? ''} · ${message.tick}틱`, false);
+      reportTick = message.tick;
+      $('report-note').hidden = false;
+      return;
+    }
+    if (message.type === 'reportNoted') { toast('제보에 내용을 덧붙였습니다.', false); return; }
     if (message.type !== 'snapshot') return;
     if (message.version !== 3) { leave(); $('lobby-error').textContent = '서버와 클라이언트 버전이 다릅니다. 새로고침 후 다시 접속하세요.'; return; }
     // 벽은 바뀔 때만, 규칙과 맵은 접속 직후에만 온다. 빠진 값은 같은 방의 이전 스냅샷에서 이어 쓴다.
@@ -294,6 +305,7 @@ function connect() {
 
 function leave() {
   guest = undefined; snapshot = undefined; lastNotice = 0; sequence = 0;
+  closeReportNote();
   sessionStorage.removeItem('argus-guest');
   window.clearTimeout(reconnectTimer);
   socket?.close(); socket = undefined;
@@ -381,6 +393,27 @@ $('deploy').addEventListener('click', () => {
   if (send({ type: 'deploy', ...world.landing })) { deployRequested = true; updateUi(); }
 });
 $('leave').addEventListener('click', leave);
+// 버그 제보는 누른 순간의 틱을 서버 기록에 찍는다. 내용은 그 뒤에 화면 안 입력란으로 받아 그 제보에 덧붙인다.
+// 브라우저 입력 창(prompt)을 쓰면 닫을 때까지 게임이 멈추고, 닫은 순간이 제보 틱으로 찍힌다.
+$('report').addEventListener('click', () => {
+  if (!send({ type: 'report' })) toast('작전에 연결된 뒤에 제보할 수 있습니다.');
+});
+// 입력란에서 친 키는 게임 키로 받지 않는다(keydown 처리가 입력란을 건너뛴다). 이모지를 반으로 자르지 않도록 글자 단위로 자른다.
+$('report-note').addEventListener('submit', event => {
+  event.preventDefault();
+  const text = Array.from($<HTMLInputElement>('report-text').value.trim()).slice(0, 200).join('');
+  if (text && reportTick !== null) send({ type: 'reportNote', tick: reportTick, text });
+  closeReportNote();
+});
+$('report-close').addEventListener('click', () => closeReportNote());
+$('report-text').addEventListener('keydown', event => { if (event.key === 'Escape') closeReportNote(); });
+function closeReportNote() {
+  const input = $<HTMLInputElement>('report-text');
+  input.blur();
+  input.value = '';
+  $('report-note').hidden = true;
+  reportTick = null;
+}
 $('again').addEventListener('click', leave);
 // 캔버스 밖에서 떼거나 움직여도 놓은 버튼은 반영한다. 새로 누르는 것은 캔버스 위에서만 받는다.
 window.addEventListener('pointerup', event => syncButtons(event.buttons, false));
