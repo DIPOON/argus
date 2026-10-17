@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Threading.RateLimiting;
 using Argus.Server.Game;
 using Argus.Server.Networking;
+using Argus.Server.Recording;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 
@@ -13,6 +14,7 @@ internal static class Program
     public static void Main(string[] args)
     {
         WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+        builder.Services.AddSingleton<RecordingStore>(CreateRecordingStore);
         builder.Services.AddSingleton<RoomHost>();
         builder.Services.AddHostedService(GetRoomHost);
         builder.Services.AddRateLimiter(ConfigureRateLimiter);
@@ -37,6 +39,22 @@ internal static class Program
     private static RoomHost GetRoomHost(IServiceProvider services)
     {
         return services.GetRequiredService<RoomHost>();
+    }
+
+    // 재현용 기록을 남길 폴더와 보관 개수다. 설정(Argus:Recordings:Folder, Argus:Recordings:MaxFiles)이 없으면
+    // 앱 폴더 아래 recordings에 최근 200개 방까지 남긴다. MaxFiles를 0으로 두면 기록하지 않는다.
+    private static RecordingStore CreateRecordingStore(IServiceProvider services)
+    {
+        IConfiguration configuration = services.GetRequiredService<IConfiguration>();
+        IHostEnvironment environment = services.GetRequiredService<IHostEnvironment>();
+        string? folder = configuration["Argus:Recordings:Folder"];
+        if (string.IsNullOrWhiteSpace(folder))
+        {
+            folder = Path.Combine(environment.ContentRootPath, "recordings");
+        }
+        int maxFiles = configuration.GetValue("Argus:Recordings:MaxFiles", 200);
+        ILogger<RecordingStore> logger = services.GetRequiredService<ILogger<RecordingStore>>();
+        return new RecordingStore(folder, maxFiles, logger);
     }
 
     private static void ConfigureKestrel(KestrelServerOptions options)
@@ -165,7 +183,7 @@ internal static class Program
             peer = attached.Value.Peer;
 
             // 입력 수신과 상태 전송을 함께 시작하고, 어느 한쪽이 끝나면 연결을 정리한다.
-            Task receive = Receive(socket, room, player, peer, lifetime.Token);
+            Task receive = Receive(socket, room, player, peer, host, lifetime.Token);
             Task send = peer.Send(socket, lifetime.Token);
             try
             {
@@ -324,7 +342,7 @@ internal static class Program
         }
     }
 
-    private static async Task Receive(WebSocket socket, Room room, Player player, Peer peer, CancellationToken token)
+    private static async Task Receive(WebSocket socket, Room room, Player player, Peer peer, RoomHost host, CancellationToken token)
     {
         DateTime window = DateTime.UtcNow;
         int count = 0;
@@ -388,6 +406,59 @@ internal static class Program
                 else if (type == "loadout")
                 {
                     SetLoadoutFromMessage(root, room, player);
+                }
+                else if (type == "report")
+                {
+                    // 버그 제보는 그 방의 기록에 지금 틱과 함께 표시만 남긴다. 답은 제보한 대원에게만 간다.
+                    long? tick = host.Report(room, player, Text(root, "text"), out string failure);
+                    byte[] message;
+                    if (tick.HasValue)
+                    {
+                        message = JsonSerializer.SerializeToUtf8Bytes(new
+                        {
+                            type = "reported",
+                            tick = tick.Value
+                        }, RoomHost.Json);
+                    }
+                    else
+                    {
+                        message = JsonSerializer.SerializeToUtf8Bytes(new
+                        {
+                            type = "error",
+                            message = failure
+                        }, RoomHost.Json);
+                    }
+                    peer.Control.Writer.TryWrite(new OutgoingMessage(message, -1, false));
+                }
+                else if (type == "reportNote")
+                {
+                    // 제보 뒤에 적은 내용을 그 제보(틱)에 덧붙인다. 숫자가 아닌 틱은 받지 않는다.
+                    string failure = "덧붙일 제보의 틱이 없습니다.";
+                    bool noted = false;
+                    long tick = -1;
+                    if (root.TryGetProperty("tick", out JsonElement about) && about.ValueKind == JsonValueKind.Number &&
+                        about.TryGetInt64(out tick))
+                    {
+                        noted = host.ReportNote(room, player, tick, Text(root, "text"), out failure);
+                    }
+                    byte[] message;
+                    if (noted)
+                    {
+                        message = JsonSerializer.SerializeToUtf8Bytes(new
+                        {
+                            type = "reportNoted",
+                            tick = tick
+                        }, RoomHost.Json);
+                    }
+                    else
+                    {
+                        message = JsonSerializer.SerializeToUtf8Bytes(new
+                        {
+                            type = "error",
+                            message = failure
+                        }, RoomHost.Json);
+                    }
+                    peer.Control.Writer.TryWrite(new OutgoingMessage(message, -1, false));
                 }
                 else if (type == "ping")
                 {

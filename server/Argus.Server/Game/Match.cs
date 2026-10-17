@@ -24,6 +24,9 @@ public sealed partial class Match
     public int Pulse { get; private set; }
     // 대원이 방에서 빠질 때마다 늘어난다. 방 관리 쪽이 토큰 정리가 필요한지 알 때 쓴다.
     public int Departures { get; private set; }
+    // 진행을 다시 돌릴 수 있도록 바깥 요청을 적는 곳이다. 없으면 적지 않는다.
+    // 바깥에서 상태를 바꾸는 공개 메서드는 모두 스스로 적는다. 그런 메서드를 새로 만들면 기록도 함께 넣는다.
+    public IMatchRecorder? Recorder { get; set; }
     // 게임 진행에 쓰는 난수는 모두 이 생성기 하나에서 뽑는다. 시드가 같으면 같은 순서로 같은 수가 나온다.
     private readonly SeededRandom _random;
     // 규칙을 JSON으로 바꾼 값이다. 규칙은 만든 뒤 바뀌지 않으므로 한 번만 만들어 상태 요약에 쓴다.
@@ -134,8 +137,28 @@ public sealed partial class Match
         }
     }
 
+    // 대원 한 명에 대한 값 없는 요청을 지금 틱으로 기록한다. 값이 있는 요청은 각 메서드가 줄을 채워 기록한다.
+    // 거절되는 요청도 적는다. 다시 돌릴 때 똑같이 거절되므로 결과가 같다.
+    private void Record(string type, Player player)
+    {
+        if (Recorder == null)
+        {
+            return;
+        }
+        MatchRecord record = new MatchRecord(Tick, type);
+        record.Player = player.Id;
+        Recorder.Write(record);
+    }
+
     public Player? Join(string id, string name)
     {
+        if (Recorder != null)
+        {
+            MatchRecord record = new MatchRecord(Tick, "join");
+            record.Player = id;
+            record.Name = name;
+            Recorder.Write(record);
+        }
         if (Players.Count >= Rules.MaxPlayers || Phase == "ended")
         {
             return null;
@@ -152,6 +175,13 @@ public sealed partial class Match
 
     public bool SetLoadout(Player player, string[] slots)
     {
+        if (Recorder != null)
+        {
+            MatchRecord record = new MatchRecord(Tick, "loadout");
+            record.Player = player.Id;
+            record.Slots = (string[])slots.Clone();
+            Recorder.Write(record);
+        }
         if (Phase == "ended" || player.HasDeployed || player.State != "waiting" || !Rules.ValidSlots(slots))
         {
             return false;
@@ -163,6 +193,14 @@ public sealed partial class Match
 
     public bool Deploy(Player player, double x, double y)
     {
+        if (Recorder != null)
+        {
+            MatchRecord record = new MatchRecord(Tick, "deploy");
+            record.Player = player.Id;
+            record.X = x;
+            record.Y = y;
+            Recorder.Write(record);
+        }
         // 이미 투입 중이면 처음 고른 자리와 도착 시각대로 진행한다. 투입 버튼을 두 번 눌러도 거절 안내가 뜨지 않도록
         // 받아들인 것으로 답한다. 답은 공개된 상태(투입 중인지)에만 달려 있어 숨은 정보를 드러내지 않는다.
         if (Phase != "ended" && player.State == "deploying")
@@ -188,6 +226,17 @@ public sealed partial class Match
 
     public bool Input(Player player, long sequence, double moveX, double moveY, double aim, int slot)
     {
+        if (Recorder != null)
+        {
+            MatchRecord record = new MatchRecord(Tick, "input");
+            record.Player = player.Id;
+            record.Sequence = sequence;
+            record.MoveX = moveX;
+            record.MoveY = moveY;
+            record.Aim = aim;
+            record.Slot = slot;
+            Recorder.Write(record);
+        }
         if (Phase == "ended" || player.State != "alive" || slot < 0 || slot > 4)
         {
             return false;
@@ -215,10 +264,29 @@ public sealed partial class Match
 
     public void Disconnect(Player player)
     {
+        Record("disconnect", player);
         player.Connected = false;
         player.DisconnectedTick = Tick;
         player.Move = Vector2.Zero;
         player.RequestedSlot = 0;
+    }
+
+    // HTTP로 참가만 하고 아직 WebSocket으로 접속하지 않은 자리로 둔다. 짧은 유예(FirstConnectSeconds) 안에
+    // 접속하지 않으면 자리가 풀린다. 방 관리 쪽이 참가 직후에 부른다.
+    public void AwaitConnection(Player player)
+    {
+        Record("await", player);
+        player.DisconnectedTick = Tick;
+        player.AwaitingFirstConnection = true;
+    }
+
+    // WebSocket 접속이 붙었다. 끊겼던 대원이 다시 접속해도 같다. 연결 번호(Connection)는 접속 처리가 정한다.
+    public void Connect(Player player)
+    {
+        Record("connect", player);
+        player.Connected = true;
+        player.DisconnectedTick = null;
+        player.AwaitingFirstConnection = false;
     }
 
     // 정확히 한 틱(Rules.Step)을 진행한다. 진행할 시간을 받지 않으므로, 같은 입력을 같은 틱에 넣으면
@@ -227,6 +295,19 @@ public sealed partial class Match
     public void Step()
     {
         Tick++;
+        RunTick();
+        // 기록할 때는 1초(30틱)마다 상태 요약값을 함께 남긴다. 다시 돌릴 때 같은 길을 가는지 이 값으로 확인한다.
+        // 진행 중 예외가 나면 여기까지 오지 않으므로 그 틱의 요약값은 없다. 다시 돌릴 때도 같은 곳에서 예외가 난다.
+        if (Recorder != null && Tick % Rules.TicksPerSecond == 0)
+        {
+            MatchRecord record = new MatchRecord(Tick, "hash");
+            record.Hash = StateHash();
+            Recorder.Write(record);
+        }
+    }
+
+    private void RunTick()
+    {
         double dt = Rules.Step;
         RemoveExpiredObjects();
         if (Phase == "ended" || CheckWipe())

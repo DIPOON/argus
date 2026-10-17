@@ -3,6 +3,8 @@
 node_modules/
 client/dist/
 server/Argus.Server/wwwroot/
+# 재현용 기록이다. 방의 비밀 시드가 들어 있어 저장소에 올리지 않는다.
+**/recordings/
 .tools/
 .env
 .env.*
