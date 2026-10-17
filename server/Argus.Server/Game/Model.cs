@@ -90,11 +90,21 @@ public sealed class PlayerAction : ITimedAction
         return !Cancelled && tick >= StartedTick && tick < ActiveUntilTick;
     }
 
-    // 반격이 끝나는 틱도 시작부터 잰 초(유효 시간 + 반격 시간)를 한 번에 올림해 구한다.
-    // 유효 시간이 끝난 틱에 반격 시간을 따로 올림해 더하면 한 틱 길어질 수 있다.
+    // 반격이 끝나는 틱이다. 반격이 없는 기술은 반격 구간이 비어 있어 유효 시간이 끝나는 틱과 같다.
+    public long FollowupUntilTick(double followupSeconds)
+    {
+        if (!Skill.HasFollowup)
+        {
+            return ActiveUntilTick;
+        }
+        // 시작부터 잰 초(유효 시간 + 반격 시간)를 한 번에 올림해 구한다.
+        // 유효 시간이 끝난 틱에 반격 시간을 따로 올림해 더하면 한 틱 길어질 수 있다.
+        return StartedTick + Rules.ToTicks(Skill.ActiveSeconds + followupSeconds);
+    }
+
     public bool IsFollowup(long tick, double followupSeconds)
     {
-        long followupUntil = StartedTick + Rules.ToTicks(Skill.ActiveSeconds + followupSeconds);
+        long followupUntil = FollowupUntilTick(followupSeconds);
         return !Cancelled && Skill.HasFollowup && tick >= ActiveUntilTick && tick < followupUntil;
     }
 }

@@ -135,7 +135,7 @@ test('enemy tells refresh color and disappear immediately with lost visibility',
   const state = snapshot();
   state.enemies = [elite(900)];
   state.enemies[0].action = { id: 901, skill: 'strike', kind: 'strike', slot: 0, tier: 2, phase: 'telegraph',
-    aim: Math.PI, startedAt: 9.5, contactAt: 11, activeUntil: 11.25, endsAt: 12, range: 82, halfWidth: 24 };
+    aim: Math.PI, startedAt: 9.5, contactAt: 11, activeUntil: 11.25, followupUntil: 11.25, endsAt: 12, range: 82, halfWidth: 24 };
   const result = await page.evaluate(state => {
     const world = window.testWorld;
     world.update(structuredClone(state)); world.draw(1 / 60);
@@ -160,12 +160,12 @@ test('gauges and guard arcs start their own path instead of a line from an earli
   // 적의 예고 게이지, 대원의 받아치기 방어 호, 탈출 진행도는 모두 원호로 그린다.
   state.enemies = [elite(910)];
   state.enemies[0].action = { id: 911, skill: 'block', kind: 'block', slot: 0, tier: 1, phase: 'telegraph',
-    aim: Math.PI, startedAt: 9.5, contactAt: 11, activeUntil: 11.25, endsAt: 12, range: 62, halfWidth: 15 };
+    aim: Math.PI, startedAt: 9.5, contactAt: 11, activeUntil: 11.25, followupUntil: 11.25, endsAt: 12, range: 62, halfWidth: 15 };
   state.rules.skills = [{ id: 'parry', kind: 'block', mana: 1, contactAfter: 0, activeSeconds: .55, duration: .98,
     range: 54, halfWidth: 10, guardsFront: true, hasFollowup: true, singleTarget: false, breaksStructures: false,
     followupBreaksStructures: true }];
   state.players[0].actions = [{ id: 912, skill: 'parry', kind: 'block', slot: 2, tier: 1, phase: 'active', aim: 0,
-    startedAt: 9.8, contactAt: 9.8, activeUntil: 10.35, endsAt: 10.78, range: 54, halfWidth: 10 }];
+    startedAt: 9.8, contactAt: 9.8, activeUntil: 10.35, followupUntil: 10.53, endsAt: 10.78, range: 54, halfWidth: 10 }];
   state.extraction = { ...state.extraction, progress: 6, unlocked: true };
   const arcs = await page.evaluate(state => {
     type Step = { action: string; data: number[] };
@@ -204,6 +204,32 @@ test('gauges and guard arcs start their own path instead of a line from an earli
     expect(matches.length, arc.name).toBeGreaterThan(0);
   }
   expect(arcs.flatMap(found => found.stray === null ? [] : [found.stray])).toEqual([]);
+});
+
+test('a parry followup is drawn until the followupUntil the server sent, not the followup time added on its own', async ({ page }) => {
+  // 서버는 유효 시간과 반격 시간을 합친 초를 시작부터 한 번에 틱으로 올려 반격 끝을 정한다.
+  // 300틱(10초)에 시작한 받아치기는 317틱(10.57)에 반격으로 바뀌고 322틱(10.73)에 반격이 끝난다.
+  // activeUntil에 반격 시간 0.18초를 더하면 10.75라 반격이 서버보다 오래 보인다.
+  const state = snapshot();
+  state.rules.skills = [{ id: 'parry', kind: 'block', mana: 1, contactAfter: 0, activeSeconds: .55, duration: .98,
+    range: 54, halfWidth: 10, guardsFront: true, hasFollowup: true, singleTarget: false, breaksStructures: false,
+    followupBreaksStructures: true }];
+  state.players[0].actions = [{ id: 920, skill: 'parry', kind: 'block', slot: 2, tier: 1, phase: 'active', aim: 0,
+    startedAt: 10, contactAt: 10, activeUntil: 10.57, followupUntil: 10.73, endsAt: 11, range: 54, halfWidth: 10 }];
+  const fills = await page.evaluate(state => {
+    type Drawing = { context: { instructions: { action: string; data: { style?: { color?: number } } }[] } };
+    const world = window.testWorld as unknown as { update(s: unknown): void; draw(dt: number): void; units: Drawing };
+    // 반격 색(상성 없음)으로 채운 도형을 센다. 이 장면에서 그 색을 쓰는 것은 반격뿐이다.
+    const followupFills = (now: number) => {
+      world.update(structuredClone({ ...state, now })); world.draw(1 / 60);
+      return world.units.context.instructions.filter(i => i.action === 'fill' && i.data.style?.color === 0xeabd73).length;
+    };
+    return { guard: followupFills(10.5), followup: followupFills(10.65), after: followupFills(10.735) };
+  }, state);
+  // 방어 중에는 반격을 그리지 않으므로, 반격 색이 다른 그림에 섞이지 않았는지도 함께 확인한다.
+  expect(fills.guard).toBe(0);
+  expect(fills.followup).toBeGreaterThan(0);
+  expect(fills.after).toBe(0);
 });
 
 test('prediction blocks enemy bodies while allowing teammate overlap', async ({ page }) => {

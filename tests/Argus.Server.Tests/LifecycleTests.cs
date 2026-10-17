@@ -29,6 +29,8 @@ internal static class LifecycleTests
         tests.Add(new TestCase("Deployment never discloses hidden occupancy; a blocked arrival lands nearby without overlap", BlockedDeployment));
         tests.Add(new TestCase("A broadcast serializes the shared part once and matches a snapshot built for one recipient", SharedSnapshot));
         tests.Add(new TestCase("Effects, notices and actions keep their wire shape and send tick times as seconds rounded like now", TimedWireShape));
+        tests.Add(new TestCase("A parry followup ends on the tick its followupUntil names, not after the followup time rounded on its own", FollowupWireTime));
+        tests.Add(new TestCase("Extraction progress times sixty rounds back to the exact half-tick count, odd counts included", ExtractionProgressWire));
         tests.Add(new TestCase("Two identical notices on the same tick keep distinct ids that keep growing", NoticeIds));
         tests.Add(new TestCase("A slot that never connects is released quickly while a dropped member keeps the long grace", FirstConnectGrace));
         tests.Add(new TestCase("A long session keeps its room for the full retention time after the last disconnect", RoomRetention));
@@ -325,13 +327,110 @@ internal static class LifecycleTests
             JsonElement action = root.GetProperty("players")[0].GetProperty("actions")[0];
             // 방금 시작한 기술의 startedAt은 같은 틱의 now와 정확히 같다.
             Equal(action.GetProperty("startedAt").GetDouble(), now);
-            string[] times = new string[] { "contactAt", "activeUntil", "endsAt" };
+            string[] times = new string[] { "contactAt", "activeUntil", "followupUntil", "endsAt" };
             for (int i = 0; i < times.Length; i++)
             {
                 double value = action.GetProperty(times[i]).GetDouble();
                 CheckTickTime(value);
                 Check(value > now && value < now + 1, $"기술의 {times[i]} {value}가 초가 아닙니다");
             }
+            // 타격에는 반격이 없으므로 반격 구간이 비어 있다.
+            Equal(action.GetProperty("followupUntil").GetDouble(), action.GetProperty("activeUntil").GetDouble());
+        }
+    }
+
+    private static void FollowupWireTime()
+    {
+        // 받아치기의 반격은 시작부터 잰 초(유효 시간 + 반격 시간)를 한 번에 올림한 틱에 끝난다.
+        // 반격 시간만 따로 올림해 유효 시간 끝에 더하면 한 틱 늦을 수 있다(docs/combat.md의 예).
+        // 그래서 서버가 반격이 끝나는 시각(followupUntil)을 보내고, 단계(phase)도 바로 그 틱에 바뀌어야 한다.
+        Match match = new Match("WIRE02", new Rules { MaxEnemies = 0 }, 1);
+        Player player = match.Join("p", "pilot")!;
+        Check(match.Deploy(player, BattleMap.Camp.X, BattleMap.Camp.Y));
+        Advance(match, match.Rules.DeploySeconds);
+        player.Mana = player.MaxMana;
+        // 2번 슬롯은 받아치기다. 주변에 적이 없어도 빈 방어 뒤에 반격한다.
+        Check(match.Input(player, 1, 0, 0, 0, 2));
+        match.Step();
+        PlayerAction parry = player.Actions[0];
+        Equal(parry.Skill.Id, "parry");
+        long followupUntil = parry.StartedTick + Rules.ToTicks(match.Rules.Parry.ActiveSeconds + match.Rules.ParryFollowupSeconds);
+        Check(followupUntil > parry.ActiveUntilTick, "반격 구간이 비어 있습니다");
+
+        // 유효 시간이 끝나기 직전까지는 방어이고, 끝나는 틱부터 반격이다.
+        while (match.Tick < parry.ActiveUntilTick - 1)
+        {
+            match.Step();
+        }
+        Equal(SnapshotPhase(match, player), "active");
+        match.Step();
+        Equal(SnapshotPhase(match, player), "followup");
+
+        // 반격의 마지막 틱까지 반격이고, 보낸 followupUntil의 틱에서 회복으로 바뀐다.
+        while (match.Tick < followupUntil - 1)
+        {
+            match.Step();
+        }
+        using (JsonDocument json = JsonDocument.Parse(Snapshot.Create(match, player, RoomHost.Json)))
+        {
+            JsonElement action = json.RootElement.GetProperty("players")[0].GetProperty("actions")[0];
+            Equal(action.GetProperty("phase").GetString(), "followup");
+            double until = action.GetProperty("followupUntil").GetDouble();
+            CheckTickTime(until);
+            Equal((long)Math.Round(until * Rules.TicksPerSecond), followupUntil);
+        }
+        match.Step();
+        Equal(SnapshotPhase(match, player), "recovery");
+    }
+
+    private static void ExtractionProgressWire()
+    {
+        // 탈출 진행도는 반 틱 단위로 센 값을 초로 바꿔 소수 둘째 자리로 반올림해 보낸다.
+        // 반 틱 간격(1/60초)이 반올림 오차(최대 0.005초)의 두 배보다 크므로, 받은 값에 60을 곱해 반올림하면 반 틱 수가 그대로 돌아온다.
+        Fixture f = new Fixture();
+        for (int i = 0; i < f.Match.Facilities.Count; i++)
+        {
+            f.Match.Facilities[i].Hp = 0;
+        }
+        // 구역 안에서는 한 틱에 반 틱 2개씩 찬다. 탈출이 끝나기 직전까지 채워 보낼 수 있는 값을 거의 다 본다.
+        f.Player.Position = BattleMap.Extraction;
+        long halfTicks = 0;
+        long inside = Rules.ToTicks(f.Match.Rules.ExtractionSeconds) - 10;
+        for (long i = 0; i < inside; i++)
+        {
+            f.Match.Step();
+            halfTicks += 2;
+            Equal(SentHalfTicks(f.Match, f.Player), halfTicks);
+        }
+        // 구역을 비우면 한 틱에 반 틱 1개씩 줄어 홀수도 나온다. 홀수 반 틱은 30을 곱해도 정수가 되지 않는다.
+        f.Player.Position = BattleMap.Camp;
+        for (int i = 0; i < 25; i++)
+        {
+            f.Match.Step();
+            halfTicks -= 1;
+            Equal(SentHalfTicks(f.Match, f.Player), halfTicks);
+        }
+        // 탈출이 끝나기 전에 멈췄으므로 작전은 아직 진행 중이다.
+        Equal(f.Match.Phase, "active");
+    }
+
+    // 스냅샷의 탈출 진행도(초)에 60을 곱해 반올림한 반 틱 수다.
+    private static long SentHalfTicks(Match match, Player player)
+    {
+        using (JsonDocument json = JsonDocument.Parse(Snapshot.Create(match, player, RoomHost.Json)))
+        {
+            double progress = json.RootElement.GetProperty("extraction").GetProperty("progress").GetDouble();
+            return (long)Math.Round(progress * 2 * Rules.TicksPerSecond);
+        }
+    }
+
+    // 대원의 첫 기술이 스냅샷에서 어느 단계로 나가는지 본다.
+    private static string? SnapshotPhase(Match match, Player player)
+    {
+        using (JsonDocument json = JsonDocument.Parse(Snapshot.Create(match, player, RoomHost.Json)))
+        {
+            JsonElement action = json.RootElement.GetProperty("players")[0].GetProperty("actions")[0];
+            return action.GetProperty("phase").GetString();
         }
     }
 

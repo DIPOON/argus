@@ -215,6 +215,8 @@ public static class Snapshot
             // 대원의 기술 방향은 사용 중에도 조준을 따라 바뀐다.
             ActionSnapshot display = CreateAction(action, action.Skill.Id, action.Skill.Kind, player.Aim,
                 action.Skill.Range, action.Skill.HalfWidth);
+            // 반격 끝은 규칙 값으로 다시 계산하면 올림 방식에 따라 한 틱 어긋날 수 있으므로 서버가 정한 틱을 보낸다.
+            display.FollowupUntil = Seconds(action.FollowupUntilTick(match.Rules.ParryFollowupSeconds));
             display.Slot = action.Slot;
             display.Phase = "recovery";
             if (action.Cancelled)
@@ -257,6 +259,8 @@ public static class Snapshot
         display.StartedAt = Seconds(action.StartedTick);
         display.ContactAt = Seconds(action.ContactTick);
         display.ActiveUntil = Seconds(action.ActiveUntilTick);
+        // 적의 행동에는 반격이 없어 유효 시간 끝과 같다. 대원의 기술은 부르는 쪽이 반격 끝으로 바꾼다.
+        display.FollowupUntil = display.ActiveUntil;
         display.EndsAt = Seconds(action.EndsTick);
         display.Range = range;
         display.HalfWidth = halfWidth;
@@ -288,9 +292,10 @@ public static class Snapshot
         return Math.Round(value, 2);
     }
 
-    // 틱 시각과 틱 수를 보낼 초로 바꾼다. 모든 시간 필드가 이것을 거쳐 같은 방식(소수 둘째 자리)으로 반올림되므로,
+    // 틱 시각과 틱 수를 보낼 초로 바꾼다. 틱으로 된 시간 필드는 모두 이것을 거쳐 같은 방식(소수 둘째 자리)으로 반올림되므로,
     // 같은 틱이면 now와 다른 시각이 정확히 같은 값이 된다. 한 틱은 약 0.033초라 반올림해도 틱끼리 구분되고,
-    // 받은 값에 30을 곱해 반올림하면 틱 번호로 돌아간다.
+    // 받은 값에 30을 곱해 반올림하면 틱 번호로 돌아간다. 규칙 값(CreateRules, Extraction.Duration)은 설정한 초를 그대로 보내고,
+    // 탈출 진행도(Extraction.Progress)는 반 틱 단위라 이 함수를 거치지 않는다.
     private static double Seconds(long ticks)
     {
         return Round(Rules.ToSeconds(ticks));
