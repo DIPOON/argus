@@ -13,7 +13,7 @@ export interface SkillDefinition {
 export interface CombatAction {
   id: number; skill: string; kind: Affinity; slot: number; tier: number;
   phase: 'telegraph' | 'active' | 'followup' | 'recovery' | 'interrupted';
-  aim: number; startedAt: number; contactAt: number; activeUntil: number; endsAt: number;
+  aim: number; startedAt: number; contactAt: number; activeUntil: number; followupUntil: number; endsAt: number;
   range: number; halfWidth: number;
 }
 export interface Player extends Position {

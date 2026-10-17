@@ -80,6 +80,8 @@ public sealed class ActionSnapshot
     public double StartedAt { get; set; }
     public double ContactAt { get; set; }
     public double ActiveUntil { get; set; }
+    // 반격이 끝나는 시각이다. 반격은 ActiveUntil부터 이 시각 전까지이고, 반격이 없는 기술과 적의 행동은 ActiveUntil과 같다.
+    public double FollowupUntil { get; set; }
     public double EndsAt { get; set; }
     public double Range { get; set; }
     public double HalfWidth { get; set; }

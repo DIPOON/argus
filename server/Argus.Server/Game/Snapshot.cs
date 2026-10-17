@@ -215,6 +215,8 @@ public static class Snapshot
             // 대원의 기술 방향은 사용 중에도 조준을 따라 바뀐다.
             ActionSnapshot display = CreateAction(action, action.Skill.Id, action.Skill.Kind, player.Aim,
                 action.Skill.Range, action.Skill.HalfWidth);
+            // 반격 끝은 규칙 값으로 다시 계산하면 올림 방식에 따라 한 틱 어긋날 수 있으므로 서버가 정한 틱을 보낸다.
+            display.FollowupUntil = Seconds(action.FollowupUntilTick(match.Rules.ParryFollowupSeconds));
             display.Slot = action.Slot;
             display.Phase = "recovery";
             if (action.Cancelled)
@@ -257,6 +259,8 @@ public static class Snapshot
         display.StartedAt = Seconds(action.StartedTick);
         display.ContactAt = Seconds(action.ContactTick);
         display.ActiveUntil = Seconds(action.ActiveUntilTick);
+        // 적의 행동에는 반격이 없어 유효 시간 끝과 같다. 대원의 기술은 부르는 쪽이 반격 끝으로 바꾼다.
+        display.FollowupUntil = display.ActiveUntil;
         display.EndsAt = Seconds(action.EndsTick);
         display.Range = range;
         display.HalfWidth = halfWidth;

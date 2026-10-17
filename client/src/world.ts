@@ -152,8 +152,10 @@ export class World {
     let kind = action.kind;
     // 기술별 그림은 id가 아니라 서버가 보낸 기술 속성으로 정한다. 적의 행동에는 기술 정의가 없다.
     const definition = player ? this.snapshot!.rules.skills.find(d => d.id === action.skill) : undefined;
-    const followup = !!definition?.hasFollowup && now >= activeUntil && now < activeUntil + this.snapshot!.rules.parryFollowupSeconds;
-    if (followup) { kind = 'none'; activeUntil += this.snapshot!.rules.parryFollowupSeconds; }
+    // 반격은 서버가 정한 followupUntil까지다. 규칙 값으로 다시 계산하면 서버의 틱 올림과 어긋난다.
+    // 반격이 없는 기술과 적의 행동은 followupUntil이 activeUntil과 같아 반격 구간이 비어 있다.
+    const followup = now >= activeUntil && now < action.followupUntil;
+    if (followup) { kind = 'none'; activeUntil = action.followupUntil; }
     if (now >= activeUntil) return;
     const color = affinityColors[kind];
     const aim = action.aim;
