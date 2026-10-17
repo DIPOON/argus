@@ -8,7 +8,8 @@ public sealed class Player
     public string Name { get; set; }
     public string[] Slots { get; set; } = new string[] { "strike", "parry", "grab", "strike" };
     public Vector2 Position;
-    public double Aim;
+    // 조준 방향이다. 클라이언트가 보낸 라디안을 정수 각도로 바꿔 둔다.
+    public Angle Aim;
     public string State { get; set; } = "waiting";
     public bool HasDeployed;
     // 투입이 끝나는 틱이다.
@@ -113,7 +114,7 @@ public sealed class EnemyAction : ITimedAction
 {
     public int Id { get; }
     public EnemySkill Skill { get; }
-    public double Aim { get; }
+    public Angle Aim { get; }
     public long StartedTick { get; }
     public long ContactTick { get; }
     public long ActiveUntilTick { get; }
@@ -124,7 +125,7 @@ public sealed class EnemyAction : ITimedAction
     public const double ActiveSeconds = 0.25;
     public const double RecoverySeconds = 0.65;
 
-    public EnemyAction(int id, EnemySkill skill, double aim, long startTick, double windupMultiplier = 1)
+    public EnemyAction(int id, EnemySkill skill, Angle aim, long startTick, double windupMultiplier = 1)
     {
         Id = id;
         Skill = skill;

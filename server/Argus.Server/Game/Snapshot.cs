@@ -203,7 +203,7 @@ public static class Snapshot
         entry.HasDeployed = player.HasDeployed;
         entry.X = Round(player.Position.X);
         entry.Y = Round(player.Position.Y);
-        entry.Aim = player.Aim;
+        entry.Aim = player.Aim.ToRadians();
         entry.Hp = player.Hp;
         entry.MaxHp = player.MaxHp;
         entry.Mana = player.Mana;
@@ -247,14 +247,14 @@ public static class Snapshot
     }
 
     // 적과 대원의 행동에 공통인 값(id, 기술, 상성, 방향, 시각, 범위)을 담는다. 단계·티어·슬롯은 부르는 쪽이 채운다.
-    private static ActionSnapshot CreateAction(ITimedAction action, string skill, string kind, double aim,
+    private static ActionSnapshot CreateAction(ITimedAction action, string skill, string kind, Angle aim,
         double range, double halfWidth)
     {
         ActionSnapshot display = new ActionSnapshot();
         display.Id = action.Id;
         display.Skill = skill;
         display.Kind = kind;
-        display.Aim = aim;
+        display.Aim = aim.ToRadians();
         // 시각은 틱으로 다루지만 통신 형식은 초다.
         display.StartedAt = Seconds(action.StartedTick);
         display.ContactAt = Seconds(action.ContactTick);
@@ -272,13 +272,15 @@ public static class Snapshot
         int[] points = new int[96 * 2];
         for (int i = 0; i < 96; i++)
         {
-            double angle = i * Math.Tau / 96;
-            Vector2 target = origin + new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * (float)radius;
+            // 시야는 그리기에만 쓰지만, 같은 상태면 어느 기계에서나 같은 다각형을 보내도록 방향도 정수 각도로 구한다.
+            Angle angle = Angle.FromUnits(Fixed.DivideRounded((long)i * Angle.UnitsPerTurn, 96));
+            Vector2 target = origin + Match.Direction(angle) * (float)radius;
             WallHit wall = match.Map.RayWall(origin, target);
             Vector2 end = target;
             if (!double.IsPositiveInfinity(wall.Fraction))
             {
-                end = Vector2.Lerp(origin, target, (float)wall.Fraction);
+                // Vector2.Lerp는 곱셈과 덧셈을 한 번에(FMA) 계산하는 구현일 수 있고 그 여부가 CPU에 따라 다를 수 있어, 직접 곱하고 더한다.
+                end = origin + (target - origin) * (float)wall.Fraction;
             }
             // 시야 다각형은 그리기에만 쓰이고 1단위 미만은 화면에서 구분되지 않으므로 정수로 보낸다.
             points[i * 2] = (int)Math.Round(end.X);

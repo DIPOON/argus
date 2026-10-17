@@ -1,0 +1,292 @@
+using System.Globalization;
+using System.Numerics;
+
+namespace Argus.Server.Game;
+
+// 고정소수점 수다. 정수 Raw를 4096(2의 12제곱)으로 나눈 값을 뜻한다. Raw가 6144이면 1.5다.
+// 게임 진행 계산을 정수로만 해서, 운영체제와 CPU가 달라도 같은 결과가 나오게 한다.
+// 실수의 삼각함수는 운영체제의 수학 라이브러리가 계산해 마지막 자리가 다를 수 있고, 정수 연산은 어디서나 같다.
+//
+// 반올림 규칙: 곱셈·나눗셈·제곱근은 가장 가까운 값으로 반올림하고, 딱 절반이면 0에서 먼 쪽으로 간다.
+// 그래서 부호만 바꾼 값의 결과는 부호만 바뀐다(-a × b = -(a × b)). 왼쪽과 오른쪽 움직임이 똑같이 계산된다.
+// 범위를 넘으면 값이 조용히 감기지 않고 예외(OverflowException)를 낸다.
+//
+// 브라우저(JavaScript)도 같은 계산을 할 수 있게 크기를 정했다. JavaScript의 수는 2^53까지의 정수를 정확히 다룬다.
+// 맵 좌표(2000 미만)는 Raw로 2^23 미만이라, 좌표끼리 곱해도 2^46이고 제곱을 더해도 2^47이다.
+public readonly struct Fixed : IEquatable<Fixed>, IComparable<Fixed>
+{
+    public const int FractionBits = 12;
+    public const long Scale = 4096;
+    private const long Half = 2048;
+    // 실수에서 바꿀 수 있는 가장 큰 크기다. Raw가 2^53 미만이라 실수로 정확히 나타낼 수 있다.
+    private const double MaxConvertible = 1_000_000_000;
+
+    public long Raw { get; }
+
+    private Fixed(long raw)
+    {
+        Raw = raw;
+    }
+
+    public static Fixed Zero { get; } = new Fixed(0);
+    public static Fixed One { get; } = new Fixed(Scale);
+
+    public static Fixed FromRaw(long raw)
+    {
+        return new Fixed(raw);
+    }
+
+    public static Fixed FromInt(int value)
+    {
+        return new Fixed(value * Scale);
+    }
+
+    // 설정 값이나 클라이언트가 보낸 값처럼 실수로 들어온 값을 바꾼다. 게임 진행 중의 계산에는 쓰지 않는다.
+    // 4096을 곱하는 것은 2의 거듭제곱이라 정확하고, 반올림도 실수 규칙(IEEE 754)으로 정해져 있어 어디서나 같다.
+    public static Fixed FromDouble(double value)
+    {
+        if (!double.IsFinite(value) || Math.Abs(value) > MaxConvertible)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), value, "고정소수점으로 바꿀 수 없는 값입니다");
+        }
+        double scaled = Math.Round(value * Scale, MidpointRounding.AwayFromZero);
+        return new Fixed((long)scaled);
+    }
+
+    // 화면과 통신 형식으로 보낼 때만 쓴다. 4096으로 나누는 것도 정확하다.
+    public double ToDouble()
+    {
+        return (double)Raw / Scale;
+    }
+
+    public static Fixed operator +(Fixed a, Fixed b)
+    {
+        return new Fixed(checked(a.Raw + b.Raw));
+    }
+
+    public static Fixed operator -(Fixed a, Fixed b)
+    {
+        return new Fixed(checked(a.Raw - b.Raw));
+    }
+
+    public static Fixed operator -(Fixed value)
+    {
+        return new Fixed(checked(-value.Raw));
+    }
+
+    public static Fixed operator *(Fixed a, Fixed b)
+    {
+        long product = checked(a.Raw * b.Raw);
+        return new Fixed(DivideRounded(product, Scale));
+    }
+
+    // 정수를 곱할 때는 반올림할 것이 없다.
+    public static Fixed operator *(Fixed a, int b)
+    {
+        return new Fixed(checked(a.Raw * b));
+    }
+
+    public static Fixed operator *(int a, Fixed b)
+    {
+        return new Fixed(checked(a * b.Raw));
+    }
+
+    public static Fixed operator /(Fixed a, Fixed b)
+    {
+        long numerator = checked(a.Raw * Scale);
+        return new Fixed(DivideRounded(numerator, b.Raw));
+    }
+
+    public static Fixed operator /(Fixed a, int b)
+    {
+        return new Fixed(DivideRounded(a.Raw, b));
+    }
+
+    public static bool operator ==(Fixed a, Fixed b)
+    {
+        return a.Raw == b.Raw;
+    }
+
+    public static bool operator !=(Fixed a, Fixed b)
+    {
+        return a.Raw != b.Raw;
+    }
+
+    public static bool operator <(Fixed a, Fixed b)
+    {
+        return a.Raw < b.Raw;
+    }
+
+    public static bool operator >(Fixed a, Fixed b)
+    {
+        return a.Raw > b.Raw;
+    }
+
+    public static bool operator <=(Fixed a, Fixed b)
+    {
+        return a.Raw <= b.Raw;
+    }
+
+    public static bool operator >=(Fixed a, Fixed b)
+    {
+        return a.Raw >= b.Raw;
+    }
+
+    public static Fixed Abs(Fixed value)
+    {
+        if (value.Raw < 0)
+        {
+            return -value;
+        }
+        return value;
+    }
+
+    public static Fixed Min(Fixed a, Fixed b)
+    {
+        if (b.Raw < a.Raw)
+        {
+            return b;
+        }
+        return a;
+    }
+
+    public static Fixed Max(Fixed a, Fixed b)
+    {
+        if (b.Raw > a.Raw)
+        {
+            return b;
+        }
+        return a;
+    }
+
+    public static Fixed Clamp(Fixed value, Fixed min, Fixed max)
+    {
+        if (value.Raw < min.Raw)
+        {
+            return min;
+        }
+        if (value.Raw > max.Raw)
+        {
+            return max;
+        }
+        return value;
+    }
+
+    public int Sign()
+    {
+        return Math.Sign(Raw);
+    }
+
+    // 작은 쪽 정수로 내린다. -0.5는 -1이다. 좌표로 타일 번호를 구할 때 쓴다.
+    public int FloorToInt()
+    {
+        // 오른쪽 시프트는 음수에서도 작은 쪽으로 내린다.
+        return checked((int)(Raw >> FractionBits));
+    }
+
+    // 큰 쪽 정수로 올린다. -0.5는 0이다.
+    public int CeilingToInt()
+    {
+        // 부호를 바꿔 내린 뒤 다시 바꾼다. 가장 작은 long은 부호를 바꿀 수 없으므로 예외를 낸다.
+        long floored = checked(-(-Raw >> FractionBits));
+        return checked((int)floored);
+    }
+
+    // 제곱근을 가장 가까운 고정소수점 값으로 구한다. 실수 제곱근을 거치지 않고 정수 연산만 쓴다.
+    public static Fixed Sqrt(Fixed value)
+    {
+        if (value.Raw < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), value.ToDouble(), "음수의 제곱근은 구할 수 없습니다");
+        }
+        // sqrt(Raw / 4096) × 4096 = sqrt(Raw × 4096)이다.
+        long scaled = checked(value.Raw * Scale);
+        return new Fixed(RoundedSqrt(scaled));
+    }
+
+    // 0에서 먼 쪽으로 반올림하는 정수 나눗셈이다. 크기만으로 나눈 뒤 부호를 붙인다.
+    // 크기에 나누는 수의 절반을 더하고 내리면 가장 가까운 정수가 되고, 딱 절반이면 크기가 큰 쪽이 된다.
+    public static long DivideRounded(long numerator, long denominator)
+    {
+        if (denominator == 0)
+        {
+            throw new DivideByZeroException("고정소수점을 0으로 나눌 수 없습니다");
+        }
+        bool negative = (numerator < 0) != (denominator < 0);
+        long magnitude = Math.Abs(numerator);
+        long divisor = Math.Abs(denominator);
+        long quotient = checked(magnitude + divisor / 2) / divisor;
+        if (negative)
+        {
+            return -quotient;
+        }
+        return quotient;
+    }
+
+    // 가장 가까운 정수 제곱근이다. 내림 제곱근 r에 대해 value가 (r + 0.5)²보다 크면 하나 올린다.
+    // (r + 0.5)² = r² + r + 0.25이고 value는 정수이므로, value - r² > r 이면 올린다. 정확히 절반인 경우는 생기지 않는다.
+    public static long RoundedSqrt(long value)
+    {
+        long root = FloorSqrt(value);
+        if (value - root * root > root)
+        {
+            root++;
+        }
+        return root;
+    }
+
+    // 내림 정수 제곱근이다. 뉴턴 방법으로, 제곱근보다 큰 2의 거듭제곱에서 시작해 줄어들다 멈춘 값이 답이다.
+    public static long FloorSqrt(long value)
+    {
+        if (value < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(value), value, "음수의 제곱근은 구할 수 없습니다");
+        }
+        if (value < 2)
+        {
+            return value;
+        }
+        // value의 비트 수가 n이면 제곱근은 2^(n/2 + 1)보다 작다.
+        int bits = BitOperations.Log2((ulong)value);
+        long current = 1L << (bits / 2 + 1);
+        while (true)
+        {
+            long next = (current + value / current) / 2;
+            if (next >= current)
+            {
+                return current;
+            }
+            current = next;
+        }
+    }
+
+    public bool Equals(Fixed other)
+    {
+        return Raw == other.Raw;
+    }
+
+    public override bool Equals(object? obj)
+    {
+        if (obj is Fixed other)
+        {
+            return Raw == other.Raw;
+        }
+        return false;
+    }
+
+    public override int GetHashCode()
+    {
+        return Raw.GetHashCode();
+    }
+
+    public int CompareTo(Fixed other)
+    {
+        return Raw.CompareTo(other.Raw);
+    }
+
+    // 검사 실패와 오류 메시지에서 읽기 쉽게 실수로 보여 준다.
+    public override string ToString()
+    {
+        return ToDouble().ToString(CultureInfo.InvariantCulture);
+    }
+}
