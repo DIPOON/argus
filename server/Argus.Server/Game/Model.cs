@@ -9,7 +9,21 @@ public sealed class Player
     public string[] Slots { get; set; } = new string[] { "strike", "parry", "grab", "strike" };
     public Vector2 Position;
     // 조준 방향이다. 클라이언트가 보낸 라디안을 정수 각도로 바꿔 둔다.
-    public Angle Aim;
+    // 방향 벡터(AimDirection)는 판정마다 쓰므로 조준을 바꿀 때 한 번만 구해 둔다. 상태 요약에는 각도만 적는다.
+    public Angle Aim
+    {
+        get
+        {
+            return _aim;
+        }
+        set
+        {
+            _aim = value;
+            AimDirection = Match.Direction(value);
+        }
+    }
+    public Vector2 AimDirection { get; private set; } = Match.Direction(Angle.Zero);
+    private Angle _aim;
     public string State { get; set; } = "waiting";
     public bool HasDeployed;
     // 투입이 끝나는 틱이다.
@@ -115,6 +129,8 @@ public sealed class EnemyAction : ITimedAction
     public int Id { get; }
     public EnemySkill Skill { get; }
     public Angle Aim { get; }
+    // 행동하는 동안 방향은 바뀌지 않으므로 방향 벡터를 만들 때 한 번만 구해 둔다.
+    public Vector2 Direction { get; }
     public long StartedTick { get; }
     public long ContactTick { get; }
     public long ActiveUntilTick { get; }
@@ -130,6 +146,7 @@ public sealed class EnemyAction : ITimedAction
         Id = id;
         Skill = skill;
         Aim = aim;
+        Direction = Match.Direction(aim);
         // 판정과 클라이언트의 예고가 같은 시간을 사용하도록 실제 접촉 시각에 배율을 적용한다.
         double windup = skill.Windup * windupMultiplier;
         // 단계마다 올림하면 끝이 한 틱씩 밀릴 수 있으므로, 각 단계의 끝을 시작부터 잰 초로 한 번에 올림한다.

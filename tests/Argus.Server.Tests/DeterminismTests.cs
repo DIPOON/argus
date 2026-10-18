@@ -18,58 +18,44 @@ internal static class DeterminismTests
 
     private static void PortableGameCode()
     {
-        // 게임 진행 코드는 운영체제의 수학 라이브러리, 시계, 시드 없는 난수를 쓰지 않는다. 이런 함수의 결과는 기계나 실행마다 달라진다.
-        // 삼각함수는 Angle, 제곱근은 Fixed, 난수는 SeededRandom을 쓴다. 주석은 빼고 코드만 본다.
+        // 컴파일된 게임 코드(Argus.Server.Game 이름공간의 모든 형식, 람다와 지역 함수 포함)가 부르는 메서드를 IL에서 모두 찾는다.
+        // 실수 수학과 벡터 형식은 결과가 정확히 정해진 허용 목록만 쓰고, 시드 없는 난수와 시계는 하나도 쓰지 않아야 한다.
         // 실제로 Windows의 Math.Atan2가 리눅스와 마지막 자리를 다르게 계산해, 같은 기록이 510틱부터 갈라진 적이 있다(docs/verification.md).
-        string[] banned = new string[]
+        List<string> game = PortabilityCheck.Violations(typeof(Match).Assembly, "Argus.Server.Game", out int inspected);
+        Check(game.Count == 0, "게임 코드가 기계마다 다를 수 있는 함수를 씁니다: " + string.Join(", ", game));
+        // 게임 코드는 메서드가 수백 개다. 너무 적으면 이름공간을 잘못 적어 아무것도 보지 않은 것이다.
+        Check(inspected > 200, $"게임 코드 메서드를 {inspected}개만 살펴봤습니다");
+
+        // 검사가 실제로 잡는지도 본다. 소스를 글자로 찾던 방식이 놓치던 경우를 모은 예제가 하나도 빠짐없이 걸려야 한다.
+        List<string> probe = PortabilityCheck.Violations(typeof(DeterminismTests).Assembly, "PortabilityProbes", out int probed);
+        Check(probed >= 11, $"예제 메서드를 {probed}개만 살펴봤습니다");
+        string[] expected = new string[]
         {
-            "Math.Sin(", "Math.Cos(", "Math.Tan(", "Math.Asin(", "Math.Acos(", "Math.Atan(", "Math.Atan2(",
-            "Math.Sinh(", "Math.Cosh(", "Math.Tanh(", "Math.Exp(", "Math.Log(", "Math.Log2(", "Math.Log10(",
-            "Math.Pow(", "Math.Cbrt(", "Math.IEEERemainder(", "MathF.", "Vector2.Lerp(",
-            "new Random(", "Random.Shared", "RandomNumberGenerator", "DateTime.Now", "DateTime.UtcNow", "Stopwatch", "Environment.TickCount"
+            "System.Math.Sin", "System.Double.Atan2", "System.Math.SinCos", "System.Math.ReciprocalEstimate",
+            "System.Math.Atan2", "System.Math.Cos", "System.MathF.FusedMultiplyAdd", "System.Numerics.Vector2.Lerp",
+            "System.Random..ctor", "System.Random.Next", "System.DateTime.get_UtcNow", "System.Diagnostics.Stopwatch.GetTimestamp"
         };
-        string folder = FindGameFolder();
-        string[] files = Directory.GetFiles(folder, "*.cs");
-        Array.Sort(files, StringComparer.Ordinal);
-        Check(files.Length >= 10, $"게임 코드 파일을 찾지 못했습니다: {folder}");
-        List<string> found = new List<string>();
-        for (int i = 0; i < files.Length; i++)
+        for (int i = 0; i < expected.Length; i++)
         {
-            string[] lines = File.ReadAllLines(files[i]);
-            for (int j = 0; j < lines.Length; j++)
-            {
-                string code = lines[j];
-                int comment = code.IndexOf("//", StringComparison.Ordinal);
-                if (comment >= 0)
-                {
-                    code = code.Substring(0, comment);
-                }
-                for (int k = 0; k < banned.Length; k++)
-                {
-                    if (code.Contains(banned[k], StringComparison.Ordinal))
-                    {
-                        found.Add($"{Path.GetFileName(files[i])}:{j + 1} {banned[k]}");
-                    }
-                }
-            }
+            Check(EndsWithAny(probe, " → " + expected[i]), $"이식성 검사가 {expected[i]}를 잡지 못했습니다: " + string.Join(", ", probe));
         }
-        Check(found.Count == 0, "게임 코드가 기계마다 다를 수 있는 함수를 씁니다: " + string.Join(", ", found));
+        // 허용한 함수만 쓰는 예제는 걸리지 않아야 한다.
+        for (int i = 0; i < probe.Count; i++)
+        {
+            Check(!probe[i].StartsWith("PortabilityProbes.Probe.Allowed ", StringComparison.Ordinal), $"허용한 함수를 막았습니다: {probe[i]}");
+        }
     }
 
-    // 검사 실행 파일이 있는 곳에서 위로 올라가며 게임 코드 폴더를 찾는다. 어느 폴더에서 검사를 실행해도 같은 곳을 본다.
-    private static string FindGameFolder()
+    private static bool EndsWithAny(List<string> lines, string suffix)
     {
-        DirectoryInfo? directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory != null)
+        for (int i = 0; i < lines.Count; i++)
         {
-            string candidate = Path.Combine(directory.FullName, "server", "Argus.Server", "Game");
-            if (Directory.Exists(candidate))
+            if (lines[i].EndsWith(suffix, StringComparison.Ordinal))
             {
-                return candidate;
+                return true;
             }
-            directory = directory.Parent;
         }
-        throw new Exception("server/Argus.Server/Game 폴더를 찾지 못했습니다");
+        return false;
     }
 
     private static void SeededSequence()

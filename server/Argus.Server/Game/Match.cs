@@ -40,8 +40,10 @@ public sealed partial class Match
     private long _nextFlowTick;
     // 탈출 진행도다. 탈출 지점을 비우면 절반 속도로 줄어들므로 반 틱 단위로 센다.
     private long _extractionHalfTicks;
-    // 방어와 측면 판정의 전방 반각(칸 수)이다. 규칙의 라디안을 한 번만 바꿔 둔다.
-    private readonly int _guardHalfAngle;
+    // 방어와 측면 판정의 전방 반각이다. 반각은 방향이 아니라 크기이므로 한 바퀴로 감지 않는다(Angle.SpanUnits).
+    // 음수 반각은 어느 방향도 막지 않는다. 판정은 사잇각 대신 내적으로 하므로 반각의 코사인을 한 번 구해 둔다.
+    private readonly bool _guardsAnyDirection;
+    private readonly float _guardCosine;
     private static readonly int[] NeighborX = new int[] { 1, -1, 0, 0 };
     private static readonly int[] NeighborY = new int[] { 0, 0, 1, -1 };
 
@@ -53,7 +55,12 @@ public sealed partial class Match
         Rules = rules;
         _random = new SeededRandom(seed);
         _rulesJson = StateHasher.ToJson(rules);
-        _guardHalfAngle = Angle.FromRadians(rules.GuardHalfAngle).Units;
+        int guardHalfAngle = Angle.SpanUnits(rules.GuardHalfAngle);
+        _guardsAnyDirection = guardHalfAngle >= 0;
+        if (_guardsAnyDirection)
+        {
+            _guardCosine = (float)Angle.FromUnits(guardHalfAngle).Cos().ToDouble();
+        }
         Facilities.Add(new Facility(1, new Vector2(960, 485)));
         Facilities.Add(new Facility(2, new Vector2(1210, 695)));
         Facilities.Add(new Facility(3, new Vector2(990, 920)));
@@ -479,7 +486,7 @@ public sealed partial class Match
             float radius = ring * 16;
             for (int i = 0; i < 16; i++)
             {
-                Angle angle = Angle.FromUnits(i * Angle.UnitsPerTurn / 16);
+                Angle angle = Angle.FromFraction(i, 16);
                 Vector2 candidate = landing + Direction(angle) * radius;
                 if (CanOccupy(candidate, Rules.PlayerRadius, null) && Map.LineOfSight(candidate, landing))
                 {
@@ -500,7 +507,7 @@ public sealed partial class Match
             int samples = Math.Max(16, (int)(Math.Tau * radius / 16));
             for (int i = 0; i < samples; i++)
             {
-                Angle angle = Angle.FromUnits(Fixed.DivideRounded((long)i * Angle.UnitsPerTurn, samples));
+                Angle angle = Angle.FromFraction(i, samples);
                 Vector2 candidate = landing + Direction(angle) * radius;
                 if (CanOccupy(candidate, Rules.PlayerRadius, null))
                 {

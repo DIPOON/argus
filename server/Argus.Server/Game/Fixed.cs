@@ -11,21 +11,24 @@ namespace Argus.Server.Game;
 // 그래서 부호만 바꾼 값의 결과는 부호만 바뀐다(-a × b = -(a × b)). 왼쪽과 오른쪽 움직임이 똑같이 계산된다.
 // 범위를 넘으면 값이 조용히 감기지 않고 예외(OverflowException)를 낸다.
 //
-// 브라우저(JavaScript)도 같은 계산을 할 수 있게 크기를 정했다. JavaScript의 수는 2^53까지의 정수를 정확히 다룬다.
+// 브라우저(JavaScript)도 같은 계산을 할 수 있게, 값과 중간값(곱, 나눗셈 전의 수, 제곱의 합)을 모두 ±(2^53 - 1) 안으로 제한한다.
+// JavaScript의 수는 이 범위의 정수만 정확히 다루고, 넘으면 아래 자리를 소리 없이 잃는다. 그래서 서버에서 이 범위를 넘으면 예외를 낸다.
 // 맵 좌표(2000 미만)는 Raw로 2^23 미만이라, 좌표끼리 곱해도 2^46이고 제곱을 더해도 2^47이다.
 public readonly struct Fixed : IEquatable<Fixed>, IComparable<Fixed>
 {
     public const int FractionBits = 12;
     public const long Scale = 4096;
-    private const long Half = 2048;
+    // JavaScript가 정확히 다루는 정수의 한계(2^53 - 1)다.
+    public const long SafeLimit = 9_007_199_254_740_991;
     // 실수에서 바꿀 수 있는 가장 큰 크기다. Raw가 2^53 미만이라 실수로 정확히 나타낼 수 있다.
     private const double MaxConvertible = 1_000_000_000;
 
     public long Raw { get; }
 
+    // 모든 값이 여기를 지나므로, 결과가 JavaScript의 범위를 넘으면 여기서 예외가 난다.
     private Fixed(long raw)
     {
-        Raw = raw;
+        Raw = Safe(raw);
     }
 
     public static Fixed Zero { get; } = new Fixed(0);
@@ -76,8 +79,8 @@ public readonly struct Fixed : IEquatable<Fixed>, IComparable<Fixed>
 
     public static Fixed operator *(Fixed a, Fixed b)
     {
-        long product = checked(a.Raw * b.Raw);
-        return new Fixed(DivideRounded(product, Scale));
+        long product = Safe(checked(a.Raw * b.Raw));
+        return new Fixed(ShiftRounded(product, FractionBits));
     }
 
     // 정수를 곱할 때는 반올림할 것이 없다.
@@ -93,13 +96,13 @@ public readonly struct Fixed : IEquatable<Fixed>, IComparable<Fixed>
 
     public static Fixed operator /(Fixed a, Fixed b)
     {
-        long numerator = checked(a.Raw * Scale);
-        return new Fixed(DivideRounded(numerator, b.Raw));
+        long numerator = Safe(checked(a.Raw * Scale));
+        return new Fixed(SafeDivide(numerator, b.Raw));
     }
 
     public static Fixed operator /(Fixed a, int b)
     {
-        return new Fixed(DivideRounded(a.Raw, b));
+        return new Fixed(SafeDivide(a.Raw, b));
     }
 
     public static bool operator ==(Fixed a, Fixed b)
@@ -200,8 +203,39 @@ public readonly struct Fixed : IEquatable<Fixed>, IComparable<Fixed>
             throw new ArgumentOutOfRangeException(nameof(value), value.ToDouble(), "음수의 제곱근은 구할 수 없습니다");
         }
         // sqrt(Raw / 4096) × 4096 = sqrt(Raw × 4096)이다.
-        long scaled = checked(value.Raw * Scale);
+        long scaled = Safe(checked(value.Raw * Scale));
         return new Fixed(RoundedSqrt(scaled));
+    }
+
+    // 값이 JavaScript가 정확히 다루는 범위(±(2^53 - 1)) 안인지 확인하고 그대로 돌려준다.
+    // 넘으면 서버는 계산할 수 있어도 브라우저에서는 결과가 달라지므로 예외를 낸다.
+    public static long Safe(long value)
+    {
+        if (value > SafeLimit || value < -SafeLimit)
+        {
+            throw new OverflowException($"고정소수점 값 {value}가 2^53 - 1을 넘습니다");
+        }
+        return value;
+    }
+
+    // 반올림 나눗셈의 중간값(나뉘는 수의 크기 + 나누는 수의 절반)도 JavaScript의 범위 안인지 본 뒤 나눈다.
+    private static long SafeDivide(long numerator, long denominator)
+    {
+        Safe(checked(Math.Abs(numerator) + Math.Abs(denominator) / 2));
+        return DivideRounded(numerator, denominator);
+    }
+
+    // 2^bits로 나누며 0에서 먼 쪽으로 반올림한다. 나누는 수가 2의 거듭제곱이면 DivideRounded와 같은 값이고,
+    // 나눗셈 대신 시프트를 써서 빠르다. 오른쪽 시프트는 0 이상의 수를 내림한다.
+    public static long ShiftRounded(long value, int bits)
+    {
+        long half = 1L << (bits - 1);
+        if (value >= 0)
+        {
+            return checked(value + half) >> bits;
+        }
+        long magnitude = checked(-value + half) >> bits;
+        return -magnitude;
     }
 
     // 0에서 먼 쪽으로 반올림하는 정수 나눗셈이다. 크기만으로 나눈 뒤 부호를 붙인다.

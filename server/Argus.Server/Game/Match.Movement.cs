@@ -68,8 +68,15 @@ public sealed partial class Match
     }
 
     // 원점에서 offset을 향하는 방향을 정수 계산으로 구한다. 운영체제의 아크탄젠트는 마지막 자리가 기계마다 다를 수 있다.
+    // 좌표는 벽 검사(CanStand)와 입력·투입 검사를 거쳐 늘 유한하다. 유한하지 않다면 진행 상태가 이미 망가진 결함이므로,
+    // 0 각도로 조용히 바꿔 계속하지 않고 예외로 알린다. 방은 연속 실패를 세어 닫고 결함을 기록한다(StepRoom).
+    // 좌표까지 고정소수점 정수로 옮기면 이런 값은 생길 수 없다.
     internal static Angle Heading(Vector2 offset)
     {
+        if (!float.IsFinite(offset.X) || !float.IsFinite(offset.Y))
+        {
+            throw new InvalidOperationException($"방향을 구할 좌표 차이가 유한하지 않습니다: {offset}");
+        }
         return Angle.Of(FixedVector.FromDouble(offset.X, offset.Y));
     }
 

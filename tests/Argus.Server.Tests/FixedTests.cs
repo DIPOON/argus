@@ -6,7 +6,8 @@ internal static class FixedTests
     public static void Register(List<TestCase> tests)
     {
         tests.Add(new TestCase("Fixed-point arithmetic rounds to the nearest value, halves away from zero, and keeps sign symmetry", Arithmetic));
-        tests.Add(new TestCase("Fixed-point values refuse to wrap around and convert from doubles only within range", Limits));
+        tests.Add(new TestCase("Fixed-point values and their intermediates stay within the integers JavaScript represents exactly", Limits));
+        tests.Add(new TestCase("Rounding by a shift gives the same value as rounding by division for every power of two", ShiftMatchesDivision));
         tests.Add(new TestCase("Integer square roots are exact and fixed-point square roots round to the nearest value", SquareRoots));
         tests.Add(new TestCase("Vector length keeps short vectors and normalizing gives unit length with mirrored signs", VectorLength));
         tests.Add(new TestCase("Sine and cosine are within half a step of the true value at all 65536 angles", SineAccuracy));
@@ -71,15 +72,56 @@ internal static class FixedTests
 
     private static void Limits()
     {
-        // 넘치면 값이 감겨 엉뚱한 결과로 진행되지 않고 예외가 난다. 방은 이 예외를 결함으로 기록한다.
-        Throws<OverflowException>(() => Fixed.FromRaw(long.MaxValue) + Fixed.FromRaw(1));
+        // 값과 중간값은 JavaScript가 정확히 다루는 ±(2^53 - 1) 안이어야 한다. 넘으면 서버에서 바로 예외가 나서,
+        // 서버는 계산하고 브라우저는 아래 자리를 잃는 식으로 소리 없이 갈라지지 않는다. 방은 이 예외를 결함으로 기록한다.
+        Equal(Fixed.FromRaw(Fixed.SafeLimit).Raw, Fixed.SafeLimit);
+        Throws<OverflowException>(() => Fixed.FromRaw(Fixed.SafeLimit + 1));
+        Throws<OverflowException>(() => Fixed.FromRaw(Fixed.SafeLimit) + Fixed.FromRaw(1));
+        Throws<OverflowException>(() => Fixed.FromRaw(long.MaxValue));
+        // 곱: 2^26 × 2^26 = 2^52는 되고, 2^27 × 2^26 = 2^53은 넘는다. 결과는 작아도 중간의 곱이 넘으면 안 된다.
+        Equal((Fixed.FromRaw(1L << 26) * Fixed.FromRaw(1L << 26)).Raw, 1L << 40);
+        Throws<OverflowException>(() => Fixed.FromRaw(1L << 27) * Fixed.FromRaw(1L << 26));
         Throws<OverflowException>(() => Fixed.FromRaw(1L << 40) * Fixed.FromRaw(1L << 40));
+        // 나눗셈: 나뉘는 수에 4096을 곱한 값이 넘으면 안 된다.
+        Equal(Fixed.FromRaw(1L << 40) / Fixed.One, Fixed.FromRaw(1L << 40));
+        Throws<OverflowException>(() => Fixed.FromRaw(1L << 41) / Fixed.One);
+        // 제곱근은 4096을 곱한 값이, 벡터 길이는 제곱의 합이 넘으면 안 된다.
+        Throws<OverflowException>(() => Fixed.Sqrt(Fixed.FromRaw(1L << 41)));
+        Equal(new FixedVector(Fixed.FromRaw(1L << 26), Fixed.Zero).Length(), Fixed.FromRaw(1L << 26));
+        Throws<OverflowException>(() => new FixedVector(Fixed.FromRaw(1L << 26), Fixed.FromRaw(1L << 26)).Length());
         Throws<DivideByZeroException>(() => Fixed.One / Fixed.Zero);
         Throws<DivideByZeroException>(() => Fixed.One / 0);
         Throws<ArgumentOutOfRangeException>(() => Fixed.FromDouble(double.NaN));
         Throws<ArgumentOutOfRangeException>(() => Fixed.FromDouble(double.PositiveInfinity));
         Throws<ArgumentOutOfRangeException>(() => Fixed.FromDouble(1e12));
         Throws<ArgumentOutOfRangeException>(() => Fixed.Sqrt(Fixed.FromRaw(-1)));
+    }
+
+    private static void ShiftMatchesDivision()
+    {
+        // 2의 거듭제곱으로 나눌 때 시프트 반올림은 나눗셈 반올림과 같은 값이어야 한다. 사인·아크탄젠트와 곱셈이 시프트를 쓴다.
+        // 딱 절반인 값도 0에서 먼 쪽으로 간다(1.5는 2, -1.5는 -2).
+        Equal(Fixed.ShiftRounded(3, 1), 2L);
+        Equal(Fixed.ShiftRounded(-3, 1), -2L);
+        Equal(Fixed.ShiftRounded(1, 1), 1L);
+        Equal(Fixed.ShiftRounded(-1, 1), -1L);
+        Random random = new Random(29);
+        int[] bits = new int[] { 1, 12, 14, 18, 30, 46 };
+        for (int i = 0; i < bits.Length; i++)
+        {
+            long divisor = 1L << bits[i];
+            long half = divisor / 2;
+            long[] edges = new long[] { 0, 1, -1, half - 1, half, half + 1, -(half - 1), -half, -(half + 1), divisor, -divisor, divisor + half, -(divisor + half) };
+            for (int j = 0; j < edges.Length; j++)
+            {
+                Equal(Fixed.ShiftRounded(edges[j], bits[i]), Fixed.DivideRounded(edges[j], divisor));
+            }
+            for (int j = 0; j < 20_000; j++)
+            {
+                long value = random.NextInt64(-(1L << 61), 1L << 61);
+                Equal(Fixed.ShiftRounded(value, bits[i]), Fixed.DivideRounded(value, divisor));
+            }
+        }
     }
 
     private static void SquareRoots()
@@ -253,6 +295,21 @@ internal static class FixedTests
         Equal((Angle.FromUnits(1) - Angle.FromUnits(2)).Units, 65535);
         Equal(Angle.Between(Angle.FromUnits(10), Angle.FromUnits(65530)), 16);
         Equal(Angle.Between(Angle.FromUnits(0), Angle.FromUnits(Angle.HalfTurn)), Angle.HalfTurn);
+
+        // 방어 반각 같은 각도의 크기는 방향처럼 감지 않는다. 반 바퀴 이상은 모든 사잇각, 음수는 어느 사잇각도 아니다.
+        Equal(Angle.SpanUnits(Math.PI / 3), 10923);
+        Equal(Angle.SpanUnits(0), 0);
+        Equal(Angle.SpanUnits(Math.PI), Angle.HalfTurn);
+        Equal(Angle.SpanUnits(Math.Tau), Angle.HalfTurn);
+        Equal(Angle.SpanUnits(-0.1), -1);
+        Throws<ArgumentOutOfRangeException>(() => Angle.SpanUnits(double.NaN));
+
+        // 한 바퀴를 n칸으로 나눈 방향: 나누어떨어지면 정확하고, 아니면 가장 가까운 칸이다.
+        Equal(Angle.FromFraction(1, 16).Units, 4096);
+        Equal(Angle.FromFraction(16, 16).Units, 0);
+        Equal(Angle.FromFraction(1, 96).Units, 683);
+        Equal(Angle.FromFraction(1, 3).Units, 21845);
+        Equal(Angle.FromFraction(2, 3).Units, 43691);
     }
 
     private static void MathChecksums()

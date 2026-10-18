@@ -20,7 +20,7 @@ public readonly struct Angle : IEquatable<Angle>
     private const long TanEighthPi = 444758426;
     // 라디안(2^30 단위)에 이 값을 곱하고 2^46으로 나누면 칸 수다. 65536 / 2π × 2^16이다.
     private const long RadiansToUnits = 683565276;
-    private const long RadiansToUnitsShift = 1L << 46;
+    private const int RadiansToUnitsBits = 46;
 
     // 사인의 테일러 급수 계수(1/3!, 1/5!, … 1/11!)를 2^30 단위로 적었다. 부호는 계산에서 번갈아 붙인다.
     // 11차에서 멈춘 오차는 90°에서도 6 × 10^-8 미만이다.
@@ -55,6 +55,34 @@ public readonly struct Angle : IEquatable<Angle>
         double fraction = turns - Math.Floor(turns);
         double units = Math.Round(fraction * UnitsPerTurn, MidpointRounding.AwayFromZero);
         return FromUnits((long)units);
+    }
+
+    // 한 바퀴를 count칸으로 똑같이 나눈 index번째 방향이다. 나누어떨어지지 않으면 가장 가까운 칸으로 반올림한다.
+    // 착지 자리와 시야처럼 둘레를 고르게 도는 곳은 모두 이것으로 방향을 정해, 반올림 규칙이 한 곳에만 있게 한다.
+    public static Angle FromFraction(int index, int count)
+    {
+        return FromUnits(Fixed.DivideRounded((long)index * UnitsPerTurn, count));
+    }
+
+    // 방향이 아니라 각도의 크기(두 방향 사이의 한계)를 칸 수로 바꾼다. 규칙의 방어 반각 같은 값에 쓴다.
+    // 방향처럼 한 바퀴로 감으면 뜻이 바뀐다(2π가 0이 된다). 그래서 반 바퀴 이상은 32768칸(모든 사잇각을 포함),
+    // 음수는 -1(어느 사잇각도 포함하지 않음)로 두고, 그 사이는 가장 가까운 칸으로 반올림한다.
+    public static int SpanUnits(double radians)
+    {
+        if (!double.IsFinite(radians))
+        {
+            throw new ArgumentOutOfRangeException(nameof(radians), radians, "각도로 바꿀 수 없는 값입니다");
+        }
+        if (radians < 0)
+        {
+            return -1;
+        }
+        if (radians >= Math.PI)
+        {
+            return HalfTurn;
+        }
+        double units = Math.Round(radians / Math.Tau * UnitsPerTurn, MidpointRounding.AwayFromZero);
+        return (int)units;
     }
 
     // -32768~32767칸(-180° 이상 180° 미만)으로 나타낸 값이다.
@@ -120,7 +148,7 @@ public readonly struct Angle : IEquatable<Angle>
             value = -value;
         }
         // 2^30 단위를 고정소수점(2^12 단위)으로 반올림한다.
-        return Fixed.FromRaw(Fixed.DivideRounded(value, One / Fixed.Scale));
+        return Fixed.FromRaw(Fixed.ShiftRounded(value, 30 - Fixed.FractionBits));
     }
 
     public Fixed Cos()
@@ -185,7 +213,7 @@ public readonly struct Angle : IEquatable<Angle>
     private static long QuarterSine(int offset)
     {
         // 칸 수를 라디안(2^30 단위)으로 바꾼다. 16384칸이 π/2다.
-        long x = Fixed.DivideRounded(offset * HalfPi, QuarterTurn);
+        long x = Fixed.ShiftRounded(offset * HalfPi, 14);
         long square = Multiply(x, x);
         // sin x = x × (1 - x²/3! + x⁴/5! - x⁶/7! + x⁸/9! - x¹⁰/11!)를 안쪽 괄호부터 계산한다.
         long sum = 0;
@@ -228,13 +256,13 @@ public readonly struct Angle : IEquatable<Angle>
         }
         sum = One + Multiply(sum, square);
         long radians = Multiply(sum, u);
-        return baseUnits + Fixed.DivideRounded(radians * RadiansToUnits, RadiansToUnitsShift);
+        return baseUnits + Fixed.ShiftRounded(radians * RadiansToUnits, RadiansToUnitsBits);
     }
 
-    // 2^30 단위 수 둘을 곱한다.
+    // 2^30 단위 수 둘을 곱한다. 2^30이 2의 거듭제곱이라 나눗셈 대신 시프트로 반올림한다.
     private static long Multiply(long a, long b)
     {
-        return Fixed.DivideRounded(checked(a * b), One);
+        return Fixed.ShiftRounded(checked(a * b), 30);
     }
 
     public bool Equals(Angle other)

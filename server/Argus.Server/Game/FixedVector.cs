@@ -97,7 +97,8 @@ public readonly struct FixedVector : IEquatable<FixedVector>
     // 길이다. 성분의 제곱을 반올림하지 않은 채(Raw의 제곱, 2^24 단위) 더하고 제곱근을 구해, 아주 짧은 벡터도 길이를 잃지 않는다.
     public Fixed Length()
     {
-        long squared = checked(X.Raw * X.Raw + Y.Raw * Y.Raw);
+        // 제곱의 합도 JavaScript의 범위(2^53) 안이어야 브라우저가 같은 길이를 구한다.
+        long squared = Fixed.Safe(checked(X.Raw * X.Raw + Y.Raw * Y.Raw));
         return Fixed.FromRaw(Fixed.RoundedSqrt(squared));
     }
 

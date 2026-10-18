@@ -15,6 +15,7 @@ internal static class CombatTests
         tests.Add(new TestCase("Front guards block ordinary followup damage without an RPS result", BlockOrdinaryFollowup));
         tests.Add(new TestCase("Losing a parry cancels its followup and does not kill the opponent", InterruptedParry));
         tests.Add(new TestCase("Expired and rear-facing parries cannot defend", InvalidGuards));
+        tests.Add(new TestCase("A guard half-angle of a full turn guards every side and a negative one guards none", GuardAngleLimits));
         tests.Add(new TestCase("A grab has a persistent window and one target per activation", SingleGrab));
         tests.Add(new TestCase("Friendly players can overlap and cannot damage each other", Friendly));
         tests.Add(new TestCase("All three tier-two actions can be broken by two overlapping responses", CooperativeMatrix));
@@ -136,6 +137,28 @@ internal static class CombatTests
         Advance(rear.Match, 0.8);
         Near(facingAway.Hp, 1);
         Near(rear.Player.Hp, 6);
+    }
+
+    private static void GuardAngleLimits()
+    {
+        // 방어 반각은 방향이 아니라 각도의 크기라 한 바퀴로 감지 않는다(Angle.SpanUnits).
+        // 감으면 2π가 0이 되어 정면만 막고, 음수는 거의 한 바퀴가 되어 모든 방향을 막는다.
+        Fixture behind = new Fixture(new Rules { MaxEnemies = 0, GuardHalfAngle = Math.Tau });
+        Enemy striker = Threat(behind, "strike");
+        Prepare(behind, behind.Player, "parry");
+        // 등을 돌려도 모든 방향을 막는 방어는 받아친다.
+        behind.Player.Aim = Angle.FromRadians(Math.PI);
+        Advance(behind.Match, 0.1);
+        Near(behind.Player.Hp, 6);
+        Check(striker.Hp <= 0, "모든 방향을 막는 방어가 뒤에서 온 타격을 받아치지 못했습니다");
+
+        Fixture front = new Fixture(new Rules { MaxEnemies = 0, GuardHalfAngle = -1 });
+        Enemy facing = Threat(front, "strike");
+        Prepare(front, front.Player, "parry");
+        // 정면을 봐도 반각이 음수면 막지 못한다.
+        Advance(front.Match, 0.1);
+        Near(front.Player.Hp, 5);
+        Near(facing.Hp, 1);
     }
 
     private static void InvalidGuards()

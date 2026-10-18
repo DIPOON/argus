@@ -267,14 +267,26 @@ public static class Snapshot
         return display;
     }
 
+    // 시야 다각형의 96방향이다. 시야는 그리기에만 쓰지만, 같은 상태면 어느 기계에서나 같은 다각형을 보내도록 정수 각도로 구한다.
+    // 방향은 늘 같으므로 방송마다 다시 구하지 않고 처음 한 번만 만들어 둔다.
+    private static readonly Vector2[] SightDirections = CreateSightDirections();
+
+    private static Vector2[] CreateSightDirections()
+    {
+        Vector2[] directions = new Vector2[96];
+        for (int i = 0; i < directions.Length; i++)
+        {
+            directions[i] = Match.Direction(Angle.FromFraction(i, directions.Length));
+        }
+        return directions;
+    }
+
     private static int[] CreateSightPolygon(Match match, Vector2 origin, double radius)
     {
-        int[] points = new int[96 * 2];
-        for (int i = 0; i < 96; i++)
+        int[] points = new int[SightDirections.Length * 2];
+        for (int i = 0; i < SightDirections.Length; i++)
         {
-            // 시야는 그리기에만 쓰지만, 같은 상태면 어느 기계에서나 같은 다각형을 보내도록 방향도 정수 각도로 구한다.
-            Angle angle = Angle.FromUnits(Fixed.DivideRounded((long)i * Angle.UnitsPerTurn, 96));
-            Vector2 target = origin + Match.Direction(angle) * (float)radius;
+            Vector2 target = origin + SightDirections[i] * (float)radius;
             WallHit wall = match.Map.RayWall(origin, target);
             Vector2 end = target;
             if (!double.IsPositiveInfinity(wall.Fraction))
