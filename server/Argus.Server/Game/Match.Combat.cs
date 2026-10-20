@@ -99,13 +99,13 @@ public sealed partial class Match
 
     private bool PlayerContact(Player player, PlayerAction action, Enemy enemy)
     {
-        return InReach(player.Position, player.Aim, action.Skill.Range, action.Skill.HalfWidth,
+        return InReach(player.Position, player.AimDirection, action.Skill.Range, action.Skill.HalfWidth,
             enemy.Position, enemy.Definition.Radius);
     }
 
-    private bool InReach(Vector2 origin, double aim, double range, double halfWidth, Vector2 target, float radius)
+    // forward는 조준 방향의 길이 1 벡터다(Player.AimDirection, EnemyAction.Direction). 판정마다 삼각함수를 다시 구하지 않는다.
+    private bool InReach(Vector2 origin, Vector2 forward, double range, double halfWidth, Vector2 target, float radius)
     {
-        Vector2 forward = new Vector2((float)Math.Cos(aim), (float)Math.Sin(aim));
         Vector2 offset = target - origin;
         double along = Vector2.Dot(offset, forward);
         double side = Math.Abs(offset.X * forward.Y - offset.Y * forward.X);
@@ -119,17 +119,27 @@ public sealed partial class Match
 
     // origin에서 aim 방향을 기준으로 target이 전방 120°(방어 각도) 안에 있는지 본다.
     // 대원의 방어, 적 방어의 반격 차단, 측면 공격 판정이 모두 이 계산을 쓴다.
-    private bool Faces(Vector2 origin, double aim, Vector2 target)
+    // 사잇각을 구하지 않고 내적으로 비교한다. 사잇각이 반각 이하 ⟺ offset·forward ≥ |offset| × cos(반각)이다.
+    // 반각이 반 바퀴 이상이면 내적을 보지 않고 모든 방향을 막는다. 방향 벡터는 1/4096 단위로 반올림해 길이가 1보다 조금 길 수 있어,
+    // 코사인 -1과 내적으로 비교하면 정확히 뒤쪽(약 1° 안)을 놓친다. 반각이 60°일 때 이 오차는 0.01° 안쪽이라 판정에 드러나지 않는다.
+    private bool Faces(Vector2 origin, Vector2 forward, Vector2 target)
     {
+        if (!_guardsAnyDirection)
+        {
+            return false;
+        }
+        if (_guardsEveryDirection)
+        {
+            return true;
+        }
         Vector2 offset = target - origin;
-        double angle = Math.Atan2(offset.Y, offset.X);
-        double difference = Math.Abs(Math.IEEERemainder(angle - aim, Math.Tau));
-        return difference <= Rules.GuardHalfAngle;
+        float along = Vector2.Dot(offset, forward);
+        return along >= offset.Length() * _guardCosine;
     }
 
     private bool GuardFaces(Player player, Enemy enemy)
     {
-        return Faces(player.Position, player.Aim, enemy.Position) && Map.LineOfSight(player.Position, enemy.Position);
+        return Faces(player.Position, player.AimDirection, enemy.Position) && Map.LineOfSight(player.Position, enemy.Position);
     }
 
     // 대원이 적 행동이 향한 범위 안에 있는지 본다. 타격과 잡기는 그 공격이 닿는 범위다.
@@ -137,14 +147,14 @@ public sealed partial class Match
     // 밀어치기는 적 몸 옆까지 조금 더 닿으므로, 전방 120°만 보면 그 자리의 대원이 맞기만 하고 상성으로 대응하지 못한다.
     private bool InActionArea(Enemy enemy, EnemyAction attack, Player player)
     {
-        bool reached = InReach(enemy.Position, attack.Aim, attack.Skill.Range, attack.Skill.HalfWidth, player.Position, Rules.PlayerRadius);
+        bool reached = InReach(enemy.Position, attack.Direction, attack.Skill.Range, attack.Skill.HalfWidth, player.Position, Rules.PlayerRadius);
         if (reached)
         {
             return true;
         }
         if (attack.Skill.Kind == "block")
         {
-            return Faces(enemy.Position, attack.Aim, player.Position);
+            return Faces(enemy.Position, attack.Direction, player.Position);
         }
         return false;
     }
@@ -152,7 +162,7 @@ public sealed partial class Match
     private bool Incoming(Enemy enemy, EnemyAction attack, Player player)
     {
         return Tick >= attack.ContactTick && Tick < attack.ActiveUntilTick && !attack.HitPlayers.Contains(player.Id) &&
-            InReach(enemy.Position, attack.Aim, attack.Skill.Range, attack.Skill.HalfWidth, player.Position, Rules.PlayerRadius);
+            InReach(enemy.Position, attack.Direction, attack.Skill.Range, attack.Skill.HalfWidth, player.Position, Rules.PlayerRadius);
     }
 
     private void ResolveEnemyAction(Enemy enemy, EnemyAction attack)
@@ -414,7 +424,7 @@ public sealed partial class Match
         {
             return false;
         }
-        return Faces(enemy.Position, guard.Aim, player.Position);
+        return Faces(enemy.Position, guard.Direction, player.Position);
     }
 
     // 벽을 친 효과를 벽 면에서 대원 쪽으로 당기는 거리다.
@@ -443,13 +453,13 @@ public sealed partial class Match
                 {
                     Facility facility = Facilities[k];
                     if (facility.Hp > 0 && !action.HitFacilities.Contains(facility.Id) &&
-                        InReach(player.Position, player.Aim, action.Skill.Range, action.Skill.HalfWidth, facility.Position, 27))
+                        InReach(player.Position, player.AimDirection, action.Skill.Range, action.Skill.HalfWidth, facility.Position, 27))
                     {
                         action.HitFacilities.Add(facility.Id);
                         DamageFacility(facility);
                     }
                 }
-                Vector2 facing = new Vector2((float)Math.Cos(player.Aim), (float)Math.Sin(player.Aim));
+                Vector2 facing = player.AimDirection;
                 WallHit wall = Map.RayWall(player.Position, player.Position + facing * (float)action.Skill.Range);
                 if (wall.Tile >= 0 && !action.HitWalls.Contains(wall.Tile))
                 {

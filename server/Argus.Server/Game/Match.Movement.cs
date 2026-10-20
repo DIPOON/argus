@@ -59,6 +59,27 @@ public sealed partial class Match
         return from;
     }
 
+    // 각도의 방향(길이 1)을 지금의 실수 좌표 벡터로 바꾼다. 방향은 정수로 구했으므로 어느 기계에서나 같다.
+    // 좌표까지 고정소수점으로 옮기면 필요 없어진다.
+    internal static Vector2 Direction(Angle angle)
+    {
+        FixedVector direction = angle.Direction();
+        return new Vector2((float)direction.X.ToDouble(), (float)direction.Y.ToDouble());
+    }
+
+    // 원점에서 offset을 향하는 방향을 정수 계산으로 구한다. 운영체제의 아크탄젠트는 마지막 자리가 기계마다 다를 수 있다.
+    // 좌표는 벽 검사(CanStand)와 입력·투입 검사를 거쳐 늘 유한하다. 유한하지 않다면 진행 상태가 이미 망가진 결함이므로,
+    // 0 각도로 조용히 바꿔 계속하지 않고 예외로 알린다. 방은 연속 실패를 세어 닫고 결함을 기록한다(StepRoom).
+    // 좌표까지 고정소수점 정수로 옮기면 이런 값은 생길 수 없다.
+    internal static Angle Heading(Vector2 offset)
+    {
+        if (!float.IsFinite(offset.X) || !float.IsFinite(offset.Y))
+        {
+            throw new InvalidOperationException($"방향을 구할 좌표 차이가 유한하지 않습니다: {offset}");
+        }
+        return Angle.Of(FixedVector.FromDouble(offset.X, offset.Y));
+    }
+
     // 적 id는 무작위로 정한다. 효과·행동과 같은 순번을 쓰면 보이는 id 사이의 빈 번호로
     // 안개 속에서 생성된 적의 수를 셀 수 있다. 살아 있는 적끼리는 겹치지 않게 한다.
     // 방의 시드에서 뽑으므로 같은 시드면 같은 id가 나온다. 출력으로 다음 값을 알 수 없는 생성기라
@@ -145,8 +166,9 @@ public sealed partial class Match
         // 분대가 보고 있거나 벽·몸에 막힌 자리면 각도를 다시 뽑는다. 끝까지 못 찾으면 이번 회차는 넘긴다.
         for (int attempt = 0; attempt < 12; attempt++)
         {
-            double angle = _random.NextDouble() * Math.Tau;
-            Vector2 position = new Vector2(1080 + (float)Math.Cos(angle) * 650, 710 + (float)Math.Sin(angle) * 540);
+            Angle angle = Angle.FromUnits(_random.NextInt(0, Angle.UnitsPerTurn));
+            Vector2 direction = Direction(angle);
+            Vector2 position = new Vector2(1080 + direction.X * 650, 710 + direction.Y * 540);
             if (Visible(position))
             {
                 continue;
@@ -312,7 +334,7 @@ public sealed partial class Match
                 int index = _random.NextInt(0, enemy.Definition.Skills.Length);
                 EnemySkill skill = enemy.Definition.Skills[index];
                 _nextId++;
-                enemy.Action = new EnemyAction(_nextId, skill, Math.Atan2(direct.Y, direct.X), Tick, Rules.EnemyWindupMultiplier);
+                enemy.Action = new EnemyAction(_nextId, skill, Heading(direct), Tick, Rules.EnemyWindupMultiplier);
                 // 회복이 끝난 틱에서 0.25초(8틱) 쉰 뒤 다음 행동을 고른다.
                 enemy.NextActionTick = enemy.Action.EndsTick + Rules.ToTicks(0.25);
                 continue;

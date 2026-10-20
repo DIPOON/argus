@@ -269,7 +269,7 @@ internal static class LifecycleTests
         Fixture f = new Fixture();
         Enemy visible = Target(f);
         Enemy hidden = new Enemy(9001, new Vector2(1300, 1100), EnemyDefinition.Warden);
-        hidden.Action = new EnemyAction(9002, hidden.Definition.Skills[1], 1, f.Match.Tick);
+        hidden.Action = new EnemyAction(9002, hidden.Definition.Skills[1], Angle.FromRadians(1), f.Match.Tick);
         f.Match.Enemies.Add(hidden);
         f.Match.Effects.Add(new Effect(9003, 1300, 1100, "break", f.Match.Tick + Rules.ToTicks(1)));
         string serialized = Encoding.UTF8.GetString(Snapshot.Create(f.Match, f.Player, RoomHost.Json));

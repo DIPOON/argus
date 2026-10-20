@@ -13,6 +13,52 @@ internal static class DeterminismTests
         tests.Add(new TestCase("Running ticks one at a time or several per wake gives the same state", TickBatching));
         tests.Add(new TestCase("The tick clock turns irregular wakes into whole ticks, carries the remainder and drops a long stall", TickClockWakes));
         tests.Add(new TestCase("A duration takes the same whole number of ticks whatever tick it starts on", DeadlineTicks));
+        tests.Add(new TestCase("Game code calls no operating-system math functions, clocks or unseeded random generators", PortableGameCode));
+    }
+
+    private static void PortableGameCode()
+    {
+        // 컴파일된 게임 코드(Argus.Server.Game 이름공간의 모든 형식, 람다와 지역 함수 포함)가 부르는 메서드를 IL에서 모두 찾는다.
+        // 실수 수학과 벡터 형식은 결과가 정확히 정해진 허용 목록만 쓰고, 시드 없는 난수와 시계는 하나도 쓰지 않아야 한다.
+        // 실제로 Windows의 Math.Atan2가 리눅스와 마지막 자리를 다르게 계산해, 같은 기록이 510틱부터 갈라진 적이 있다(docs/verification.md).
+        List<string> game = PortabilityCheck.Violations(typeof(Match).Assembly, "Argus.Server.Game", out int inspected);
+        Check(game.Count == 0, "게임 코드가 기계마다 다를 수 있는 함수를 씁니다: " + string.Join(", ", game));
+        // 게임 코드는 메서드가 수백 개다. 너무 적으면 이름공간을 잘못 적어 아무것도 보지 않은 것이다.
+        Check(inspected > 200, $"게임 코드 메서드를 {inspected}개만 살펴봤습니다");
+
+        // 검사가 실제로 잡는지도 본다. 소스를 글자로 찾던 방식이 놓치던 경우를 모은 예제가 하나도 빠짐없이 걸려야 한다.
+        List<string> probe = PortabilityCheck.Violations(typeof(DeterminismTests).Assembly, "PortabilityProbes", out int probed);
+        Check(probed >= 14, $"예제 메서드를 {probed}개만 살펴봤습니다");
+        string[] expected = new string[]
+        {
+            "System.Math.Sin", "System.Double.Atan2", "System.Math.SinCos", "System.Math.ReciprocalEstimate",
+            "System.Math.Atan2", "System.Math.Cos", "System.MathF.FusedMultiplyAdd", "System.Numerics.Vector2.Lerp",
+            "System.Random..ctor", "System.Random.Next", "System.DateTime.get_UtcNow", "System.Diagnostics.Stopwatch.GetTimestamp",
+            "System.Numerics.ITrigonometricFunctions`1.Sin", "System.Numerics.INumberBase`1.MultiplyAddEstimate"
+        };
+        for (int i = 0; i < expected.Length; i++)
+        {
+            Check(EndsWithAny(probe, " → " + expected[i]), $"이식성 검사가 {expected[i]}를 잡지 못했습니다: " + string.Join(", ", probe));
+        }
+        // 허용한 함수만 쓰는 예제는 걸리지 않아야 한다.
+        for (int i = 0; i < probe.Count; i++)
+        {
+            bool allowed = probe[i].StartsWith("PortabilityProbes.Probe.Allowed ", StringComparison.Ordinal) ||
+                probe[i].StartsWith("PortabilityProbes.Probe.GenericAllowed ", StringComparison.Ordinal);
+            Check(!allowed, $"허용한 함수를 막았습니다: {probe[i]}");
+        }
+    }
+
+    private static bool EndsWithAny(List<string> lines, string suffix)
+    {
+        for (int i = 0; i < lines.Count; i++)
+        {
+            if (lines[i].EndsWith(suffix, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void SeededSequence()
@@ -276,7 +322,7 @@ internal static class DeterminismTests
         // 적 행동의 각 단계도 시작 틱과 관계없이 같은 틱 수 뒤에 온다. 일반 적의 타격 예고는 배율 2에서 1.7초다.
         for (long start = 0; start < 300; start++)
         {
-            EnemyAction action = new EnemyAction(1, EnemyDefinition.Grunt.Skills[0], 0, start, 2);
+            EnemyAction action = new EnemyAction(1, EnemyDefinition.Grunt.Skills[0], Angle.Zero, start, 2);
             Equal(action.ContactTick - action.StartedTick, 51L);
             // 공격 창 0.25초를 더한 1.95초는 58.5틱이라 59틱째에 끝나고, 회복 0.65초를 더한 2.6초는 78틱이다.
             Equal(action.ActiveUntilTick - action.StartedTick, 59L);

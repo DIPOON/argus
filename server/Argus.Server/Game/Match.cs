@@ -40,6 +40,11 @@ public sealed partial class Match
     private long _nextFlowTick;
     // 탈출 진행도다. 탈출 지점을 비우면 절반 속도로 줄어들므로 반 틱 단위로 센다.
     private long _extractionHalfTicks;
+    // 방어와 측면 판정의 전방 반각이다. 반각은 방향이 아니라 크기이므로 한 바퀴로 감지 않는다(Angle.SpanUnits).
+    // 음수 반각은 어느 방향도 막지 않고, 반 바퀴 이상이면 모든 방향을 막는다. 그 사이는 사잇각 대신 내적으로 판정하므로 반각의 코사인을 한 번 구해 둔다.
+    private readonly bool _guardsAnyDirection;
+    private readonly bool _guardsEveryDirection;
+    private readonly float _guardCosine;
     private static readonly int[] NeighborX = new int[] { 1, -1, 0, 0 };
     private static readonly int[] NeighborY = new int[] { 0, 0, 1, -1 };
 
@@ -51,6 +56,13 @@ public sealed partial class Match
         Rules = rules;
         _random = new SeededRandom(seed);
         _rulesJson = StateHasher.ToJson(rules);
+        int guardHalfAngle = Angle.SpanUnits(rules.GuardHalfAngle);
+        _guardsAnyDirection = guardHalfAngle >= 0;
+        _guardsEveryDirection = guardHalfAngle >= Angle.HalfTurn;
+        if (_guardsAnyDirection)
+        {
+            _guardCosine = (float)Angle.FromUnits(guardHalfAngle).Cos().ToDouble();
+        }
         Facilities.Add(new Facility(1, new Vector2(960, 485)));
         Facilities.Add(new Facility(2, new Vector2(1210, 695)));
         Facilities.Add(new Facility(3, new Vector2(990, 920)));
@@ -257,7 +269,7 @@ public sealed partial class Match
         {
             player.Move = Vector2.Normalize(player.Move);
         }
-        player.Aim = Math.IEEERemainder(aim, Math.Tau);
+        player.Aim = Angle.FromRadians(aim);
         player.RequestedSlot = slot;
         return true;
     }
@@ -322,7 +334,12 @@ public sealed partial class Match
         while (ElapsedTicks >= Rules.ToTicks((Pulse + 1) * Rules.PulseSeconds))
         {
             Pulse++;
-            double damage = Rules.PulseDamage * Math.Pow(2, Pulse - 1);
+            // 회차마다 두 배가 된다(2, 4, 8, …). 거듭제곱 함수 대신 곱해서 구해 어느 기계에서나 같다.
+            double damage = Rules.PulseDamage;
+            for (int doubling = 1; doubling < Pulse; doubling++)
+            {
+                damage *= 2;
+            }
             for (int i = 0; i < Players.Count; i++)
             {
                 Hurt(Players[i], damage);
@@ -471,8 +488,8 @@ public sealed partial class Match
             float radius = ring * 16;
             for (int i = 0; i < 16; i++)
             {
-                double angle = i * Math.Tau / 16;
-                Vector2 candidate = landing + new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * radius;
+                Angle angle = Angle.FromFraction(i, 16);
+                Vector2 candidate = landing + Direction(angle) * radius;
                 if (CanOccupy(candidate, Rules.PlayerRadius, null) && Map.LineOfSight(candidate, landing))
                 {
                     return candidate;
@@ -492,8 +509,8 @@ public sealed partial class Match
             int samples = Math.Max(16, (int)(Math.Tau * radius / 16));
             for (int i = 0; i < samples; i++)
             {
-                double angle = i * Math.Tau / samples;
-                Vector2 candidate = landing + new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * radius;
+                Angle angle = Angle.FromFraction(i, samples);
+                Vector2 candidate = landing + Direction(angle) * radius;
                 if (CanOccupy(candidate, Rules.PlayerRadius, null))
                 {
                     return candidate;

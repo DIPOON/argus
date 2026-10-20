@@ -15,6 +15,7 @@ internal static class CombatTests
         tests.Add(new TestCase("Front guards block ordinary followup damage without an RPS result", BlockOrdinaryFollowup));
         tests.Add(new TestCase("Losing a parry cancels its followup and does not kill the opponent", InterruptedParry));
         tests.Add(new TestCase("Expired and rear-facing parries cannot defend", InvalidGuards));
+        tests.Add(new TestCase("A guard half-angle of a full turn guards every side and a negative one guards none", GuardAngleLimits));
         tests.Add(new TestCase("A grab has a persistent window and one target per activation", SingleGrab));
         tests.Add(new TestCase("Friendly players can overlap and cannot damage each other", Friendly));
         tests.Add(new TestCase("All three tier-two actions can be broken by two overlapping responses", CooperativeMatrix));
@@ -131,11 +132,48 @@ internal static class CombatTests
 
         Fixture rear = new Fixture();
         Enemy facingAway = Threat(rear, "block", 2, arrivesIn: 2);
-        facingAway.Action = new EnemyAction(999, facingAway.Action!.Skill, 0, rear.Match.Tick);
+        facingAway.Action = new EnemyAction(999, facingAway.Action!.Skill, Angle.Zero, rear.Match.Tick);
         Prepare(rear, rear.Player, "parry");
         Advance(rear.Match, 0.8);
         Near(facingAway.Hp, 1);
         Near(rear.Player.Hp, 6);
+    }
+
+    private static void GuardAngleLimits()
+    {
+        // 방어 반각은 방향이 아니라 각도의 크기라 한 바퀴로 감지 않는다(Angle.SpanUnits).
+        // 감으면 2π가 0이 되어 정면만 막고, 음수는 거의 한 바퀴가 되어 모든 방향을 막는다.
+        Fixture behind = new Fixture(new Rules { MaxEnemies = 0, GuardHalfAngle = Math.Tau });
+        Enemy striker = Threat(behind, "strike");
+        Prepare(behind, behind.Player, "parry");
+        // 등을 돌려도 모든 방향을 막는 방어는 받아친다.
+        behind.Player.Aim = Angle.FromRadians(Math.PI);
+        Advance(behind.Match, 0.1);
+        Near(behind.Player.Hp, 6);
+        Check(striker.Hp <= 0, "모든 방향을 막는 방어가 뒤에서 온 타격을 받아치지 못했습니다");
+
+        // 정확히 등 뒤에서 와도 막는다. 방향 벡터는 1/4096 단위로 반올림해 길이가 1보다 조금 길 수 있다(조준 4칸이 그런 예다).
+        // 그러면 코사인 -1과 내적으로만 비교할 때 바로 뒤쪽을 놓친다. 조준 π는 방향이 (-1, 0)이라 길이가 정확히 1이어서 이 경우를 보지 못한다.
+        Fixture exact = new Fixture(new Rules { MaxEnemies = 0, GuardHalfAngle = Math.Tau });
+        exact.Player.Aim = Angle.FromUnits(4);
+        FixedVector rounded = exact.Player.Aim.Direction();
+        Check(rounded.X.Raw * rounded.X.Raw + rounded.Y.Raw * rounded.Y.Raw > Fixed.Scale * Fixed.Scale, "조준 4칸의 방향 벡터가 1보다 길지 않습니다");
+        Enemy behindExactly = Threat(exact, "strike");
+        behindExactly.Position = exact.Player.Position - exact.Player.AimDirection * 50;
+        // 적은 대원을 향해 친다. 대원의 조준과 같은 방향이다.
+        behindExactly.Action = new EnemyAction(behindExactly.Action!.Id, behindExactly.Action.Skill, exact.Player.Aim, exact.Match.Tick);
+        Prepare(exact, exact.Player, "parry");
+        Advance(exact.Match, 0.1);
+        Near(exact.Player.Hp, 6);
+        Check(behindExactly.Hp <= 0, "모든 방향을 막는 방어가 정확히 등 뒤에서 온 타격을 받아치지 못했습니다");
+
+        Fixture front = new Fixture(new Rules { MaxEnemies = 0, GuardHalfAngle = -1 });
+        Enemy facing = Threat(front, "strike");
+        Prepare(front, front.Player, "parry");
+        // 정면을 봐도 반각이 음수면 막지 못한다.
+        Advance(front.Match, 0.1);
+        Near(front.Player.Hp, 5);
+        Near(facing.Hp, 1);
     }
 
     private static void InvalidGuards()
@@ -143,7 +181,7 @@ internal static class CombatTests
         Fixture rear = new Fixture();
         Enemy enemy = Threat(rear, "strike");
         Prepare(rear, rear.Player, "parry");
-        rear.Player.Aim = Math.PI;
+        rear.Player.Aim = Angle.FromRadians(Math.PI);
         Advance(rear.Match, 0.1);
         Near(rear.Player.Hp, 5);
         Near(enemy.Hp, 1);
@@ -272,7 +310,7 @@ internal static class CombatTests
             Near(f.Player.Hp, 5);
             Check(parry.Cancelled);
             enemy.Hp = 1;
-            enemy.Action = new EnemyAction(999, new EnemySkill("strike", 2, partial, 0.05, 85, 25), Math.PI, f.Match.Tick);
+            enemy.Action = new EnemyAction(999, new EnemySkill("strike", 2, partial, 0.05, 85, 25), Angle.FromRadians(Math.PI), f.Match.Tick);
             Prepare(f, f.Player, "parry");
             Advance(f.Match, 0.1);
             Near(enemy.Hp, 1);
@@ -298,7 +336,7 @@ internal static class CombatTests
     {
         Fixture f = new Fixture();
         Enemy elite = Target(f, EnemyDefinition.Warden);
-        elite.Action = new EnemyAction(999, elite.Definition.Skills[2], Math.PI, f.Match.Tick);
+        elite.Action = new EnemyAction(999, elite.Definition.Skills[2], Angle.FromRadians(Math.PI), f.Match.Tick);
         Prepare(f, f.Player, "strike");
         Advance(f.Match, 0.2);
         Near(elite.Hp, 0);
@@ -311,7 +349,7 @@ internal static class CombatTests
     {
         Fixture f = new Fixture();
         f.Player.Position = new Vector2(464, 498);
-        f.Player.Aim = 313 * Math.PI / 180;
+        f.Player.Aim = Angle.FromRadians(313 * Math.PI / 180);
         Enemy enemy = Target(f);
         enemy.Position = new Vector2(495, 465);
         Check(f.Match.Map.CanStand(f.Player.Position));
@@ -348,7 +386,7 @@ internal static class CombatTests
         // 오른쪽 벽(왼쪽 면 x = 720)을 마주 보고 한 번 친다. 부술 수 있는 벽은 체력이 3이라 한 번에 부서지지 않는다.
         Fixture f = new Fixture();
         f.Player.Position = new Vector2(680, 500);
-        f.Player.Aim = 0;
+        f.Player.Aim = Angle.Zero;
         f.Player.Mana = 1;
         f.Match.Input(f.Player, 1, 0, 0, 0, 1);
         Advance(f.Match, 0.3);
@@ -422,7 +460,7 @@ internal static class CombatTests
         Enemy striker = Target(guarded);
         double side = 40 * Math.PI / 180;
         striker.Position = guarded.Player.Position + new Vector2((float)Math.Cos(side), (float)Math.Sin(side)) * 50;
-        striker.Action = new EnemyAction(30010, new EnemySkill("strike", 1, 0, 0.05, 85, 25), side + Math.PI, guarded.Match.Tick);
+        striker.Action = new EnemyAction(30010, new EnemySkill("strike", 1, 0, 0.05, 85, 25), Angle.FromRadians(side + Math.PI), guarded.Match.Tick);
         Use(guarded, shield, 30011);
         Advance(guarded.Match, 0.08);
         Near(striker.Hp, 0);
@@ -485,8 +523,8 @@ internal static class CombatTests
         blocker.Position = new Vector2(420, 730);
         front.Position = new Vector2(380, 730);
         shielded.Player.Position = new Vector2(460, 730);
-        shielded.Player.Aim = Math.PI;
-        blocker.Action = new EnemyAction(30050, new EnemySkill("block", 1, 0, 1, 62, 15), Math.PI, shielded.Match.Tick);
+        shielded.Player.Aim = Angle.FromRadians(Math.PI);
+        blocker.Action = new EnemyAction(30050, new EnemySkill("block", 1, 0, 1, 62, 15), Angle.FromRadians(Math.PI), shielded.Match.Tick);
         PlayerAction behind = Prepare(shielded, shielded.Player, "strike", 0.2);
         Advance(shielded.Match, Rules.Step);
         Near(blocker.Hp, 0);
@@ -500,8 +538,8 @@ internal static class CombatTests
         striker.Position = new Vector2(420, 730);
         target.Position = new Vector2(380, 730);
         flanked.Player.Position = new Vector2(460, 730);
-        flanked.Player.Aim = Math.PI;
-        striker.Action = new EnemyAction(30051, new EnemySkill("strike", 1, 0, 0.05, 85, 25), Math.PI, flanked.Match.Tick - Rules.ToTicks(0.05));
+        flanked.Player.Aim = Angle.FromRadians(Math.PI);
+        striker.Action = new EnemyAction(30051, new EnemySkill("strike", 1, 0, 0.05, 85, 25), Angle.FromRadians(Math.PI), flanked.Match.Tick - Rules.ToTicks(0.05));
         Prepare(flanked, flanked.Player, "strike", 0.2);
         Advance(flanked.Match, Rules.Step);
         Near(striker.Hp, 0);
@@ -520,8 +558,8 @@ internal static class CombatTests
         Enemy shover = Target(grabbing);
         shover.Position = new Vector2(420, 730);
         grabbing.Player.Position = shover.Position + beside;
-        grabbing.Player.Aim = aim;
-        shover.Action = new EnemyAction(30052, new EnemySkill("block", 1, 0, 0.05, 62, 15), Math.PI, grabbing.Match.Tick - Rules.ToTicks(0.05));
+        grabbing.Player.Aim = Angle.FromRadians(aim);
+        shover.Action = new EnemyAction(30052, new EnemySkill("block", 1, 0, 0.05, 62, 15), Angle.FromRadians(Math.PI), grabbing.Match.Tick - Rules.ToTicks(0.05));
         PlayerAction grab = Prepare(grabbing, grabbing.Player, "grab");
         Advance(grabbing.Match, Rules.Step);
         Check(grabbing.Match.Tick < grab.ContactTick, "잡기가 준비 동작을 마쳤습니다");
@@ -533,8 +571,8 @@ internal static class CombatTests
         Enemy guard = Target(striking);
         guard.Position = new Vector2(420, 730);
         striking.Player.Position = guard.Position + beside;
-        striking.Player.Aim = aim;
-        guard.Action = new EnemyAction(30053, new EnemySkill("block", 1, 0, 0.05, 62, 15), Math.PI, striking.Match.Tick - Rules.ToTicks(0.05));
+        striking.Player.Aim = Angle.FromRadians(aim);
+        guard.Action = new EnemyAction(30053, new EnemySkill("block", 1, 0, 0.05, 62, 15), Angle.FromRadians(Math.PI), striking.Match.Tick - Rules.ToTicks(0.05));
         PlayerAction strike = Prepare(striking, striking.Player, "strike", 0.2);
         Advance(striking.Match, Rules.Step);
         Near(guard.Hp, 1);
