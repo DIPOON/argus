@@ -1,6 +1,6 @@
 # Argus protocol v3
 
-2026-10-09. JSON over HTTP + WebSocket, UTF-8. 좌표 단위는 월드 단위, 시간은 서버 초, 각도는 라디안이다. 원점은 왼쪽 위다. X는 오른쪽, Y는 아래쪽이다. 서버는 1/30초 틱으로 진행하며, 시간 필드는 세 가지다.
+2026-10-09. JSON over HTTP + WebSocket, UTF-8. 좌표 단위는 월드 단위, 시간은 서버 초, 각도는 라디안이다. 서버는 좌표를 4096분의 1 단위 고정소수점 정수로 계산하고, 대원·적·효과·투입 지점의 좌표는 소수 둘째 자리로 반올림해 보낸다. 원점은 왼쪽 위다. X는 오른쪽, Y는 아래쪽이다. 서버는 1/30초 틱으로 진행하며, 시간 필드는 세 가지다.
 
 - **틱 시각과 틱 수**: `now`, `elapsed`, `nextPulse`, 기술의 `startedAt`·`contactAt`·`activeUntil`·`followupUntil`·`endsAt`, 효과의 `until`, 안내의 `at`, 대원의 `busy`·`deploy`, 보급의 `cooldown`. 틱을 초로 바꿔 소수 둘째 자리로 반올림해 보낸다. 한 틱은 약 0.033초라 반올림해도 틱끼리 구분된다. 같은 틱의 시각은 `now`와 정확히 같고, 값에 30을 곱해 반올림하면 틱 번호가 된다.
 - **규칙 값**: `rules.deploy`, `rules.parryFollowupSeconds`, `rules.skills`의 `contactAfter`·`activeSeconds`·`duration`, `extraction.duration`. 설정한 초를 그대로 보낸다. 서버는 이 기간을 틱으로 올려 세므로, 30을 곱해도 틱 수가 되지 않을 수 있다. 기술의 기간은 모두 `startedAt`부터 잰 초이고 각각 올린다. 예를 들어 `contactAfter` 0.18초는 6틱(0.2초)이다. `parryFollowupSeconds`만은 따로 올리지 않는다. `startedAt`부터 `activeSeconds + parryFollowupSeconds`를 합친 뒤 틱으로 올리고, 그 시각을 기술 객체의 `followupUntil`로 보낸다. `activeUntil`에 반격 시간을 따로 더하면 반격 끝이 한 틱까지 어긋나므로 `followupUntil`을 쓴다. 지금 수치로 센 예는 [전투 명세의 코드 읽기 절](combat.md#코드-읽기)에 있다.
@@ -19,6 +19,8 @@ v3 안에서 추가(2026-10-16): `notices`에 순번 `id`가 늘었다. 기술·
 v3 안에서 추가(2026-10-17): 기술 객체에 반격이 끝나는 시각 `followupUntil`이 늘었다. 이전에는 `activeUntil`에 `parryFollowupSeconds`를 더해 반격 끝을 구해야 했다. 서버는 두 기간을 합친 초를 한 번에 틱으로 올리므로, 이렇게 구한 끝은 서버와 한 틱 미만만큼 어긋났다. 값이 하나 추가되기만 해서 버전은 그대로 3이다.
 
 v3 안에서 바뀜(2026-10-18): 대원과 기술 객체의 `aim`을 한 바퀴 65536칸으로 반올림해 보낸다. 서버가 운영체제의 삼각함수 대신 정수 각도로 계산하기 때문이다. 형식은 그대로 라디안이라 버전은 그대로 3이다.
+
+v3 안에서 바뀜(2026-10-20): 서버가 좌표와 거리를 고정소수점 정수로 계산한다. 보내는 형식은 그대로 실수다. 효과의 `x`, `y`도 다른 좌표처럼 소수 둘째 자리로 반올림해 보낸다. 이전에는 효과 좌표만 반올림 없이 나갔다. 정밀도만 바뀌어 버전은 그대로 3이다.
 
 v1 → v2: 총기·탄창·재장전·보조 장비·패시브 필드를 제거하고 네 슬롯의 근접 기술과 마나로 전환했다.
 
@@ -95,7 +97,7 @@ slots를 생략하면 `["strike","parry","grab","strike"]`. 길이는 정확히 
 | sight | 팀 시야 다각형 배열. 다각형은 `[x0,y0,x1,y1,…]`이며 좌표는 정수다 |
 | players | 분대 전체 상태 |
 | enemies | 팀 시야에 실제 들어온 적과 기술 예고 |
-| effects | 시야 안의 효과: id, x, y, kind, until(사라지는 시각, 초) |
+| effects | 시야 안의 효과: id, x, y(소수 둘째 자리로 반올림), kind, until(사라지는 시각, 초) |
 | facilities | 공개 목표: id, x, y, hp, maxHp |
 | supplies | 공개 보급: id, x, y, objective, collected, cooldown. cooldown은 수신 대원 기준 |
 | extraction | x, y, progress, duration, unlocked |
