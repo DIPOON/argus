@@ -22,6 +22,14 @@ internal static class PortabilityCheck
         "get_Zero", "Length", "LengthSquared", "Distance", "DistanceSquared", "Dot", "Normalize", "Equals", "GetHashCode", "ToString"
     };
 
+    // 일반화 수학 인터페이스의 연산자와 기본값이다. 사칙연산과 비교라 결과가 정해져 있다.
+    private static readonly string[] ExactOperators = new string[]
+    {
+        "op_Addition", "op_Subtraction", "op_Multiply", "op_Division", "op_Modulus", "op_UnaryNegation", "op_UnaryPlus",
+        "op_Increment", "op_Decrement", "op_Equality", "op_Inequality", "op_LessThan", "op_GreaterThan",
+        "op_LessThanOrEqual", "op_GreaterThanOrEqual", "get_Zero", "get_One", "get_AdditiveIdentity", "get_MultiplicativeIdentity"
+    };
+
     private static readonly OpCode[] OneByte = new OpCode[256];
     private static readonly OpCode[] TwoByte = new OpCode[256];
 
@@ -168,6 +176,16 @@ internal static class PortabilityCheck
             ownerName == "System.Single" || ownerName == "System.Half")
         {
             if (Array.IndexOf(ExactMath, name) >= 0)
+            {
+                return null;
+            }
+            return full;
+        }
+        // 일반화 수학(T.Sin(x) 같은 호출)은 IL에서 System.Numerics의 인터페이스 메서드(ITrigonometricFunctions`1.Sin,
+        // INumberBase`1.MultiplyAddEstimate 등)를 부른다. 소유 형식이 double이 아니어도 같은 계산이므로 같은 허용 목록으로 본다.
+        if (owner.IsInterface && owner.Namespace == "System.Numerics")
+        {
+            if (Array.IndexOf(ExactMath, name) >= 0 || Array.IndexOf(ExactOperators, name) >= 0)
             {
                 return null;
             }

@@ -120,12 +120,17 @@ public sealed partial class Match
     // origin에서 aim 방향을 기준으로 target이 전방 120°(방어 각도) 안에 있는지 본다.
     // 대원의 방어, 적 방어의 반격 차단, 측면 공격 판정이 모두 이 계산을 쓴다.
     // 사잇각을 구하지 않고 내적으로 비교한다. 사잇각이 반각 이하 ⟺ offset·forward ≥ |offset| × cos(반각)이다.
-    // 반각이 반 바퀴 이상이면 코사인이 -1이라 모든 방향이 들어온다.
+    // 반각이 반 바퀴 이상이면 내적을 보지 않고 모든 방향을 막는다. 방향 벡터는 1/4096 단위로 반올림해 길이가 1보다 조금 길 수 있어,
+    // 코사인 -1과 내적으로 비교하면 정확히 뒤쪽(약 1° 안)을 놓친다. 반각이 60°일 때 이 오차는 0.01° 안쪽이라 판정에 드러나지 않는다.
     private bool Faces(Vector2 origin, Vector2 forward, Vector2 target)
     {
         if (!_guardsAnyDirection)
         {
             return false;
+        }
+        if (_guardsEveryDirection)
+        {
+            return true;
         }
         Vector2 offset = target - origin;
         float along = Vector2.Dot(offset, forward);

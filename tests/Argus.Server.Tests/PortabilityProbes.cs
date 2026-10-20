@@ -60,6 +60,23 @@ internal static class Probe
         return DateTime.UtcNow.Ticks + Stopwatch.GetTimestamp();
     }
 
+    // 일반화 수학은 인터페이스 메서드를 부른다. 형식이 double이 아니어도 걸려야 한다.
+    internal static T Generic<T>(T x) where T : ITrigonometricFunctions<T>
+    {
+        return T.Sin(x);
+    }
+
+    internal static T GenericEstimate<T>(T x) where T : INumberBase<T>
+    {
+        return T.MultiplyAddEstimate(x, x, x);
+    }
+
+    // 일반화 수학이라도 결과가 정해진 함수는 걸리지 않는다.
+    internal static T GenericAllowed<T>(T x) where T : IRootFunctions<T>
+    {
+        return T.Sqrt(x);
+    }
+
     // 허용한 함수만 쓴다. 검사에 걸리면 안 된다.
     internal static double Allowed(double x)
     {

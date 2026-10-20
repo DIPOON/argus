@@ -41,8 +41,9 @@ public sealed partial class Match
     // 탈출 진행도다. 탈출 지점을 비우면 절반 속도로 줄어들므로 반 틱 단위로 센다.
     private long _extractionHalfTicks;
     // 방어와 측면 판정의 전방 반각이다. 반각은 방향이 아니라 크기이므로 한 바퀴로 감지 않는다(Angle.SpanUnits).
-    // 음수 반각은 어느 방향도 막지 않는다. 판정은 사잇각 대신 내적으로 하므로 반각의 코사인을 한 번 구해 둔다.
+    // 음수 반각은 어느 방향도 막지 않고, 반 바퀴 이상이면 모든 방향을 막는다. 그 사이는 사잇각 대신 내적으로 판정하므로 반각의 코사인을 한 번 구해 둔다.
     private readonly bool _guardsAnyDirection;
+    private readonly bool _guardsEveryDirection;
     private readonly float _guardCosine;
     private static readonly int[] NeighborX = new int[] { 1, -1, 0, 0 };
     private static readonly int[] NeighborY = new int[] { 0, 0, 1, -1 };
@@ -57,6 +58,7 @@ public sealed partial class Match
         _rulesJson = StateHasher.ToJson(rules);
         int guardHalfAngle = Angle.SpanUnits(rules.GuardHalfAngle);
         _guardsAnyDirection = guardHalfAngle >= 0;
+        _guardsEveryDirection = guardHalfAngle >= Angle.HalfTurn;
         if (_guardsAnyDirection)
         {
             _guardCosine = (float)Angle.FromUnits(guardHalfAngle).Cos().ToDouble();

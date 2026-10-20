@@ -28,12 +28,13 @@ internal static class DeterminismTests
 
         // 검사가 실제로 잡는지도 본다. 소스를 글자로 찾던 방식이 놓치던 경우를 모은 예제가 하나도 빠짐없이 걸려야 한다.
         List<string> probe = PortabilityCheck.Violations(typeof(DeterminismTests).Assembly, "PortabilityProbes", out int probed);
-        Check(probed >= 11, $"예제 메서드를 {probed}개만 살펴봤습니다");
+        Check(probed >= 14, $"예제 메서드를 {probed}개만 살펴봤습니다");
         string[] expected = new string[]
         {
             "System.Math.Sin", "System.Double.Atan2", "System.Math.SinCos", "System.Math.ReciprocalEstimate",
             "System.Math.Atan2", "System.Math.Cos", "System.MathF.FusedMultiplyAdd", "System.Numerics.Vector2.Lerp",
-            "System.Random..ctor", "System.Random.Next", "System.DateTime.get_UtcNow", "System.Diagnostics.Stopwatch.GetTimestamp"
+            "System.Random..ctor", "System.Random.Next", "System.DateTime.get_UtcNow", "System.Diagnostics.Stopwatch.GetTimestamp",
+            "System.Numerics.ITrigonometricFunctions`1.Sin", "System.Numerics.INumberBase`1.MultiplyAddEstimate"
         };
         for (int i = 0; i < expected.Length; i++)
         {
@@ -42,7 +43,9 @@ internal static class DeterminismTests
         // 허용한 함수만 쓰는 예제는 걸리지 않아야 한다.
         for (int i = 0; i < probe.Count; i++)
         {
-            Check(!probe[i].StartsWith("PortabilityProbes.Probe.Allowed ", StringComparison.Ordinal), $"허용한 함수를 막았습니다: {probe[i]}");
+            bool allowed = probe[i].StartsWith("PortabilityProbes.Probe.Allowed ", StringComparison.Ordinal) ||
+                probe[i].StartsWith("PortabilityProbes.Probe.GenericAllowed ", StringComparison.Ordinal);
+            Check(!allowed, $"허용한 함수를 막았습니다: {probe[i]}");
         }
     }
 

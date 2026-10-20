@@ -152,6 +152,21 @@ internal static class CombatTests
         Near(behind.Player.Hp, 6);
         Check(striker.Hp <= 0, "모든 방향을 막는 방어가 뒤에서 온 타격을 받아치지 못했습니다");
 
+        // 정확히 등 뒤에서 와도 막는다. 방향 벡터는 1/4096 단위로 반올림해 길이가 1보다 조금 길 수 있다(조준 4칸이 그런 예다).
+        // 그러면 코사인 -1과 내적으로만 비교할 때 바로 뒤쪽을 놓친다. 조준 π는 방향이 (-1, 0)이라 길이가 정확히 1이어서 이 경우를 보지 못한다.
+        Fixture exact = new Fixture(new Rules { MaxEnemies = 0, GuardHalfAngle = Math.Tau });
+        exact.Player.Aim = Angle.FromUnits(4);
+        FixedVector rounded = exact.Player.Aim.Direction();
+        Check(rounded.X.Raw * rounded.X.Raw + rounded.Y.Raw * rounded.Y.Raw > Fixed.Scale * Fixed.Scale, "조준 4칸의 방향 벡터가 1보다 길지 않습니다");
+        Enemy behindExactly = Threat(exact, "strike");
+        behindExactly.Position = exact.Player.Position - exact.Player.AimDirection * 50;
+        // 적은 대원을 향해 친다. 대원의 조준과 같은 방향이다.
+        behindExactly.Action = new EnemyAction(behindExactly.Action!.Id, behindExactly.Action.Skill, exact.Player.Aim, exact.Match.Tick);
+        Prepare(exact, exact.Player, "parry");
+        Advance(exact.Match, 0.1);
+        Near(exact.Player.Hp, 6);
+        Check(behindExactly.Hp <= 0, "모든 방향을 막는 방어가 정확히 등 뒤에서 온 타격을 받아치지 못했습니다");
+
         Fixture front = new Fixture(new Rules { MaxEnemies = 0, GuardHalfAngle = -1 });
         Enemy facing = Threat(front, "strike");
         Prepare(front, front.Player, "parry");
