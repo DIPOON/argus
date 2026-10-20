@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.WebSockets;
-using System.Numerics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -61,14 +60,14 @@ internal static class LifecycleTests
         Check(!match.Deploy(player, double.NaN, 400));
         Check(!match.Deploy(player, 730, 350));
         Check(match.Deploy(player, 1200, 500));
-        Check(!match.Visible(new Vector2(1200, 500)));
+        Check(!match.Visible(FixedVector.FromInt(1200, 500)));
         Advance(match, 4.95);
         Equal(player.State, "deploying");
-        Check(!match.Visible(new Vector2(1200, 500)));
+        Check(!match.Visible(FixedVector.FromInt(1200, 500)));
         Advance(match, 0.1);
         Equal(player.State, "alive");
         Equal(player.Mana, 0);
-        Check(match.Visible(new Vector2(1200, 500)));
+        Check(match.Visible(FixedVector.FromInt(1200, 500)));
     }
 
     private static void RepeatedDeploy()
@@ -76,14 +75,13 @@ internal static class LifecycleTests
         Match match = new Match("TEST01", new Rules { MaxEnemies = 0 }, 73);
         Player player = match.Join("p", "pilot")!;
         Check(match.Deploy(player, 1200, 500));
-        Vector2 landing = player.Landing;
+        FixedVector landing = player.Landing;
         long arrives = player.DeployTick;
         Advance(match, 1);
         // 투입 버튼을 두 번 눌러도 거절로 답하지 않는다. 자리와 도착 시각은 처음 요청대로다.
         Check(match.Deploy(player, 1100, 520), "투입 중인 대원의 재요청을 거절했습니다");
         Equal(player.State, "deploying");
-        Near(player.Landing.X, landing.X);
-        Near(player.Landing.Y, landing.Y);
+        Equal(player.Landing, landing);
         Equal(player.DeployTick, arrives);
         Advance(match, match.Rules.DeploySeconds);
         Equal(player.State, "alive");
@@ -94,7 +92,7 @@ internal static class LifecycleTests
     private static void InputAuthority()
     {
         Fixture f = new Fixture();
-        Vector2 from = f.Player.Position;
+        FixedVector from = f.Player.Position;
         Check(!f.Match.Input(f.Player, 0, 100, 0, 0, 0));
         Check(!f.Match.Input(f.Player, 0, double.NaN, 0, 0, 0));
         Check(!f.Match.Input(f.Player, 0, 0, 0, double.PositiveInfinity, 0));
@@ -105,29 +103,38 @@ internal static class LifecycleTests
             Check(f.Match.Input(f.Player, i, 1, 1, 0, 0));
             f.Match.Step();
         }
-        Near(Vector2.Distance(from, f.Player.Position), 180, 0.1);
+        Near(Distance(from, f.Player.Position), 180, 0.1);
+        // 한 방향으로는 한 틱에 정확히 6(초당 180 / 30)씩 움직인다. 1/30을 곱하면 고정소수점 반올림 때문에 0.3% 어긋난다.
+        Fixture straight = new Fixture();
+        FixedVector start = straight.Player.Position;
+        for (int i = 0; i < 10; i++)
+        {
+            Check(straight.Match.Input(straight.Player, i, 1, 0, 0, 0));
+            straight.Match.Step();
+        }
+        Equal(straight.Player.Position, start + FixedVector.FromInt(60, 0));
         Check(!f.Match.Input(f.Player, 29, -1, 0, 0, 0));
         from = f.Player.Position;
         for (int i = 30; i < 1030; i++)
         {
             f.Match.Input(f.Player, i, 1, 0, 0, 0);
         }
-        Near(Vector2.Distance(from, f.Player.Position), 0);
+        Near(Distance(from, f.Player.Position), 0);
     }
 
     private static void InputExpiry()
     {
         Fixture f = new Fixture();
         f.Player.Mana = 10;
-        Vector2 from = f.Player.Position;
+        FixedVector from = f.Player.Position;
         f.Match.Input(f.Player, 0, 0, -1, 0, 1);
         Advance(f.Match, 1);
-        Check(Vector2.Distance(from, f.Player.Position) < 65);
+        Check(Distance(from, f.Player.Position) < 65);
         Equal(f.Player.Mana, 9);
         f.Match.Disconnect(f.Player);
         from = f.Player.Position;
         Advance(f.Match, 2);
-        Near(Vector2.Distance(from, f.Player.Position), 0);
+        Near(Distance(from, f.Player.Position), 0);
         Equal(f.Player.Mana, 9);
     }
 
@@ -268,17 +275,17 @@ internal static class LifecycleTests
     {
         Fixture f = new Fixture();
         Enemy visible = Target(f);
-        Enemy hidden = new Enemy(9001, new Vector2(1300, 1100), EnemyDefinition.Warden);
+        Enemy hidden = new Enemy(9001, FixedVector.FromInt(1300, 1100), EnemyDefinition.Warden);
         hidden.Action = new EnemyAction(9002, hidden.Definition.Skills[1], Angle.FromRadians(1), f.Match.Tick);
         f.Match.Enemies.Add(hidden);
-        f.Match.Effects.Add(new Effect(9003, 1300, 1100, "break", f.Match.Tick + Rules.ToTicks(1)));
+        f.Match.Effects.Add(new Effect(9003, FixedVector.FromInt(1300, 1100), "break", f.Match.Tick + Rules.ToTicks(1)));
         string serialized = Encoding.UTF8.GetString(Snapshot.Create(f.Match, f.Player, RoomHost.Json));
         using JsonDocument json = JsonDocument.Parse(serialized);
         Equal(json.RootElement.GetProperty("version").GetInt32(), 3);
         Equal(json.RootElement.GetProperty("enemies").GetArrayLength(), 1);
         Check(!serialized.Contains("9001") && !serialized.Contains("9002") && !serialized.Contains("9003"));
         Player ally = Ally(f, "scout");
-        ally.Position = new Vector2(1260, 1120);
+        ally.Position = FixedVector.FromInt(1260, 1120);
         Equal(Snapshot.CreateShared(f.Match).Enemies.Count, 2);
         ally.State = "waiting";
         Equal(Snapshot.CreateShared(f.Match).Enemies.Count, 1);
@@ -291,7 +298,7 @@ internal static class LifecycleTests
         // 투입 시간 같은 시험 설정은 바뀔 수 있으므로 기대값은 규칙에서 구하고, 항목은 순서가 아니라 내용으로 찾는다.
         Match match = new Match("WIRE01", new Rules { MaxEnemies = 0 }, 1);
         Player player = match.Join("p", "pilot")!;
-        Check(match.Deploy(player, BattleMap.Camp.X, BattleMap.Camp.Y));
+        Check(match.Deploy(player, BattleMap.Camp.X.ToDouble(), BattleMap.Camp.Y.ToDouble()));
         long landing = Rules.ToTicks(match.Rules.DeploySeconds);
         Advance(match, match.Rules.DeploySeconds);
         Equal(match.Tick, landing);
@@ -346,7 +353,7 @@ internal static class LifecycleTests
         // 그래서 서버가 반격이 끝나는 시각(followupUntil)을 보내고, 단계(phase)도 바로 그 틱에 바뀌어야 한다.
         Match match = new Match("WIRE02", new Rules { MaxEnemies = 0 }, 1);
         Player player = match.Join("p", "pilot")!;
-        Check(match.Deploy(player, BattleMap.Camp.X, BattleMap.Camp.Y));
+        Check(match.Deploy(player, BattleMap.Camp.X.ToDouble(), BattleMap.Camp.Y.ToDouble()));
         Advance(match, match.Rules.DeploySeconds);
         player.Mana = player.MaxMana;
         // 2번 슬롯은 받아치기다. 주변에 적이 없어도 빈 방어 뒤에 반격한다.
@@ -693,7 +700,7 @@ internal static class LifecycleTests
         match.Enemies.Clear();
         Player player = match.Join("p", "pilot")!;
         player.Connected = true;
-        Check(match.Deploy(player, BattleMap.Camp.X, BattleMap.Camp.Y));
+        Check(match.Deploy(player, BattleMap.Camp.X.ToDouble(), BattleMap.Camp.Y.ToDouble()));
         Advance(match, rules.DeploySeconds + 0.01);
         player.Mana = player.MaxMana;
         long sequence = 1;
@@ -783,12 +790,12 @@ internal static class LifecycleTests
         using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
         Guest guest = host.Create(new EntryRequest("pilot"))!;
         (Room room, Player player, Peer peer) = host.Attach(guest.Room, guest.Token)!.Value;
-        Check(room.Match.Deploy(player, BattleMap.Camp.X, BattleMap.Camp.Y));
+        Check(room.Match.Deploy(player, BattleMap.Camp.X.ToDouble(), BattleMap.Camp.Y.ToDouble()));
         Advance(room.Match, room.Match.Rules.DeploySeconds + 0.1);
         room.Match.Enemies.Clear();
         // 행동 목록이 빈 적이 대원 곁에 있다. 행동을 고를 때마다 예외가 나므로 매 틱 진행이 실패한다.
-        EnemyDefinition broken = new EnemyDefinition("broken", "고장", 13, 1, 0, new EnemySkill[0]);
-        room.Match.Enemies.Add(new Enemy(30040, player.Position + new Vector2(40, 0), broken));
+        EnemyDefinition broken = new EnemyDefinition("broken", "고장", Fixed.FromInt(13), 1, 0, new EnemySkill[0]);
+        room.Match.Enemies.Add(new Enemy(30040, player.Position + FixedVector.FromInt(40, 0), broken));
         for (int tick = 0; tick < 60; tick++)
         {
             host.StepRoom(room.Match.Code, room, 1, false);
@@ -804,15 +811,15 @@ internal static class LifecycleTests
         Fixture f = new Fixture();
         Player late = f.Match.Join("late", "late")!;
         // 움직이지도 행동하지도 않는 적으로 투입 지점 주변 반경 150을 간격 30으로 채운다. 어느 점이든 적과 26보다 가깝다.
-        EnemyDefinition still = new EnemyDefinition("still", "정지", 13, 1, 0, EnemyDefinition.Grunt.Skills);
-        Vector2 landing = new Vector2(1400, 1250);
+        EnemyDefinition still = new EnemyDefinition("still", "정지", Fixed.FromInt(13), 1, 0, EnemyDefinition.Grunt.Skills);
+        FixedVector landing = FixedVector.FromInt(1400, 1250);
         int id = 31000;
         for (int x = -5; x <= 5; x++)
         {
             for (int y = -5; y <= 5; y++)
             {
-                Vector2 at = landing + new Vector2(x * 30, y * 30);
-                if (Vector2.Distance(at, landing) > 150 || !f.Match.Map.CanStand(at, 13))
+                FixedVector at = landing + FixedVector.FromInt(x * 30, y * 30);
+                if (Distance(at, landing) > 150 || !f.Match.Map.CanStand(at, Fixed.FromInt(13)))
                 {
                     continue;
                 }
@@ -826,14 +833,14 @@ internal static class LifecycleTests
         Enemy guard = new Enemy(id + 1, BattleMap.Camp, still);
         guard.NextActionTick = long.MaxValue;
         f.Match.Enemies.Add(guard);
-        Check(f.Match.Deploy(late, landing.X, landing.Y));
+        Check(f.Match.Deploy(late, landing.X.ToDouble(), landing.Y.ToDouble()));
         Advance(f.Match, f.Match.Rules.DeploySeconds + 0.1);
         // 근처와 캠프가 모두 막혀도 더 넓게 찾아 투입한다. deploying에 묶여 "0.0초 후 투입"이 계속 표시되면 안 된다.
         Equal(late.State, "alive");
-        Check(Vector2.Distance(late.Position, landing) > 128, "막힌 범위 안에 투입되었습니다");
+        Check(Distance(late.Position, landing) > 128, "막힌 범위 안에 투입되었습니다");
         for (int i = 0; i < f.Match.Enemies.Count; i++)
         {
-            Check(Vector2.Distance(late.Position, f.Match.Enemies[i].Position) >= 26 - 0.01, "적과 겹쳐 투입되었습니다");
+            Check(Distance(late.Position, f.Match.Enemies[i].Position) >= 26 - 0.01, "적과 겹쳐 투입되었습니다");
         }
     }
 
@@ -1016,16 +1023,16 @@ internal static class LifecycleTests
         Fixture f = new Fixture();
         Player late = f.Match.Join("late", "late")!;
         Enemy enemy = Target(f);
-        enemy.Position = new Vector2(1000, 600);
+        enemy.Position = FixedVector.FromInt(1000, 600);
         Check(!f.Match.Visible(enemy.Position));
-        Check(f.Match.Deploy(late, enemy.Position.X, enemy.Position.Y));
+        Check(f.Match.Deploy(late, enemy.Position.X.ToDouble(), enemy.Position.Y.ToDouble()));
         Check(!f.Match.Visible(enemy.Position));
         Advance(f.Match, 5.1);
         // 대기로 되돌리지 않고 가까운 빈 자리로 투입한다. 투입 성공 여부로 안개 속을 엿볼 수 없다.
         Equal(late.State, "alive");
         Check(late.HasDeployed);
-        double gap = Vector2.Distance(late.Position, enemy.Position);
-        Check(gap >= Rules.PlayerRadius + enemy.Definition.Radius - 0.01, "적과 겹쳐 투입되었습니다");
+        double gap = Distance(late.Position, enemy.Position);
+        Check(gap >= (Rules.PlayerRadius + enemy.Definition.Radius).ToDouble() - 0.01, "적과 겹쳐 투입되었습니다");
         Check(gap < 80, "투입 지점에서 너무 멀리 옮겨졌습니다");
         Check(f.Match.Map.LineOfSight(late.Position, enemy.Position), "원래 투입 지점이 보이지 않는 곳으로 옮겨졌습니다");
         // 투입된 뒤에는 자기 시야로 적을 정상적으로 본다.

@@ -78,7 +78,7 @@ internal sealed class Fixture
         Match = new Match("TEST01", rules, 73);
         Player = Match.Join("p", "pilot")!;
         Player.Connected = true;
-        TestTools.Check(Match.Deploy(Player, BattleMap.Camp.X, BattleMap.Camp.Y));
+        TestTools.Check(Match.Deploy(Player, BattleMap.Camp.X.ToDouble(), BattleMap.Camp.Y.ToDouble()));
         TestTools.Advance(Match, rules.DeploySeconds + 0.01);
         TestTools.Equal(Player.State, "alive");
     }
@@ -113,6 +113,12 @@ internal static class TestTools
         {
             throw new Exception($"Expected {expected}, got {actual}");
         }
+    }
+
+    // 두 고정소수점 좌표 사이의 거리를 실수로 돌려준다. 검사에서 거리를 허용 오차와 비교할 때 쓴다.
+    public static double Distance(FixedVector a, FixedVector b)
+    {
+        return FixedVector.Distance(a, b).ToDouble();
     }
 
     public static void Near(double actual, double expected, double tolerance = 0.001)
@@ -151,7 +157,7 @@ internal static class TestTools
         EnemyDefinition still = new EnemyDefinition(definition.Id, definition.Name, definition.Radius,
             definition.Health, 0, definition.Skills);
         _id++;
-        Enemy enemy = new Enemy(_id, fixture.Player.Position + new System.Numerics.Vector2(50, 0), still);
+        Enemy enemy = new Enemy(_id, fixture.Player.Position + FixedVector.FromInt(50, 0), still);
         enemy.NextActionTick = long.MaxValue;
         fixture.Match.Enemies.Add(enemy);
         return enemy;

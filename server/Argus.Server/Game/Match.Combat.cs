@@ -1,5 +1,3 @@
-using System.Numerics;
-
 namespace Argus.Server.Game;
 
 public sealed partial class Match
@@ -64,16 +62,17 @@ public sealed partial class Match
                     continue;
                 }
                 Enemy? nearest = null;
-                double closest = double.PositiveInfinity;
+                Fixed closest = Fixed.Zero;
                 for (int k = 0; k < Enemies.Count; k++)
                 {
                     Enemy enemy = Enemies[k];
-                    double distance = Vector2.DistanceSquared(player.Position, enemy.Position);
+                    Fixed distance = FixedVector.DistanceSquared(player.Position, enemy.Position);
                     if (enemy.Hp <= 0 || !PlayerContact(player, action, enemy))
                     {
                         continue;
                     }
-                    if (distance < closest || (distance == closest && nearest != null && enemy.Id < nearest.Id))
+                    // 거리가 같으면 id가 작은 적을 고른다. 적 목록의 순서에 기대지 않는다.
+                    if (nearest == null || distance < closest || (distance == closest && enemy.Id < nearest.Id))
                     {
                         closest = distance;
                         nearest = enemy;
@@ -99,17 +98,18 @@ public sealed partial class Match
 
     private bool PlayerContact(Player player, PlayerAction action, Enemy enemy)
     {
-        return InReach(player.Position, player.AimDirection, action.Skill.Range, action.Skill.HalfWidth,
+        return InReach(player.Position, player.AimDirection, action.Skill.RangeFixed, action.Skill.HalfWidthFixed,
             enemy.Position, enemy.Definition.Radius);
     }
 
     // forward는 조준 방향의 길이 1 벡터다(Player.AimDirection, EnemyAction.Direction). 판정마다 삼각함수를 다시 구하지 않는다.
-    private bool InReach(Vector2 origin, Vector2 forward, double range, double halfWidth, Vector2 target, float radius)
+    // 대상까지의 벡터를 조준 방향의 앞뒤 거리(내적)와 옆 거리(외적의 크기)로 나눠, 사거리와 반폭(대상의 반지름만큼 넓힌)과 비교한다.
+    private bool InReach(FixedVector origin, FixedVector forward, Fixed range, Fixed halfWidth, FixedVector target, Fixed radius)
     {
-        Vector2 offset = target - origin;
-        double along = Vector2.Dot(offset, forward);
-        double side = Math.Abs(offset.X * forward.Y - offset.Y * forward.X);
-        if (along < 0 || along > range + radius || side > halfWidth + radius)
+        FixedVector offset = target - origin;
+        Fixed along = offset.Dot(forward);
+        Fixed side = Fixed.Abs(offset.Cross(forward));
+        if (along < Fixed.Zero || along > range + radius || side > halfWidth + radius)
         {
             return false;
         }
@@ -122,7 +122,7 @@ public sealed partial class Match
     // 사잇각을 구하지 않고 내적으로 비교한다. 사잇각이 반각 이하 ⟺ offset·forward ≥ |offset| × cos(반각)이다.
     // 반각이 반 바퀴 이상이면 내적을 보지 않고 모든 방향을 막는다. 방향 벡터는 1/4096 단위로 반올림해 길이가 1보다 조금 길 수 있어,
     // 코사인 -1과 내적으로 비교하면 정확히 뒤쪽(약 1° 안)을 놓친다. 반각이 60°일 때 이 오차는 0.01° 안쪽이라 판정에 드러나지 않는다.
-    private bool Faces(Vector2 origin, Vector2 forward, Vector2 target)
+    private bool Faces(FixedVector origin, FixedVector forward, FixedVector target)
     {
         if (!_guardsAnyDirection)
         {
@@ -132,8 +132,8 @@ public sealed partial class Match
         {
             return true;
         }
-        Vector2 offset = target - origin;
-        float along = Vector2.Dot(offset, forward);
+        FixedVector offset = target - origin;
+        Fixed along = offset.Dot(forward);
         return along >= offset.Length() * _guardCosine;
     }
 
@@ -147,7 +147,7 @@ public sealed partial class Match
     // 밀어치기는 적 몸 옆까지 조금 더 닿으므로, 전방 120°만 보면 그 자리의 대원이 맞기만 하고 상성으로 대응하지 못한다.
     private bool InActionArea(Enemy enemy, EnemyAction attack, Player player)
     {
-        bool reached = InReach(enemy.Position, attack.Direction, attack.Skill.Range, attack.Skill.HalfWidth, player.Position, Rules.PlayerRadius);
+        bool reached = InReach(enemy.Position, attack.Direction, attack.Skill.RangeFixed, attack.Skill.HalfWidthFixed, player.Position, Rules.PlayerRadius);
         if (reached)
         {
             return true;
@@ -162,7 +162,7 @@ public sealed partial class Match
     private bool Incoming(Enemy enemy, EnemyAction attack, Player player)
     {
         return Tick >= attack.ContactTick && Tick < attack.ActiveUntilTick && !attack.HitPlayers.Contains(player.Id) &&
-            InReach(enemy.Position, attack.Direction, attack.Skill.Range, attack.Skill.HalfWidth, player.Position, Rules.PlayerRadius);
+            InReach(enemy.Position, attack.Direction, attack.Skill.RangeFixed, attack.Skill.HalfWidthFixed, player.Position, Rules.PlayerRadius);
     }
 
     private void ResolveEnemyAction(Enemy enemy, EnemyAction attack)
@@ -428,7 +428,9 @@ public sealed partial class Match
     }
 
     // 벽을 친 효과를 벽 면에서 대원 쪽으로 당기는 거리다.
-    private const double WallEffectInset = 6;
+    private static readonly Fixed WallEffectInset = Fixed.FromInt(6);
+    // 시설을 칠 때 시설 몸의 반지름이다.
+    private static readonly Fixed FacilityRadius = Fixed.FromInt(27);
 
     private void ResolveStructures()
     {
@@ -453,14 +455,15 @@ public sealed partial class Match
                 {
                     Facility facility = Facilities[k];
                     if (facility.Hp > 0 && !action.HitFacilities.Contains(facility.Id) &&
-                        InReach(player.Position, player.AimDirection, action.Skill.Range, action.Skill.HalfWidth, facility.Position, 27))
+                        InReach(player.Position, player.AimDirection, action.Skill.RangeFixed, action.Skill.HalfWidthFixed,
+                            facility.Position, FacilityRadius))
                     {
                         action.HitFacilities.Add(facility.Id);
                         DamageFacility(facility);
                     }
                 }
-                Vector2 facing = player.AimDirection;
-                WallHit wall = Map.RayWall(player.Position, player.Position + facing * (float)action.Skill.Range);
+                FixedVector facing = player.AimDirection;
+                WallHit wall = Map.RayWall(player.Position, player.Position + facing * action.Skill.RangeFixed);
                 if (wall.Tile >= 0 && !action.HitWalls.Contains(wall.Tile))
                 {
                     action.HitWalls.Add(wall.Tile);
@@ -472,8 +475,8 @@ public sealed partial class Match
                     {
                         // 효과는 벽 면에서 대원 쪽으로 조금 당긴 곳에 둔다. 벽 면 위에 두면 시야 판정의 사선이
                         // 그 벽에 막혀, 벽이 부서지는 마지막 타격을 빼고는 스냅샷에서 걸러진다.
-                        double reach = Math.Max(0, action.Skill.Range * wall.Fraction - WallEffectInset);
-                        Effect(player.Position + facing * (float)reach, "hit", 0.4);
+                        Fixed reach = Fixed.Max(Fixed.Zero, action.Skill.RangeFixed * wall.Fraction - WallEffectInset);
+                        Effect(player.Position + facing * reach, "hit", 0.4);
                     }
                 }
             }

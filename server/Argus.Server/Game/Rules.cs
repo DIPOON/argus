@@ -21,7 +21,8 @@ public sealed class Rules
         return (double)ticks / TicksPerSecond;
     }
     public const int MaxPlayers = 4;
-    public const float PlayerRadius = 13;
+    // 대원 몸의 반지름이다. 판정에 쓰는 고정소수점 값이고, 스냅샷의 규칙에는 실수로 바꿔 보낸다.
+    public static readonly Fixed PlayerRadius = Fixed.FromInt(13);
     public double DeploySeconds { get; init; } = 5;
     public double PulseSeconds { get; init; } = 600;
     public double PulseDamage { get; init; } = 2;

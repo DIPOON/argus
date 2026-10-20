@@ -154,15 +154,15 @@ public sealed class MapSnapshot
     public int Cell { get; set; } = BattleMap.Cell;
     public int Columns { get; set; } = BattleMap.Columns;
     public int Rows { get; set; } = BattleMap.Rows;
-    public float CampX { get; set; } = BattleMap.Camp.X;
-    public float CampY { get; set; } = BattleMap.Camp.Y;
+    public float CampX { get; set; } = (float)BattleMap.Camp.X.ToDouble();
+    public float CampY { get; set; } = (float)BattleMap.Camp.Y.ToDouble();
 }
 
 public sealed class RulesSnapshot
 {
     public double Deploy { get; set; }
     public double Speed { get; set; }
-    public float PlayerRadius { get; set; } = Rules.PlayerRadius;
+    public float PlayerRadius { get; set; } = (float)Rules.PlayerRadius.ToDouble();
     public double GuardHalfAngle { get; set; }
     public double ParryFollowupSeconds { get; set; }
     public List<SkillDefinition> Skills { get; set; } = new List<SkillDefinition>();

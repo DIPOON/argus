@@ -1,4 +1,3 @@
-using System.Numerics;
 using System.Text.Json;
 
 namespace Argus.Server.Game;
@@ -49,8 +48,8 @@ public static class Snapshot
         message.Pulse = match.Pulse;
         long nextPulseTick = Rules.ToTicks((match.Pulse + 1) * match.Rules.PulseSeconds);
         message.NextPulse = Seconds(nextPulseTick - match.ElapsedTicks);
-        message.Extraction.X = BattleMap.Extraction.X;
-        message.Extraction.Y = BattleMap.Extraction.Y;
+        message.Extraction.X = (float)BattleMap.Extraction.X.ToDouble();
+        message.Extraction.Y = (float)BattleMap.Extraction.Y.ToDouble();
         message.Extraction.Progress = Round(match.ExtractionProgress);
         message.Extraction.Duration = match.Rules.ExtractionSeconds;
         message.Extraction.Unlocked = match.ObjectivesComplete;
@@ -76,7 +75,7 @@ public static class Snapshot
             entry.Name = enemy.Definition.Name;
             entry.Hp = enemy.Hp;
             entry.MaxHp = enemy.Definition.Health;
-            entry.Radius = enemy.Definition.Radius;
+            entry.Radius = (float)enemy.Definition.Radius.ToDouble();
             entry.Tiers = new int[enemy.Definition.Skills.Length];
             for (int j = 0; j < entry.Tiers.Length; j++)
             {
@@ -105,24 +104,24 @@ public static class Snapshot
         for (int i = 0; i < match.Effects.Count; i++)
         {
             Effect effect = match.Effects[i];
-            if (!match.Visible(new Vector2((float)effect.X, (float)effect.Y)))
+            if (!match.Visible(effect.Position))
             {
                 continue;
             }
             EffectSnapshot entry = new EffectSnapshot();
             entry.Id = effect.Id;
-            entry.X = effect.X;
-            entry.Y = effect.Y;
+            entry.X = Round(effect.Position.X);
+            entry.Y = Round(effect.Position.Y);
             entry.Kind = effect.Kind;
             entry.Until = Seconds(effect.UntilTick);
             message.Effects.Add(entry);
         }
-        message.Sight.Add(CreateSightPolygon(match, BattleMap.Camp, BattleMap.CampVision));
+        message.Sight.Add(CreateSightPolygon(match, BattleMap.Camp, Fixed.FromInt(BattleMap.CampVision)));
         for (int i = 0; i < match.Players.Count; i++)
         {
             if (match.Players[i].State == "alive")
             {
-                message.Sight.Add(CreateSightPolygon(match, match.Players[i].Position, match.Rules.Vision));
+                message.Sight.Add(CreateSightPolygon(match, match.Players[i].Position, match.VisionRange));
             }
         }
         for (int i = 0; i < match.Facilities.Count; i++)
@@ -130,8 +129,8 @@ public static class Snapshot
             Facility facility = match.Facilities[i];
             FacilitySnapshot entry = new FacilitySnapshot();
             entry.Id = facility.Id;
-            entry.X = facility.Position.X;
-            entry.Y = facility.Position.Y;
+            entry.X = (float)facility.Position.X.ToDouble();
+            entry.Y = (float)facility.Position.Y.ToDouble();
             entry.Hp = facility.Hp;
             entry.MaxHp = facility.MaxHp;
             message.Facilities.Add(entry);
@@ -172,8 +171,8 @@ public static class Snapshot
             Supply supply = match.Supplies[i];
             SupplySnapshot entry = new SupplySnapshot();
             entry.Id = supply.Id;
-            entry.X = supply.Position.X;
-            entry.Y = supply.Position.Y;
+            entry.X = (float)supply.Position.X.ToDouble();
+            entry.Y = (float)supply.Position.Y.ToDouble();
             entry.Objective = supply.Objective;
             entry.Collected = supply.Collected;
             // 보급 대기 시간은 대원마다 다르다.
@@ -269,34 +268,34 @@ public static class Snapshot
 
     // 시야 다각형의 96방향이다. 시야는 그리기에만 쓰지만, 같은 상태면 어느 기계에서나 같은 다각형을 보내도록 정수 각도로 구한다.
     // 방향은 늘 같으므로 방송마다 다시 구하지 않고 처음 한 번만 만들어 둔다.
-    private static readonly Vector2[] SightDirections = CreateSightDirections();
+    private static readonly FixedVector[] SightDirections = CreateSightDirections();
 
-    private static Vector2[] CreateSightDirections()
+    private static FixedVector[] CreateSightDirections()
     {
-        Vector2[] directions = new Vector2[96];
+        FixedVector[] directions = new FixedVector[96];
         for (int i = 0; i < directions.Length; i++)
         {
-            directions[i] = Match.Direction(Angle.FromFraction(i, directions.Length));
+            directions[i] = Angle.FromFraction(i, directions.Length).Direction();
         }
         return directions;
     }
 
-    private static int[] CreateSightPolygon(Match match, Vector2 origin, double radius)
+    private static int[] CreateSightPolygon(Match match, FixedVector origin, Fixed radius)
     {
         int[] points = new int[SightDirections.Length * 2];
         for (int i = 0; i < SightDirections.Length; i++)
         {
-            Vector2 target = origin + SightDirections[i] * (float)radius;
+            FixedVector target = origin + SightDirections[i] * radius;
             WallHit wall = match.Map.RayWall(origin, target);
-            Vector2 end = target;
-            if (!double.IsPositiveInfinity(wall.Fraction))
+            FixedVector end = target;
+            if (wall.Hit)
             {
-                // Vector2.Lerp는 곱셈과 덧셈을 한 번에(FMA) 계산하는 구현일 수 있고 그 여부가 CPU에 따라 다를 수 있어, 직접 곱하고 더한다.
-                end = origin + (target - origin) * (float)wall.Fraction;
+                // 벽에 닿은 비율만큼만 나아간 점에서 시야가 끝난다.
+                end = FixedVector.Lerp(origin, target, wall.Fraction);
             }
             // 시야 다각형은 그리기에만 쓰이고 1단위 미만은 화면에서 구분되지 않으므로 정수로 보낸다.
-            points[i * 2] = (int)Math.Round(end.X);
-            points[i * 2 + 1] = (int)Math.Round(end.Y);
+            points[i * 2] = (int)Math.Round(end.X.ToDouble());
+            points[i * 2 + 1] = (int)Math.Round(end.Y.ToDouble());
         }
         return points;
     }
@@ -304,6 +303,12 @@ public static class Snapshot
     private static double Round(double value)
     {
         return Math.Round(value, 2);
+    }
+
+    // 좌표를 보낼 실수로 바꿔 소수 둘째 자리로 반올림한다.
+    private static double Round(Fixed value)
+    {
+        return Math.Round(value.ToDouble(), 2);
     }
 
     // 틱 시각과 틱 수를 보낼 초로 바꾼다. 틱으로 된 시간 필드는 모두 이것을 거쳐 같은 방식(소수 둘째 자리)으로 반올림되므로,

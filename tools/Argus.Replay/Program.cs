@@ -289,7 +289,7 @@ internal static class Program
             Player player = match.Players[i];
             StringBuilder line = new StringBuilder();
             line.Append($"  대원 {player.Id} {player.Name} · {player.State} · 체력 {player.Hp:0.#}/{player.MaxHp:0.#} · 마나 {player.Mana}/{player.MaxMana}");
-            line.Append($" · 위치 ({player.Position.X:0.0}, {player.Position.Y:0.0}) · 조준 {player.Aim.ToRadians():0.00} · 연결 {player.Connected}");
+            line.Append($" · 위치 ({player.Position.X.ToDouble():0.0}, {player.Position.Y.ToDouble():0.0}) · 조준 {player.Aim.ToRadians():0.00} · 연결 {player.Connected}");
             for (int j = 0; j < player.Actions.Count; j++)
             {
                 PlayerAction action = player.Actions[j];
@@ -302,7 +302,7 @@ internal static class Program
         {
             Enemy enemy = match.Enemies[i];
             StringBuilder line = new StringBuilder();
-            line.Append($"    {enemy.Id} {enemy.Definition.Id} · 체력 {enemy.Hp:0.#} · 위치 ({enemy.Position.X:0.0}, {enemy.Position.Y:0.0})");
+            line.Append($"    {enemy.Id} {enemy.Definition.Id} · 체력 {enemy.Hp:0.#} · 위치 ({enemy.Position.X.ToDouble():0.0}, {enemy.Position.Y.ToDouble():0.0})");
             if (enemy.Action != null)
             {
                 line.Append($" · 행동 {enemy.Action.Skill.Kind}(시작 {enemy.Action.StartedTick}, 접촉 {enemy.Action.ContactTick}, 끝 {enemy.Action.EndsTick})");

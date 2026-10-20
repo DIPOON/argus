@@ -1,5 +1,3 @@
-using System.Numerics;
-
 namespace Argus.Server.Game;
 
 public sealed class Player
@@ -7,7 +5,7 @@ public sealed class Player
     public string Id { get; }
     public string Name { get; set; }
     public string[] Slots { get; set; } = new string[] { "strike", "parry", "grab", "strike" };
-    public Vector2 Position;
+    public FixedVector Position;
     // 조준 방향이다. 클라이언트가 보낸 라디안을 정수 각도로 바꿔 둔다.
     // 방향 벡터(AimDirection)는 판정마다 쓰므로 조준을 바꿀 때 한 번만 구해 둔다. 상태 요약에는 각도만 적는다.
     public Angle Aim
@@ -19,16 +17,16 @@ public sealed class Player
         set
         {
             _aim = value;
-            AimDirection = Match.Direction(value);
+            AimDirection = value.Direction();
         }
     }
-    public Vector2 AimDirection { get; private set; } = Match.Direction(Angle.Zero);
+    public FixedVector AimDirection { get; private set; } = Angle.Zero.Direction();
     private Angle _aim;
     public string State { get; set; } = "waiting";
     public bool HasDeployed;
     // 투입이 끝나는 틱이다.
     public long DeployTick;
-    public Vector2 Landing;
+    public FixedVector Landing;
     public double Hp;
     public double MaxHp;
     public int Mana;
@@ -40,7 +38,8 @@ public sealed class Player
     // 입력을 마지막으로 받은 틱이다. 받은 적이 없으면 NoInputTick이다.
     public long LastInputTick = NoInputTick;
     public long LastSequence = -1;
-    public Vector2 Move;
+    // 이동 방향이다. 길이는 1 이하이고, 틱마다 이 방향으로 이동 속도만큼 움직인다.
+    public FixedVector Move;
     public long Connection;
     public bool Connected;
     // 연결이 끊긴 틱이다. 연결되어 있으면 null이다.
@@ -130,7 +129,7 @@ public sealed class EnemyAction : ITimedAction
     public EnemySkill Skill { get; }
     public Angle Aim { get; }
     // 행동하는 동안 방향은 바뀌지 않으므로 방향 벡터를 만들 때 한 번만 구해 둔다.
-    public Vector2 Direction { get; }
+    public FixedVector Direction { get; }
     public long StartedTick { get; }
     public long ContactTick { get; }
     public long ActiveUntilTick { get; }
@@ -146,7 +145,7 @@ public sealed class EnemyAction : ITimedAction
         Id = id;
         Skill = skill;
         Aim = aim;
-        Direction = Match.Direction(aim);
+        Direction = aim.Direction();
         // 판정과 클라이언트의 예고가 같은 시간을 사용하도록 실제 접촉 시각에 배율을 적용한다.
         double windup = skill.Windup * windupMultiplier;
         // 단계마다 올림하면 끝이 한 틱씩 밀릴 수 있으므로, 각 단계의 끝을 시작부터 잰 초로 한 번에 올림한다.
@@ -166,14 +165,14 @@ public sealed class EnemyAction : ITimedAction
 public sealed class Enemy
 {
     public int Id { get; }
-    public Vector2 Position;
+    public FixedVector Position;
     public EnemyDefinition Definition { get; }
     public double Hp;
     // 다음 행동을 고를 수 있는 틱이다.
     public long NextActionTick;
     public EnemyAction? Action;
 
-    public Enemy(int id, Vector2 position, EnemyDefinition definition)
+    public Enemy(int id, FixedVector position, EnemyDefinition definition)
     {
         Id = id;
         Position = position;
@@ -185,11 +184,11 @@ public sealed class Enemy
 public sealed class Facility
 {
     public int Id { get; }
-    public Vector2 Position { get; }
+    public FixedVector Position { get; }
     public double Hp = 4;
     public double MaxHp = 4;
 
-    public Facility(int id, Vector2 position)
+    public Facility(int id, FixedVector position)
     {
         Id = id;
         Position = position;
@@ -199,13 +198,13 @@ public sealed class Facility
 public sealed class Supply
 {
     public int Id { get; }
-    public Vector2 Position { get; }
+    public FixedVector Position { get; }
     public bool Objective { get; }
     public bool Collected;
     // 대원마다 이 보급을 다시 쓸 수 있게 되는 틱이다.
     public Dictionary<string, long> ReadyTicks { get; } = new Dictionary<string, long>();
 
-    public Supply(int id, Vector2 position, bool objective)
+    public Supply(int id, FixedVector position, bool objective)
     {
         Id = id;
         Position = position;
@@ -225,17 +224,15 @@ public sealed class Supply
 public sealed class Effect
 {
     public int Id { get; }
-    public double X { get; }
-    public double Y { get; }
+    public FixedVector Position { get; }
     public string Kind { get; }
     // 이 틱이 되면 지운다. 스냅샷에는 초로 바꿔 보낸다.
     public long UntilTick { get; }
 
-    public Effect(int id, double x, double y, string kind, long untilTick)
+    public Effect(int id, FixedVector position, string kind, long untilTick)
     {
         Id = id;
-        X = x;
-        Y = y;
+        Position = position;
         Kind = kind;
         UntilTick = untilTick;
     }

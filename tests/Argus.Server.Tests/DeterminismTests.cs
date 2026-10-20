@@ -19,7 +19,7 @@ internal static class DeterminismTests
     private static void PortableGameCode()
     {
         // 컴파일된 게임 코드(Argus.Server.Game 이름공간의 모든 형식, 람다와 지역 함수 포함)가 부르는 메서드를 IL에서 모두 찾는다.
-        // 실수 수학과 벡터 형식은 결과가 정확히 정해진 허용 목록만 쓰고, 시드 없는 난수와 시계는 하나도 쓰지 않아야 한다.
+        // 실수 수학 형식은 결과가 정확히 정해진 허용 목록만 쓰고, 실수 벡터(Vector2 등)와 시드 없는 난수, 시계는 하나도 쓰지 않아야 한다.
         // 실제로 Windows의 Math.Atan2가 리눅스와 마지막 자리를 다르게 계산해, 같은 기록이 510틱부터 갈라진 적이 있다(docs/verification.md).
         List<string> game = PortabilityCheck.Violations(typeof(Match).Assembly, "Argus.Server.Game", out int inspected);
         Check(game.Count == 0, "게임 코드가 기계마다 다를 수 있는 함수를 씁니다: " + string.Join(", ", game));
@@ -28,11 +28,12 @@ internal static class DeterminismTests
 
         // 검사가 실제로 잡는지도 본다. 소스를 글자로 찾던 방식이 놓치던 경우를 모은 예제가 하나도 빠짐없이 걸려야 한다.
         List<string> probe = PortabilityCheck.Violations(typeof(DeterminismTests).Assembly, "PortabilityProbes", out int probed);
-        Check(probed >= 14, $"예제 메서드를 {probed}개만 살펴봤습니다");
+        Check(probed >= 15, $"예제 메서드를 {probed}개만 살펴봤습니다");
         string[] expected = new string[]
         {
             "System.Math.Sin", "System.Double.Atan2", "System.Math.SinCos", "System.Math.ReciprocalEstimate",
             "System.Math.Atan2", "System.Math.Cos", "System.MathF.FusedMultiplyAdd", "System.Numerics.Vector2.Lerp",
+            "System.Numerics.Vector2.Length",
             "System.Random..ctor", "System.Random.Next", "System.DateTime.get_UtcNow", "System.Diagnostics.Stopwatch.GetTimestamp",
             "System.Numerics.ITrigonometricFunctions`1.Sin", "System.Numerics.INumberBase`1.MultiplyAddEstimate"
         };
@@ -170,7 +171,7 @@ internal static class DeterminismTests
                 Player player = squad[i];
                 if (player.State == "waiting")
                 {
-                    match.Deploy(player, BattleMap.Camp.X + i * 30, BattleMap.Camp.Y);
+                    match.Deploy(player, BattleMap.Camp.X.ToDouble() + i * 30, BattleMap.Camp.Y.ToDouble());
                     continue;
                 }
                 double heading = tick * 0.05;
@@ -253,7 +254,7 @@ internal static class DeterminismTests
         Match match = new Match("BATCH1", new Rules(), 73);
         Player player = match.Join("p", "pilot")!;
         player.Connected = true;
-        Check(match.Deploy(player, BattleMap.Camp.X, BattleMap.Camp.Y));
+        Check(match.Deploy(player, BattleMap.Camp.X.ToDouble(), BattleMap.Camp.Y.ToDouble()));
         Advance(match, match.Rules.DeploySeconds + 0.01);
         Equal(player.State, "alive");
         player.Mana = player.MaxMana;
@@ -306,7 +307,7 @@ internal static class DeterminismTests
             {
                 match.Step();
             }
-            Check(match.Deploy(player, BattleMap.Camp.X, BattleMap.Camp.Y));
+            Check(match.Deploy(player, BattleMap.Camp.X.ToDouble(), BattleMap.Camp.Y.ToDouble()));
             int ticks = 0;
             while (player.State != "alive" && ticks < 200)
             {

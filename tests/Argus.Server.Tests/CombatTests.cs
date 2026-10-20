@@ -1,4 +1,3 @@
-using System.Numerics;
 using Argus.Server.Game;
 using Argus.Server.Networking;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -26,6 +25,7 @@ internal static class CombatTests
         tests.Add(new TestCase("Tier-two draws deal two to players and one to the elite only once", EliteDraw));
         tests.Add(new TestCase("Reduced HP leaves skill tiers unchanged; a weak skill can still be fully broken", WeakPhase));
         tests.Add(new TestCase("Wall cover prevents melee hits between otherwise clear endpoints", Cover));
+        tests.Add(new TestCase("The wall ray finds exact corners, edges, starting walls and both directions without rounding", RayWallEdges));
         tests.Add(new TestCase("Melee destroys walls and mission facilities through normal inputs", Structures));
         tests.Add(new TestCase("Every hit on a breakable wall shows a visible hit effect in front of the wall", WallHitEffect));
         tests.Add(new TestCase("Player-enemy and enemy-enemy bodies block movement while skills allow walking", Bodies));
@@ -189,7 +189,7 @@ internal static class CombatTests
         Enemy second = Threat(expired, "strike", arrivesIn: 0.56);
         Prepare(expired, expired.Player, "parry");
         // 반격 사거리 밖에서 적의 공격만 닿게 하여, 종료된 방어 창을 검사한다.
-        second.Position = expired.Player.Position + new Vector2(80, 0);
+        second.Position = expired.Player.Position + FixedVector.FromInt(80, 0);
         Advance(expired.Match, 0.6);
         Near(expired.Player.Hp, 5);
         Near(second.Hp, 1);
@@ -200,18 +200,18 @@ internal static class CombatTests
         Fixture f = new Fixture();
         Enemy first = Target(f);
         Enemy second = Target(f);
-        first.Position += new Vector2(0, 14);
-        second.Position -= new Vector2(0, 14);
+        first.Position += FixedVector.FromInt(0, 14);
+        second.Position -= FixedVector.FromInt(0, 14);
         PlayerAction grab = Prepare(f, f.Player, "grab");
         Advance(f.Match, 0.6);
         Near(first.Hp + second.Hp, 1);
         Check(grab.Target.HasValue);
         Fixture later = new Fixture();
         Enemy approaching = Target(later);
-        approaching.Position += new Vector2(200, 0);
+        approaching.Position += FixedVector.FromInt(200, 0);
         Prepare(later, later.Player, "grab");
         Advance(later.Match, 0.3);
-        approaching.Position = later.Player.Position + new Vector2(40, 0);
+        approaching.Position = later.Player.Position + FixedVector.FromInt(40, 0);
         Advance(later.Match, 0.1);
         Near(approaching.Hp, 0);
     }
@@ -220,7 +220,7 @@ internal static class CombatTests
     {
         Fixture f = new Fixture();
         Player ally = Ally(f, "ally");
-        ally.Position += new Vector2(30, 0);
+        ally.Position += FixedVector.FromInt(30, 0);
         f.Player.Mana = 12;
         for (int i = 0; i < 80; i++)
         {
@@ -277,7 +277,7 @@ internal static class CombatTests
         Fixture f = new Fixture();
         Player expired = Ally(f, "expired");
         Enemy enemy = Threat(f, "strike", 2);
-        enemy.Position = f.Player.Position + new Vector2(80, 0);
+        enemy.Position = f.Player.Position + FixedVector.FromInt(80, 0);
         Prepare(f, f.Player, "parry");
         Prepare(f, expired, "parry", 0.55);
         Advance(f.Match, 0.1);
@@ -345,15 +345,48 @@ internal static class CombatTests
         Equal(elite.Definition.Skills[1].Tier, 2);
     }
 
+    private static void RayWallEdges()
+    {
+        // 장애물 타일 (10, 10)은 x 480~528, y 480~528이다. 경계를 지나는 순서를 나누지 않고 엇갈려 곱해 비교하므로
+        // 꼭짓점이나 경계 위를 지나는 선분도 반올림 없이 판정한다. 비율은 1/4096 단위로 반올림한 값이다.
+        BattleMap map = new BattleMap();
+        int tile = 10 * BattleMap.Columns + 10;
+        Check(map.Solid(10, 10) && !map.Solid(9, 10) && !map.Solid(10, 9), "검사 조건(타일 배치)이 바뀌었습니다");
+
+        // 꼭짓점 (480, 480)을 정확히 지나는 대각선이다. 양옆 타일이 비어 있으므로 대각선 너머의 벽 타일에 닿는다. 비율은 80 / 200 = 0.4다.
+        WallHit corner = map.RayWall(FixedVector.FromInt(400, 400), FixedVector.FromInt(600, 600));
+        Check(corner.Hit, "꼭짓점을 지나는 선분이 벽을 지나쳤습니다");
+        Equal(corner.Tile, tile);
+        Equal(corner.Fraction.Raw, 1638L);
+
+        // 타일 윗면(y = 480) 위를 따라가는 선분은 그 줄(y 480~528)에 있으므로 벽에 닿는다. Raw 하나 위는 윗줄이라 닿지 않는다.
+        WallHit along = map.RayWall(FixedVector.FromInt(400, 480), FixedVector.FromInt(600, 480));
+        Check(along.Hit && along.Tile == tile, "경계 위를 지나는 선분이 벽을 지나쳤습니다");
+        Equal(along.Fraction.Raw, 1638L);
+        Fixed above = Fixed.FromRaw(480 * Fixed.Scale - 1);
+        Check(map.LineOfSight(new FixedVector(Fixed.FromInt(400), above), new FixedVector(Fixed.FromInt(600), above)), "경계 바로 위의 선분이 막혔습니다");
+
+        // 반대 방향(오른쪽에서 왼쪽)으로는 오른쪽 면 x = 528에서 닿는다. 비율은 72 / 200 = 0.36(1474.56칸)이라 1475다.
+        WallHit back = map.RayWall(FixedVector.FromInt(600, 500), FixedVector.FromInt(400, 500));
+        Check(back.Hit && back.Tile == tile, "반대 방향 선분이 벽을 지나쳤습니다");
+        Equal(back.Fraction.Raw, 1475L);
+
+        // 벽 안에서 시작하면 비율 0에서 닿는다. 선분이 벽 앞에서 끝나면 닿지 않는다.
+        WallHit inside = map.RayWall(FixedVector.FromInt(500, 500), FixedVector.FromInt(700, 500));
+        Check(inside.Hit && inside.Tile == tile && inside.Fraction == Fixed.Zero, "벽 안에서 시작한 선분이 닿지 않았습니다");
+        Check(!map.RayWall(FixedVector.FromInt(400, 500), FixedVector.FromInt(479, 500)).Hit, "벽 앞에서 끝난 선분이 닿았습니다");
+        Check(map.RayWall(FixedVector.FromInt(400, 500), FixedVector.FromInt(480, 500)).Hit, "벽 면에서 끝난 선분이 닿지 않았습니다");
+    }
+
     private static void Cover()
     {
         Fixture f = new Fixture();
-        f.Player.Position = new Vector2(464, 498);
+        f.Player.Position = FixedVector.FromInt(464, 498);
         f.Player.Aim = Angle.FromRadians(313 * Math.PI / 180);
         Enemy enemy = Target(f);
-        enemy.Position = new Vector2(495, 465);
-        Check(f.Match.Map.CanStand(f.Player.Position));
-        Check(f.Match.Map.CanStand(enemy.Position));
+        enemy.Position = FixedVector.FromInt(495, 465);
+        Check(f.Match.Map.CanStand(f.Player.Position, Rules.PlayerRadius));
+        Check(f.Match.Map.CanStand(enemy.Position, enemy.Definition.Radius));
         Check(!f.Match.Map.LineOfSight(f.Player.Position, enemy.Position));
         Prepare(f, f.Player, "strike");
         Advance(f.Match, 0.3);
@@ -363,7 +396,7 @@ internal static class CombatTests
     private static void Structures()
     {
         Fixture f = new Fixture();
-        f.Player.Position = new Vector2(680, 500);
+        f.Player.Position = FixedVector.FromInt(680, 500);
         f.Player.Mana = 12;
         for (int i = 0; i < 70; i++)
         {
@@ -372,7 +405,7 @@ internal static class CombatTests
         }
         Check(!f.Match.Map.Solid(15, 10));
         Check(!f.Match.Map.Damage(0, 100));
-        f.Player.Position = f.Match.Facilities[0].Position - new Vector2(55, 0);
+        f.Player.Position = f.Match.Facilities[0].Position - FixedVector.FromInt(55, 0);
         for (int i = 70; i < 170; i++)
         {
             f.Match.Input(f.Player, i, 0, 0, 0, 1);
@@ -385,7 +418,7 @@ internal static class CombatTests
     {
         // 오른쪽 벽(왼쪽 면 x = 720)을 마주 보고 한 번 친다. 부술 수 있는 벽은 체력이 3이라 한 번에 부서지지 않는다.
         Fixture f = new Fixture();
-        f.Player.Position = new Vector2(680, 500);
+        f.Player.Position = FixedVector.FromInt(680, 500);
         f.Player.Aim = Angle.Zero;
         f.Player.Mana = 1;
         f.Match.Input(f.Player, 1, 0, 0, 0, 1);
@@ -415,19 +448,19 @@ internal static class CombatTests
             f.Match.Input(f.Player, i, 1, 0, Math.PI, 2);
             f.Match.Step();
         }
-        Check(f.Player.Position.X > 300);
-        Check(f.Player.Position.X <= enemy.Position.X - enemy.Definition.Radius - Rules.PlayerRadius + 0.001);
+        Check(f.Player.Position.X > Fixed.FromInt(300));
+        Check(f.Player.Position.X <= enemy.Position.X - enemy.Definition.Radius - Rules.PlayerRadius + Fixed.FromRaw(4));
         Check(f.Player.Mana < 5);
         Fixture moving = new Fixture();
-        Enemy lead = new Enemy(1, new Vector2(390, 730), EnemyDefinition.Grunt);
-        Enemy following = new Enemy(2, new Vector2(420, 730), EnemyDefinition.Grunt);
+        Enemy lead = new Enemy(1, FixedVector.FromInt(390, 730), EnemyDefinition.Grunt);
+        Enemy following = new Enemy(2, FixedVector.FromInt(420, 730), EnemyDefinition.Grunt);
         moving.Match.Enemies.Add(lead);
         moving.Match.Enemies.Add(following);
         for (int i = 0; i < 90; i++)
         {
             moving.Match.Step();
-            Check(Vector2.Distance(lead.Position, following.Position) >= 26 - 0.001);
-            Check(Vector2.Distance(lead.Position, moving.Player.Position) >= 26 - 0.001);
+            Check(Distance(lead.Position, following.Position) >= 26 - 0.001);
+            Check(Distance(lead.Position, moving.Player.Position) >= 26 - 0.001);
         }
     }
 
@@ -459,7 +492,7 @@ internal static class CombatTests
         Fixture guarded = new Fixture();
         Enemy striker = Target(guarded);
         double side = 40 * Math.PI / 180;
-        striker.Position = guarded.Player.Position + new Vector2((float)Math.Cos(side), (float)Math.Sin(side)) * 50;
+        striker.Position = guarded.Player.Position + Angle.FromRadians(side).Direction() * 50;
         striker.Action = new EnemyAction(30010, new EnemySkill("strike", 1, 0, 0.05, 85, 25), Angle.FromRadians(side + Math.PI), guarded.Match.Tick);
         Use(guarded, shield, 30011);
         Advance(guarded.Match, 0.08);
@@ -479,8 +512,8 @@ internal static class CombatTests
         Fixture held = new Fixture();
         Enemy near = Target(held);
         Enemy far = Target(held);
-        near.Position = held.Player.Position + new Vector2(40, 0);
-        far.Position = held.Player.Position + new Vector2(58, 0);
+        near.Position = held.Player.Position + FixedVector.FromInt(40, 0);
+        far.Position = held.Player.Position + FixedVector.FromInt(58, 0);
         Use(held, hook, 30013);
         Advance(held.Match, 0.2);
         Near(near.Hp, 0);
@@ -489,7 +522,7 @@ internal static class CombatTests
         // 구조물 파괴: 접촉 중에 시설을 부순다.
         Fixture breaker = new Fixture();
         Facility facility = breaker.Match.Facilities[0];
-        breaker.Player.Position = facility.Position - new Vector2(40, 0);
+        breaker.Player.Position = facility.Position - FixedVector.FromInt(40, 0);
         Use(breaker, smash, 30014);
         Advance(breaker.Match, 0.25);
         Near(facility.Hp, facility.MaxHp - 1);
@@ -497,7 +530,7 @@ internal static class CombatTests
         // 반격의 구조물 파괴도 속성으로 정한다. 받아치기를 본뜬 기술의 반격은 시설을 부순다.
         Fixture countering = new Fixture();
         Facility struck = countering.Match.Facilities[0];
-        countering.Player.Position = struck.Position - new Vector2(40, 0);
+        countering.Player.Position = struck.Position - FixedVector.FromInt(40, 0);
         Use(countering, shield, 30015);
         Advance(countering.Match, shield.ActiveSeconds + 0.1);
         Near(struck.Hp, struck.MaxHp - 1);
@@ -508,7 +541,7 @@ internal static class CombatTests
             true, true, false, false, false);
         Fixture deflecting = new Fixture();
         Facility kept = deflecting.Match.Facilities[0];
-        deflecting.Player.Position = kept.Position - new Vector2(40, 0);
+        deflecting.Player.Position = kept.Position - FixedVector.FromInt(40, 0);
         Use(deflecting, deflect, 30016);
         Advance(deflecting.Match, deflect.ActiveSeconds + 0.1);
         Near(kept.Hp, kept.MaxHp);
@@ -520,9 +553,9 @@ internal static class CombatTests
         Fixture shielded = new Fixture();
         Player front = Ally(shielded, "front");
         Enemy blocker = Target(shielded);
-        blocker.Position = new Vector2(420, 730);
-        front.Position = new Vector2(380, 730);
-        shielded.Player.Position = new Vector2(460, 730);
+        blocker.Position = FixedVector.FromInt(420, 730);
+        front.Position = FixedVector.FromInt(380, 730);
+        shielded.Player.Position = FixedVector.FromInt(460, 730);
         shielded.Player.Aim = Angle.FromRadians(Math.PI);
         blocker.Action = new EnemyAction(30050, new EnemySkill("block", 1, 0, 1, 62, 15), Angle.FromRadians(Math.PI), shielded.Match.Tick);
         PlayerAction behind = Prepare(shielded, shielded.Player, "strike", 0.2);
@@ -535,9 +568,9 @@ internal static class CombatTests
         Fixture flanked = new Fixture();
         Player target = Ally(flanked, "target");
         Enemy striker = Target(flanked);
-        striker.Position = new Vector2(420, 730);
-        target.Position = new Vector2(380, 730);
-        flanked.Player.Position = new Vector2(460, 730);
+        striker.Position = FixedVector.FromInt(420, 730);
+        target.Position = FixedVector.FromInt(380, 730);
+        flanked.Player.Position = FixedVector.FromInt(460, 730);
         flanked.Player.Aim = Angle.FromRadians(Math.PI);
         striker.Action = new EnemyAction(30051, new EnemySkill("strike", 1, 0, 0.05, 85, 25), Angle.FromRadians(Math.PI), flanked.Match.Tick - Rules.ToTicks(0.05));
         Prepare(flanked, flanked.Player, "strike", 0.2);
@@ -550,15 +583,16 @@ internal static class CombatTests
     private static void ShoveReach()
     {
         // 방패는 왼쪽(π)을 향하고 대원은 적 몸 옆 70° 자리에 붙어 있다. 방패의 전방 120° 밖이지만 밀어치기는 닿는다.
-        Vector2 beside = new Vector2((float)(Math.Cos(Math.PI + 1.22) * 27), (float)(Math.Sin(Math.PI + 1.22) * 27));
-        double aim = Math.Atan2(-beside.Y, -beside.X);
+        FixedVector beside = Angle.FromRadians(Math.PI + 1.22).Direction() * 27;
+        // 대원은 적 쪽(beside의 반대 방향)을 본다.
+        Angle aim = Angle.Of(-beside);
 
         // 밀어치기가 닿는 대원은 준비 중인 잡기로도 받아칠 수 있어야 한다. 잡기는 방어를 이긴다.
         Fixture grabbing = new Fixture();
         Enemy shover = Target(grabbing);
-        shover.Position = new Vector2(420, 730);
+        shover.Position = FixedVector.FromInt(420, 730);
         grabbing.Player.Position = shover.Position + beside;
-        grabbing.Player.Aim = Angle.FromRadians(aim);
+        grabbing.Player.Aim = aim;
         shover.Action = new EnemyAction(30052, new EnemySkill("block", 1, 0, 0.05, 62, 15), Angle.FromRadians(Math.PI), grabbing.Match.Tick - Rules.ToTicks(0.05));
         PlayerAction grab = Prepare(grabbing, grabbing.Player, "grab");
         Advance(grabbing.Match, Rules.Step);
@@ -569,9 +603,9 @@ internal static class CombatTests
         // 같은 자리에서 친 타격은 측면 공격이 아니다. 방어가 타격을 이긴다.
         Fixture striking = new Fixture();
         Enemy guard = Target(striking);
-        guard.Position = new Vector2(420, 730);
+        guard.Position = FixedVector.FromInt(420, 730);
         striking.Player.Position = guard.Position + beside;
-        striking.Player.Aim = Angle.FromRadians(aim);
+        striking.Player.Aim = aim;
         guard.Action = new EnemyAction(30053, new EnemySkill("block", 1, 0, 0.05, 62, 15), Angle.FromRadians(Math.PI), striking.Match.Tick - Rules.ToTicks(0.05));
         PlayerAction strike = Prepare(striking, striking.Player, "strike", 0.2);
         Advance(striking.Match, Rules.Step);
@@ -600,13 +634,13 @@ internal static class CombatTests
         // 처음에는 먼 적 하나만 잡기 범위에 있다.
         Fixture f = new Fixture();
         Enemy far = Target(f);
-        far.Position = f.Player.Position + new Vector2(45, 0);
+        far.Position = f.Player.Position + FixedVector.FromInt(45, 0);
         Enemy near = Target(f);
-        near.Position = f.Player.Position + new Vector2(200, 0);
+        near.Position = f.Player.Position + FixedVector.FromInt(200, 0);
         Prepare(f, f.Player, "grab");
         Advance(f.Match, Rules.Step);
         // 준비 동작(0.12초) 중에 더 가까운 적이 들어온다. 접촉하는 순간 가장 가까운 적을 잡아야 한다.
-        near.Position = f.Player.Position + new Vector2(28, 0);
+        near.Position = f.Player.Position + FixedVector.FromInt(28, 0);
         Advance(f.Match, 0.15);
         Near(near.Hp, 0);
         Near(far.Hp, 1);
@@ -617,14 +651,14 @@ internal static class CombatTests
         // 접촉 바로 전 틱까지는 first만 잡기 범위에 있다.
         Fixture f = new Fixture();
         Enemy first = Target(f);
-        first.Position = f.Player.Position + new Vector2(58, 0);
+        first.Position = f.Player.Position + FixedVector.FromInt(58, 0);
         Enemy second = Target(f);
-        second.Position = f.Player.Position + new Vector2(200, 0);
+        second.Position = f.Player.Position + FixedVector.FromInt(200, 0);
         PlayerAction grab = Prepare(f, f.Player, "grab");
         Advance(f.Match, 0.1);
         Check(f.Match.Tick < grab.ContactTick, "접촉 전 틱이 아닙니다");
         // 접촉하는 틱 직전에 second가 더 가까이 들어온다. 접촉하는 틱에 가장 가까운 second를 잡아야 한다.
-        second.Position = f.Player.Position + new Vector2(30, 15);
+        second.Position = f.Player.Position + FixedVector.FromInt(30, 15);
         Advance(f.Match, Rules.Step);
         Check(f.Match.Tick >= grab.ContactTick, "접촉 틱이 아닙니다");
         Near(second.Hp, 0);
@@ -633,14 +667,14 @@ internal static class CombatTests
         // 준비 동작 중에 대상이 범위를 벗어나면 대상을 비운다. 그 뒤 범위에 들어온 적을 잡아야 한다.
         Fixture g = new Fixture();
         Enemy leaving = Target(g);
-        leaving.Position = g.Player.Position + new Vector2(45, 0);
+        leaving.Position = g.Player.Position + FixedVector.FromInt(45, 0);
         PlayerAction hold = Prepare(g, g.Player, "grab");
         Advance(g.Match, Rules.Step);
-        leaving.Position = g.Player.Position + new Vector2(300, 0);
+        leaving.Position = g.Player.Position + FixedVector.FromInt(300, 0);
         Advance(g.Match, 0.15);
         Check(g.Match.Tick >= hold.ContactTick && g.Match.Tick < hold.ActiveUntilTick, "잡기 유효 시간이 아닙니다");
         Enemy arriving = Target(g);
-        arriving.Position = g.Player.Position + new Vector2(30, 0);
+        arriving.Position = g.Player.Position + FixedVector.FromInt(30, 0);
         Advance(g.Match, Rules.Step);
         Near(arriving.Hp, 0);
         Near(leaving.Hp, 1);
@@ -661,10 +695,10 @@ internal static class CombatTests
         // 밀린 틱을 몰아서 진행해도 이동 경로가 벽을 통과하지 않는다. 오른쪽 벽의 왼쪽 면은 x = 720이다.
         Fixture walker = new Fixture();
         Room walkerRoom = new Room(walker.Match, null);
-        walker.Player.Position = new Vector2(680, 500);
+        walker.Player.Position = FixedVector.FromInt(680, 500);
         walker.Match.Input(walker.Player, 1, 1, 0, 0, 0);
         host.StepRoom(walker.Match.Code, walkerRoom, TickClock.MaxTicksPerWake, false);
-        Check(walker.Player.Position.X < 720, "밀린 틱을 진행하다 벽을 통과했습니다");
-        Check(walker.Player.Position.X > 700, "벽까지 이동하지 않았습니다");
+        Check(walker.Player.Position.X < Fixed.FromInt(720), "밀린 틱을 진행하다 벽을 통과했습니다");
+        Check(walker.Player.Position.X > Fixed.FromInt(700), "벽까지 이동하지 않았습니다");
     }
 }

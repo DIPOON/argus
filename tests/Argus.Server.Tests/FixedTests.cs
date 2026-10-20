@@ -63,6 +63,17 @@ internal static class FixedTests
         Equal(Fixed.FromInt(-2).FloorToInt(), -2);
         Equal(Fixed.FromInt(-2).CeilingToInt(), -2);
 
+        // 타일 번호: 정수로 나눈 몫을 정확히 내린다. 나눗셈 연산자(/)는 반올림하므로, 경계 바로 앞의 값(Raw 하나 모자람)도
+        // 다음 타일로 넘어가지 않아야 한다. 음수는 작은 쪽으로 내린다.
+        Equal(Fixed.FromInt(96).FloorDivide(48), 2);
+        Equal(Fixed.FromRaw(96 * Fixed.Scale - 1).FloorDivide(48), 1);
+        Equal(Fixed.FromInt(47).FloorDivide(48), 0);
+        Equal(Fixed.Zero.FloorDivide(48), 0);
+        Equal(Fixed.FromRaw(-1).FloorDivide(48), -1);
+        Equal(Fixed.FromInt(-48).FloorDivide(48), -1);
+        Equal(Fixed.FromRaw(-48 * Fixed.Scale - 1).FloorDivide(48), -2);
+        Throws<ArgumentOutOfRangeException>(() => Fixed.One.FloorDivide(0));
+
         Equal(Fixed.Abs(Fixed.FromInt(-3)), Fixed.FromInt(3));
         Equal(Fixed.Min(Fixed.One, Fixed.Zero), Fixed.Zero);
         Equal(Fixed.Max(Fixed.One, Fixed.Zero), Fixed.One);

@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -51,15 +50,11 @@ public sealed class StateHasher : IDisposable
         AddLong(BitConverter.DoubleToInt64Bits(value));
     }
 
-    public void AddFloat(float value)
+    // 고정소수점 좌표는 정수 Raw를 그대로 적는다.
+    public void AddPoint(FixedVector value)
     {
-        AddInt(BitConverter.SingleToInt32Bits(value));
-    }
-
-    public void AddPoint(Vector2 value)
-    {
-        AddFloat(value.X);
-        AddFloat(value.Y);
+        AddLong(value.X.Raw);
+        AddLong(value.Y.Raw);
     }
 
     // 길이를 먼저 적는다. 그러지 않으면 "ab"+"c"와 "a"+"bc"가 같은 바이트가 된다.

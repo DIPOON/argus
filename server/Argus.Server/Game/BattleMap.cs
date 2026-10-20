@@ -1,18 +1,21 @@
-using System.Numerics;
-
 namespace Argus.Server.Game;
 
-// 벽과 충돌한 지점과 타일 번호를 함께 돌려준다.
+// 선분이 벽에 닿았는지와 그 지점이다. Hit가 false면 끝점까지 막힘이 없다.
+// Fraction은 시작점에서 끝점까지 간 비율(0~1)이고, Tile은 닿은 타일 번호다(맵 밖이면 -1).
 public readonly struct WallHit
 {
-    public double Fraction { get; }
+    public bool Hit { get; }
+    public Fixed Fraction { get; }
     public int Tile { get; }
 
-    public WallHit(double fraction, int tile)
+    public WallHit(bool hit, Fixed fraction, int tile)
     {
+        Hit = hit;
         Fraction = fraction;
         Tile = tile;
     }
+
+    public static WallHit None { get; } = new WallHit(false, Fixed.Zero, -1);
 }
 
 public sealed class BattleMap
@@ -22,8 +25,8 @@ public sealed class BattleMap
     public const int Cell = 48;
     public const int Width = Columns * Cell;
     public const int Height = Rows * Cell;
-    public static readonly Vector2 Camp = new Vector2(300, 730);
-    public static readonly Vector2 Extraction = new Vector2(1080, 1130);
+    public static readonly FixedVector Camp = FixedVector.FromInt(300, 730);
+    public static readonly FixedVector Extraction = FixedVector.FromInt(1080, 1130);
     public const int CampVision = 260;
     public byte[] Tiles { get; } = new byte[Columns * Rows];
     private readonly double[] _hp = new double[Columns * Rows];
@@ -120,22 +123,19 @@ public sealed class BattleMap
         return true;
     }
 
-    public bool CanStand(Vector2 position, float radius = 13)
+    public bool CanStand(FixedVector position, Fixed radius)
     {
-        if (!float.IsFinite(position.X) || !float.IsFinite(position.Y))
-        {
-            return false;
-        }
         if (position.X < radius || position.Y < radius ||
-            position.X > Width - radius || position.Y > Height - radius)
+            position.X > Fixed.FromInt(Width) - radius || position.Y > Fixed.FromInt(Height) - radius)
         {
             return false;
         }
 
-        int minX = (int)((position.X - radius) / Cell);
-        int maxX = (int)((position.X + radius) / Cell);
-        int minY = (int)((position.Y - radius) / Cell);
-        int maxY = (int)((position.Y + radius) / Cell);
+        int minX = (position.X - radius).FloorDivide(Cell);
+        int maxX = (position.X + radius).FloorDivide(Cell);
+        int minY = (position.Y - radius).FloorDivide(Cell);
+        int maxY = (position.Y + radius).FloorDivide(Cell);
+        Fixed radiusSquared = radius * radius;
         for (int y = minY; y <= maxY; y++)
         {
             for (int x = minX; x <= maxX; x++)
@@ -145,10 +145,11 @@ public sealed class BattleMap
                     continue;
                 }
 
-                Vector2 nearest = new Vector2(
-                    Math.Clamp(position.X, x * Cell, (x + 1) * Cell),
-                    Math.Clamp(position.Y, y * Cell, (y + 1) * Cell));
-                if (Vector2.DistanceSquared(nearest, position) < radius * radius)
+                // 타일 사각형에서 몸의 중심에 가장 가까운 점이 반지름보다 가까우면 겹친다.
+                FixedVector nearest = new FixedVector(
+                    Fixed.Clamp(position.X, Fixed.FromInt(x * Cell), Fixed.FromInt((x + 1) * Cell)),
+                    Fixed.Clamp(position.Y, Fixed.FromInt(y * Cell), Fixed.FromInt((y + 1) * Cell)));
+                if (FixedVector.DistanceSquared(nearest, position) < radiusSquared)
                 {
                     return false;
                 }
@@ -157,48 +158,74 @@ public sealed class BattleMap
         return true;
     }
 
-    public WallHit RayWall(Vector2 from, Vector2 to)
+    // from에서 to까지의 선분이 처음 닿는 벽을 찾는다. 타일 경계를 지나는 순서대로 한 칸씩 나아간다.
+    // 일정 간격으로 점을 찍어 보는 방식은 모서리를 조금 스친 벽을 놓칠 수 있다.
+    // 경계마다 지나는 비율은 (경계까지 남은 거리) / (선분의 길이)다. 두 축 중 어느 경계를 먼저 지나는지는 나누지 않고
+    // 엇갈려 곱해 비교한다(a / b < c / d ⟺ a × d < c × b). 그래서 순서가 반올림 없이 정확하고, 곱은 맵 안에서 2^47 아래라
+    // JavaScript로도 같은 계산을 할 수 있다.
+    public WallHit RayWall(FixedVector from, FixedVector to)
     {
-        // 타일 경계를 순서대로 지난다. 일정 간격 샘플링은 모서리를 조금 스친 벽을 놓칠 수 있다.
-        int x = (int)Math.Floor(from.X / Cell);
-        int y = (int)Math.Floor(from.Y / Cell);
+        int x = from.X.FloorDivide(Cell);
+        int y = from.Y.FloorDivide(Cell);
         if (Solid(x, y))
         {
-            return TileHit(0, x, y);
+            return TileHit(Fixed.Zero, x, y);
         }
-        double dx = to.X - from.X;
-        double dy = to.Y - from.Y;
+        long dx = to.X.Raw - from.X.Raw;
+        long dy = to.Y.Raw - from.Y.Raw;
         int stepX = Math.Sign(dx);
         int stepY = Math.Sign(dy);
-        double nextX = double.PositiveInfinity;
-        double nextY = double.PositiveInfinity;
-        double deltaX = double.PositiveInfinity;
-        double deltaY = double.PositiveInfinity;
-        if (dx != 0)
+        long width = Math.Abs(dx);
+        long height = Math.Abs(dy);
+        long cell = Cell * Fixed.Scale;
+        // 다음 세로 경계와 가로 경계까지 남은 거리(Raw)다. 그 축으로 움직이지 않으면 쓰지 않는다.
+        long untilX = 0;
+        if (dx > 0)
         {
-            double boundary = x * Cell;
-            if (dx > 0)
-            {
-                boundary += Cell;
-            }
-            nextX = (boundary - from.X) / dx;
-            deltaX = Cell / Math.Abs(dx);
+            untilX = (x + 1) * cell - from.X.Raw;
         }
-        if (dy != 0)
+        else if (dx < 0)
         {
-            double boundary = y * Cell;
-            if (dy > 0)
-            {
-                boundary += Cell;
-            }
-            nextY = (boundary - from.Y) / dy;
-            deltaY = Cell / Math.Abs(dy);
+            untilX = from.X.Raw - x * cell;
         }
-        while (Math.Min(nextX, nextY) <= 1)
+        long untilY = 0;
+        if (dy > 0)
         {
-            double fraction = Math.Min(nextX, nextY);
-            if (Math.Abs(nextX - nextY) < 0.000000001)
+            untilY = (y + 1) * cell - from.Y.Raw;
+        }
+        else if (dy < 0)
+        {
+            untilY = from.Y.Raw - y * cell;
+        }
+        while (true)
+        {
+            // 비율이 1 이하(남은 거리 ≤ 선분의 길이)인 경계만 선분 안에 있다.
+            bool reachesX = dx != 0 && untilX <= width;
+            bool reachesY = dy != 0 && untilY <= height;
+            if (!reachesX && !reachesY)
             {
+                return WallHit.None;
+            }
+            // -1이면 세로 경계를 먼저, 1이면 가로 경계를 먼저, 0이면 꼭짓점을 동시에 지난다.
+            int order;
+            if (reachesX && reachesY)
+            {
+                long crossX = Fixed.Safe(checked(untilX * height));
+                long crossY = Fixed.Safe(checked(untilY * width));
+                order = crossX.CompareTo(crossY);
+            }
+            else if (reachesX)
+            {
+                order = -1;
+            }
+            else
+            {
+                order = 1;
+            }
+            Fixed fraction;
+            if (order == 0)
+            {
+                fraction = Ratio(untilX, width);
                 // 정확한 꼭짓점 통과도 양옆 타일을 확인한다.
                 if (Solid(x + stepX, y))
                 {
@@ -210,41 +237,48 @@ public sealed class BattleMap
                 }
                 x += stepX;
                 y += stepY;
-                nextX += deltaX;
-                nextY += deltaY;
+                untilX += cell;
+                untilY += cell;
             }
-            else if (nextX < nextY)
+            else if (order < 0)
             {
+                fraction = Ratio(untilX, width);
                 x += stepX;
-                nextX += deltaX;
+                untilX += cell;
             }
             else
             {
+                fraction = Ratio(untilY, height);
                 y += stepY;
-                nextY += deltaY;
+                untilY += cell;
             }
             if (Solid(x, y))
             {
                 return TileHit(fraction, x, y);
             }
         }
-        return new WallHit(double.PositiveInfinity, -1);
     }
 
-    private static WallHit TileHit(double fraction, int x, int y)
+    // 거리의 비율(part / whole, 0~1)을 고정소수점으로 바꾼다.
+    private static Fixed Ratio(long part, long whole)
+    {
+        return Fixed.FromRaw(Fixed.DivideRounded(part * Fixed.Scale, whole));
+    }
+
+    private static WallHit TileHit(Fixed fraction, int x, int y)
     {
         int tile = -1;
         if (x >= 0 && y >= 0 && x < Columns && y < Rows)
         {
             tile = y * Columns + x;
         }
-        return new WallHit(fraction, tile);
+        return new WallHit(true, fraction, tile);
     }
 
-    public bool LineOfSight(Vector2 from, Vector2 to)
+    public bool LineOfSight(FixedVector from, FixedVector to)
     {
         WallHit wall = RayWall(from, to);
-        return double.IsPositiveInfinity(wall.Fraction);
+        return !wall.Hit;
     }
 
     // 상태 요약에 벽 종류, 벽 체력, 판 번호를 적는다.
