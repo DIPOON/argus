@@ -100,20 +100,17 @@ public sealed partial class Match
         {
             Supplies.Add(new Supply(i + 1, layout.Supplies[i].Position, layout.Supplies[i].Objective));
         }
-        // 처음 배치하는 적의 종류다. 모두 병사이고, 엘리트를 켠 작전은 세 자리마다 둘째가 분쇄자, 셋째가 철위병이다.
-        // 자리는 배치(Layout.InitialEnemySpots)가 정하고 여기서는 종류만 고른다.
+        // 처음 배치하는 적이다. 자리와 종류는 배치(Layout.InitialEnemySpots)가 정한다.
+        // 엘리트를 끈 작전에서는 엘리트 자리에도 병사를 둔다.
         for (int i = 0; i < layout.InitialEnemySpots.Count; i++)
         {
-            EnemyDefinition kind = EnemyDefinition.Grunt;
-            if (Rules.AllowEliteEnemies && i % 3 == 1)
+            EnemySpot spot = layout.InitialEnemySpots[i];
+            EnemyDefinition kind = spot.Kind;
+            if (!Rules.AllowEliteEnemies && kind.IsElite)
             {
-                kind = EnemyDefinition.Breaker;
+                kind = EnemyDefinition.Grunt;
             }
-            else if (Rules.AllowEliteEnemies && i % 3 == 2)
-            {
-                kind = EnemyDefinition.Warden;
-            }
-            PlaceInitialEnemy(layout.InitialEnemySpots[i], kind);
+            PlaceInitialEnemy(spot.Position, kind);
         }
     }
 

@@ -23,7 +23,8 @@ public sealed class BattleMap
     public const int Cell = 48;
     // 캠프의 시야 반경이다. 캠프 둘레는 대원이 없어도 늘 보인다.
     public const int CampVision = 260;
-    // 부술 수 있는 벽(종류 1)의 체력이다. 다른 칸은 부서지지 않아 체력을 쓰지 않는다.
+    // 부술 수 있는 벽(종류 1)의 체력이다. 부술 수 없는 벽(종류 2)은 무한대이고, 빈 땅은 0이다.
+    // 체력을 읽는 코드가 벽 종류를 먼저 보지 않아도, 부술 수 없는 벽을 이미 부서진 벽(체력 0 이하)으로 보지 않는다.
     private const double BreakableWallHp = 3;
     public int Columns { get; }
     public int Rows { get; }
@@ -44,6 +45,10 @@ public sealed class BattleMap
             if (Tiles[i] == 1)
             {
                 _hp[i] = BreakableWallHp;
+            }
+            else if (Tiles[i] == 2)
+            {
+                _hp[i] = double.PositiveInfinity;
             }
         }
     }

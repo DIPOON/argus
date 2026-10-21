@@ -26,7 +26,7 @@ public sealed class RecordingStore
     }
 
     // 방의 기록 파일을 연다. 기록할 수 없으면(폴더 권한 등) 알리고 null을 돌려준다. 그래도 방은 그대로 만들어진다.
-    public RecordingFile? Open(string room, byte[] seed, Rules rules)
+    public RecordingFile? Open(string room, byte[] seed, Rules rules, MissionLayout layout)
     {
         lock (_gate)
         {
@@ -46,6 +46,7 @@ public sealed class RecordingStore
                 header.Room = room;
                 header.Seed = Convert.ToHexString(seed);
                 header.Rules = rules;
+                header.Layout = LayoutRecord.From(layout);
                 header.Created = created;
                 RecordingFile file = new RecordingFile(Path.Combine(Folder, name), header, _logger, Released);
                 _open.Add(file);

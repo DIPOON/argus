@@ -12,6 +12,7 @@ internal static class RecordingTests
         tests.Add(new TestCase("A recorded session replays to the same state at every checkpoint and at the end", RecordedSessionReplays));
         tests.Add(new TestCase("Changing one recorded input makes the replay stop at the next checkpoint", TamperedRecordingStops));
         tests.Add(new TestCase("Replaying with another seed stops at the first checkpoint", WrongSeedStops));
+        tests.Add(new TestCase("A recording keeps the room's layout, so a room on another map replays on that map", OtherLayoutReplays));
         tests.Add(new TestCase("Replaying up to a tick leaves the room as it was at that tick", ReplayUntilTick));
         tests.Add(new TestCase("A room recorded to disk through RoomHost replays from its file, with its bug report", DiskRecording));
         tests.Add(new TestCase("Old recordings are pruned while reported ones are kept apart", Retention));
@@ -70,6 +71,7 @@ internal static class RecordingTests
         session.Header.Room = "REC001";
         session.Header.Seed = Convert.ToHexString(seed);
         session.Header.Rules = rules;
+        session.Header.Layout = LayoutRecord.From(match.Layout);
         session.Header.Version = "test";
 
         string[] ids = new string[] { "a", "b", "c", "d" };
@@ -325,7 +327,7 @@ internal static class RecordingTests
             string[] paths = new string[6];
             for (int i = 0; i < paths.Length; i++)
             {
-                RecordingFile file = store.Open("ROOM" + i, seed, new Rules())!;
+                RecordingFile file = store.Open("ROOM" + i, seed, new Rules(), MissionLayout.CreateHandmade())!;
                 paths[i] = file.Path;
                 // 한 번도 접속하지 않은 방의 기록은 닫을 때 지워지므로 접속 줄을 넣는다.
                 file.Write(new MatchRecord(0, "connect"));
@@ -357,7 +359,8 @@ internal static class RecordingTests
             // 기록한 세션을 파일로 다 쓴 뒤, 서버가 갑자기 꺼진 것처럼 파일 끝을 잘라 낸다.
             Session session = Recorded();
             RecordingStore store = new RecordingStore(folder, 200, NullLogger<RecordingStore>.Instance);
-            RecordingFile file = store.Open(session.Header.Room, Convert.FromHexString(session.Header.Seed), session.Header.Rules)!;
+            RecordingFile file = store.Open(session.Header.Room, Convert.FromHexString(session.Header.Seed), session.Header.Rules,
+                session.Header.Layout!.ToLayout())!;
             for (int i = 0; i < session.Records.Count; i++)
             {
                 if (session.Records[i].Type != "end")
@@ -450,6 +453,45 @@ internal static class RecordingTests
         }
     }
 
+    // 손으로 만든 맵이 아닌 24×18 맵의 방을 기록한다. 머리를 파일에 쓰는 것과 같은 설정으로 JSON에 적었다 다시 읽어 재생한다.
+    // 배치를 빼고 재생하면 손으로 만든 맵의 방이 되어 첫 요약값에서 갈라진다.
+    private static void OtherLayoutReplays()
+    {
+        MissionLayout layout = LayoutTests.SmallLayout();
+        Rules rules = new Rules();
+        byte[] seed = SeededRandom.SeedFromNumber(19);
+        Match match = new Match("LAY001", rules, seed, layout);
+        MemoryRecorder recorder = new MemoryRecorder();
+        match.Recorder = recorder;
+        Player player = match.Join("p", "pilot")!;
+        Check(match.Deploy(player, layout.Camp.X.ToDouble(), layout.Camp.Y.ToDouble()));
+        long ticks = Rules.ToTicks(20);
+        for (long tick = 0; tick < ticks; tick++)
+        {
+            double heading = tick * 0.04;
+            match.Input(player, tick, Math.Cos(heading), Math.Sin(heading), 0, 0);
+            match.Step();
+        }
+
+        RecordingHeader header = new RecordingHeader();
+        header.Version = "test";
+        header.Room = "LAY001";
+        header.Seed = Convert.ToHexString(seed);
+        header.Rules = rules;
+        header.Layout = LayoutRecord.From(layout);
+        string text = System.Text.Json.JsonSerializer.Serialize(header, RecordingFormat.Json);
+        RecordingHeader read = System.Text.Json.JsonSerializer.Deserialize<RecordingHeader>(text, RecordingFormat.Json)!;
+        Equal(read.Layout!.Columns, 24);
+        ReplayResult result = MatchReplay.Run(read, recorder.Records);
+        Check(!result.DivergedAt.HasValue, $"다른 크기의 맵 기록이 {result.DivergedAt}틱에서 갈라졌습니다");
+        Check(result.Checkpoints >= 20, $"요약값을 {result.Checkpoints}개만 비교했습니다");
+        Equal(result.Match.StateHash(), match.StateHash());
+
+        read.Layout = null;
+        ReplayResult handmade = MatchReplay.Run(read, recorder.Records);
+        Equal(handmade.DivergedAt, (long?)Rules.TicksPerSecond);
+    }
+
     private static RecordingHeader CopyHeader(RecordingHeader source, string version)
     {
         RecordingHeader header = new RecordingHeader();
@@ -457,6 +499,7 @@ internal static class RecordingTests
         header.Room = source.Room;
         header.Seed = source.Seed;
         header.Rules = source.Rules;
+        header.Layout = source.Layout;
         return header;
     }
 

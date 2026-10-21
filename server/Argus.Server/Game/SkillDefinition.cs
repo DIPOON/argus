@@ -102,6 +102,8 @@ public sealed class EnemyDefinition
     // 한 틱에 움직이는 거리다. 1/30을 곱하지 않고 30으로 나눈다. 1/30을 고정소수점으로 반올림하면 0.3% 어긋난다.
     public Fixed StepPerTick { get; }
     public EnemySkill[] Skills { get; }
+    // 2티어 기술이 하나라도 있으면 엘리트다. 엘리트를 끈 작전(Rules.AllowEliteEnemies가 false)에는 나오지 않는다.
+    public bool IsElite { get; }
 
     public EnemyDefinition(string id, string name, Fixed radius, int health, double speed, EnemySkill[] skills)
     {
@@ -112,6 +114,27 @@ public sealed class EnemyDefinition
         Speed = speed;
         StepPerTick = Fixed.FromDouble(speed) / Rules.TicksPerSecond;
         Skills = skills;
+        for (int i = 0; i < skills.Length; i++)
+        {
+            if (skills[i].Tier >= 2)
+            {
+                IsElite = true;
+            }
+        }
+    }
+
+    // id로 정의를 찾는다. 기록에 적은 적 종류를 되읽을 때 쓴다. 모르는 id면 예외를 낸다.
+    public static EnemyDefinition FromId(string id)
+    {
+        EnemyDefinition[] all = new EnemyDefinition[] { Grunt, Breaker, Warden };
+        for (int i = 0; i < all.Length; i++)
+        {
+            if (all[i].Id == id)
+            {
+                return all[i];
+            }
+        }
+        throw new ArgumentException($"적 종류 {id}를 모릅니다", nameof(id));
     }
 
     public static readonly EnemyDefinition Grunt = new EnemyDefinition("grunt", "병사", Fixed.FromInt(13), 1, 100,

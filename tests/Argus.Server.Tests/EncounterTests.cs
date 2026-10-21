@@ -32,7 +32,7 @@ internal static class EncounterTests
         for (int i = 0; i < kinds.Length; i++)
         {
             Enemy enemy = match.Enemies[i];
-            FixedVector spot = match.Layout.InitialEnemySpots[i];
+            FixedVector spot = match.Layout.InitialEnemySpots[i].Position;
             Check(enemy.Position == spot, $"{i}번째 적이 {enemy.Position}에 있습니다. 자리는 {spot}입니다");
             Equal(enemy.Definition.Id, kinds[i]);
         }

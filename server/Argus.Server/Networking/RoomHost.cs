@@ -392,7 +392,7 @@ public sealed class RoomHost : BackgroundService
         // 진행 루프와 겹치지 않도록 방 잠금 안에서 붙인다. 붙이기 전에 진행한 틱은 재생할 때도 그대로 진행된다.
         if (_recordings != null)
         {
-            RecordingFile? recording = _recordings.Open(room.Match.Code, seed, room.Match.Rules);
+            RecordingFile? recording = _recordings.Open(room.Match.Code, seed, room.Match.Rules, room.Match.Layout);
             lock (room.Gate)
             {
                 room.Recording = recording;
