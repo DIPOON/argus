@@ -1,5 +1,3 @@
-using System.Numerics;
-
 namespace Argus.Server.Game;
 
 // 방 하나의 상태와 진행 순서다. 전투 판정과 몸 충돌은 같은 partial class의 별도 파일에 있다.
@@ -44,7 +42,26 @@ public sealed partial class Match
     // 음수 반각은 어느 방향도 막지 않고, 반 바퀴 이상이면 모든 방향을 막는다. 그 사이는 사잇각 대신 내적으로 판정하므로 반각의 코사인을 한 번 구해 둔다.
     private readonly bool _guardsAnyDirection;
     private readonly bool _guardsEveryDirection;
-    private readonly float _guardCosine;
+    private readonly Fixed _guardCosine;
+    // 대원이 한 틱에 움직이는 거리다. 1/30을 곱하지 않고 30으로 나눈다. 1/30을 고정소수점으로 반올림하면 0.3% 어긋난다.
+    private readonly Fixed _playerStep;
+    // 시야 반경의 제곱이다. 거리 비교는 제곱근을 구하지 않고 제곱끼리 한다.
+    private readonly Fixed _visionSquared;
+    // 캠프 시야 반경의 제곱이다. 캠프 시야는 규칙이 아니라 맵에 정해져 있어 한 번만 구한다.
+    private static readonly Fixed CampVisionSquared = Fixed.FromInt(BattleMap.CampVision * BattleMap.CampVision);
+    // 투입 위치로 받을 수 있는 가장 큰 좌표 크기다. 맵(2000 미만)보다 훨씬 큰 값은 고정소수점으로 바꾸기 전에 거른다.
+    private const double MaxCoordinate = 1_000_000;
+    // 아래 세 기준은 뜻이 다르다. 앞의 둘은 값이 같지만(Raw 4, 약 0.001) 하나는 거리의 제곱에 두는 여유이고,
+    // 하나는 길이의 제곱으로 본 "방향 없음"의 기준이다. 셋째는 길이(제곱이 아님)의 기준이다.
+    // 몸끼리 딱 붙은 자리를 겹친 것으로 보지 않게 하는, 거리의 제곱에 두는 여유다. 거리의 제곱은 성분마다 반올림하므로 조금 작게 나올 수 있다.
+    private static readonly Fixed TouchTolerance = Fixed.FromRaw(4);
+    // 길이의 제곱이 이보다 작은 벡터는 방향이 없는 것으로 본다. 거의 0인 벡터로 적의 이동 방향을 정하지 않게 한다.
+    // 이 기준을 넘는 벡터는 길이가 Raw 111(약 0.027)보다 길어, 정규화한 결과의 길이가 1에서 0.5% 넘게 벗어나지 않는다.
+    private static readonly Fixed TinyLengthSquared = Fixed.FromRaw(4);
+    // 적끼리 밀어내는 방향을 구하는 가장 짧은 거리다. 길이는 Raw 단위로 반올림하므로, 아주 짧은 벡터를 그 길이로 나누면
+    // 길이가 1에서 크게 벗어난다(Raw (2, 4)는 길이 4로 나뉘어 길이 1.118이 된다). 1 이상이면 벗어나는 정도가 0.03% 아래다.
+    // 살아 있는 적끼리는 몸 충돌(CanOccupy) 때문에 반지름의 합보다 가까워지지 않으므로, 정상 진행에서는 이 기준에 걸리지 않는다.
+    private static readonly Fixed SeparationMinimum = Fixed.One;
     private static readonly int[] NeighborX = new int[] { 1, -1, 0, 0 };
     private static readonly int[] NeighborY = new int[] { 0, 0, 1, -1 };
 
@@ -61,16 +78,19 @@ public sealed partial class Match
         _guardsEveryDirection = guardHalfAngle >= Angle.HalfTurn;
         if (_guardsAnyDirection)
         {
-            _guardCosine = (float)Angle.FromUnits(guardHalfAngle).Cos().ToDouble();
+            _guardCosine = Angle.FromUnits(guardHalfAngle).Cos();
         }
-        Facilities.Add(new Facility(1, new Vector2(960, 485)));
-        Facilities.Add(new Facility(2, new Vector2(1210, 695)));
-        Facilities.Add(new Facility(3, new Vector2(990, 920)));
-        Supplies.Add(new Supply(1, BattleMap.Camp + new Vector2(70, 40), false));
-        Supplies.Add(new Supply(2, new Vector2(845, 640), true));
-        Supplies.Add(new Supply(3, new Vector2(1150, 835), true));
-        Supplies.Add(new Supply(4, new Vector2(815, 985), false));
-        Supplies.Add(new Supply(5, new Vector2(1080, 740), false));
+        _playerStep = Fixed.FromDouble(rules.PlayerSpeed) / Rules.TicksPerSecond;
+        VisionRange = Fixed.FromDouble(rules.Vision);
+        _visionSquared = VisionRange * VisionRange;
+        Facilities.Add(new Facility(1, FixedVector.FromInt(960, 485)));
+        Facilities.Add(new Facility(2, FixedVector.FromInt(1210, 695)));
+        Facilities.Add(new Facility(3, FixedVector.FromInt(990, 920)));
+        Supplies.Add(new Supply(1, BattleMap.Camp + FixedVector.FromInt(70, 40), false));
+        Supplies.Add(new Supply(2, FixedVector.FromInt(845, 640), true));
+        Supplies.Add(new Supply(3, FixedVector.FromInt(1150, 835), true));
+        Supplies.Add(new Supply(4, FixedVector.FromInt(815, 985), false));
+        Supplies.Add(new Supply(5, FixedVector.FromInt(1080, 740), false));
         // 처음 배치하는 적의 종류다. 첫 작전은 모두 병사이고, 엘리트를 켠 작전은 뒤의 둘이 분쇄자와 철위병이다.
         // 자리는 InitialEnemySpots 한 곳에서 정하고 여기서는 종류만 고른다.
         EnemyDefinition[] kinds = new EnemyDefinition[] { EnemyDefinition.Grunt, EnemyDefinition.Grunt, EnemyDefinition.Grunt };
@@ -89,6 +109,9 @@ public sealed partial class Match
     public Match(string code, Rules rules, int seed) : this(code, rules, SeededRandom.SeedFromNumber(seed))
     {
     }
+
+    // 살아 있는 대원의 시야 반경이다. 스냅샷의 시야 다각형도 이 값으로 그린다.
+    public Fixed VisionRange { get; }
 
     // 지금 시각(초)이다. 틱 번호에서 바로 구한다.
     public double Now
@@ -223,7 +246,12 @@ public sealed partial class Match
         {
             return false;
         }
-        Vector2 target = new Vector2((float)x, (float)y);
+        // 맵에서 아주 먼 값은 고정소수점으로 바꿀 수 없으므로 먼저 거른다. 어차피 맵 밖이라 아래 벽 검사에서도 거절된다.
+        if (Math.Abs(x) > MaxCoordinate || Math.Abs(y) > MaxCoordinate)
+        {
+            return false;
+        }
+        FixedVector target = FixedVector.FromDouble(x, y);
         // 위치 선택의 즉시 응답으로 시야 밖 적을 탐색할 수 없도록 공개된 벽만 검사한다.
         // 적과 겹치는지는 5초 뒤 실제 투입 직전에 검사한다.
         if (!Map.CanStand(target, Rules.PlayerRadius))
@@ -264,10 +292,11 @@ public sealed partial class Match
         }
         player.LastSequence = sequence;
         player.LastInputTick = Tick;
-        player.Move = new Vector2((float)moveX, (float)moveY);
-        if (player.Move.LengthSquared() > 1)
+        // 이동 방향은 길이 1까지만 쓴다. 대각선 입력(1, 1)이 한 방향 입력보다 빠르지 않게 한다.
+        player.Move = FixedVector.FromDouble(moveX, moveY);
+        if (player.Move.LengthSquared() > Fixed.One)
         {
-            player.Move = Vector2.Normalize(player.Move);
+            player.Move = player.Move.Normalize();
         }
         player.Aim = Angle.FromRadians(aim);
         player.RequestedSlot = slot;
@@ -279,7 +308,7 @@ public sealed partial class Match
         Record("disconnect", player);
         player.Connected = false;
         player.DisconnectedTick = Tick;
-        player.Move = Vector2.Zero;
+        player.Move = FixedVector.Zero;
         player.RequestedSlot = 0;
     }
 
@@ -320,7 +349,6 @@ public sealed partial class Match
 
     private void RunTick()
     {
-        double dt = Rules.Step;
         RemoveExpiredObjects();
         if (Phase == "ended" || CheckWipe())
         {
@@ -354,7 +382,7 @@ public sealed partial class Match
         {
             if (Players[i].State == "alive")
             {
-                UpdatePlayer(Players[i], dt);
+                UpdatePlayer(Players[i]);
             }
         }
         if (ElapsedTicks >= _nextSpawnTick && Enemies.Count < Rules.MaxEnemies)
@@ -369,7 +397,7 @@ public sealed partial class Match
             _nextFlowTick = Tick + Rules.ToTicks(0.5);
             BuildFlow();
         }
-        UpdateEnemies(dt);
+        UpdateEnemies();
         ResolveCombat();
         for (int i = Enemies.Count - 1; i >= 0; i--)
         {
@@ -448,7 +476,7 @@ public sealed partial class Match
             }
             // 숨은 적이 투입 지점을 막고 있어도 실패시키지 않고 가장 가까운 빈 자리로 투입한다.
             // 대기로 되돌리면 대기 중인 대원이 투입 결과만으로 안개 속 적의 위치를 알아낼 수 있다.
-            Vector2? landing = FindLanding(player.Landing);
+            FixedVector? landing = FindLanding(player.Landing);
             if (!landing.HasValue)
             {
                 // 반지름 640 안이 모두 막힌, 맵 대부분이 막힌 경우다. 대기로 되돌리지 않고 다음 틱에 다시 찾는다.
@@ -462,7 +490,7 @@ public sealed partial class Match
             player.RequestedSlot = 0;
             player.State = "alive";
             player.HasDeployed = true;
-            player.Move = Vector2.Zero;
+            player.Move = FixedVector.Zero;
             player.LastInputTick = Player.NoInputTick;
             Effect(player.Position, "deploy", 0.6);
             if (Phase == "staging")
@@ -477,7 +505,7 @@ public sealed partial class Match
     // 투입 지점이 비어 있으면 그대로 쓴다. 막혀 있으면 16단위 간격의 고리를 넓혀 가며 가장 가까운 빈 자리를 찾는다.
     // 후보는 원래 투입 지점이 보이는 곳으로 제한한다. 벽 너머로 옮겨지면 옮겨졌다는 사실만으로
     // 보이지 않는 곳에 무언가 있다는 것을 알게 되기 때문이다. 128단위 안에 없으면 캠프, 캠프도 막혔으면 반지름 640까지 넓혀 찾고, 그래도 없으면 null이다.
-    private Vector2? FindLanding(Vector2 landing)
+    private FixedVector? FindLanding(FixedVector landing)
     {
         if (CanOccupy(landing, Rules.PlayerRadius, null))
         {
@@ -485,11 +513,11 @@ public sealed partial class Match
         }
         for (int ring = 1; ring <= 8; ring++)
         {
-            float radius = ring * 16;
+            int radius = ring * 16;
             for (int i = 0; i < 16; i++)
             {
                 Angle angle = Angle.FromFraction(i, 16);
-                Vector2 candidate = landing + Direction(angle) * radius;
+                FixedVector candidate = landing + angle.Direction() * radius;
                 if (CanOccupy(candidate, Rules.PlayerRadius, null) && Map.LineOfSight(candidate, landing))
                 {
                     return candidate;
@@ -505,12 +533,13 @@ public sealed partial class Match
         // 반지름이 커질수록 고리 둘레에 맞춰 후보를 늘려, 후보 사이 간격이 16을 넘지 않게 한다.
         for (int ring = 9; ring <= 40; ring++)
         {
-            float radius = ring * 16;
-            int samples = Math.Max(16, (int)(Math.Tau * radius / 16));
+            int radius = ring * 16;
+            // 둘레(2π × 반지름)를 16씩 나눈 수다. 반지름이 16 × ring이므로 2π × ring을 내린 값과 같다.
+            int samples = Math.Max(16, (int)(Math.Tau * ring));
             for (int i = 0; i < samples; i++)
             {
                 Angle angle = Angle.FromFraction(i, samples);
-                Vector2 candidate = landing + Direction(angle) * radius;
+                FixedVector candidate = landing + angle.Direction() * radius;
                 if (CanOccupy(candidate, Rules.PlayerRadius, null))
                 {
                     return candidate;
@@ -520,15 +549,15 @@ public sealed partial class Match
         return null;
     }
 
-    private void UpdatePlayer(Player player, double dt)
+    private void UpdatePlayer(Player player)
     {
         // 입력이 0.35초(11틱) 동안 없으면 멈춘다. 끊긴 연결이 마지막 입력으로 계속 움직이지 않게 한다.
         if (Tick - player.LastInputTick >= Rules.ToTicks(0.35))
         {
-            player.Move = Vector2.Zero;
+            player.Move = FixedVector.Zero;
             player.RequestedSlot = 0;
         }
-        player.Position = MoveBody(player.Position, player.Move * (float)(Rules.PlayerSpeed * dt), Rules.PlayerRadius, null);
+        player.Position = MoveBody(player.Position, player.Move * _playerStep, Rules.PlayerRadius, null);
         for (int i = player.Actions.Count - 1; i >= 0; i--)
         {
             if (player.Actions[i].EndsTick <= Tick)
@@ -556,8 +585,10 @@ public sealed partial class Match
         for (int i = 0; i < Supplies.Count; i++)
         {
             Supply supply = Supplies[i];
+            // 거리는 제곱끼리 비교한다(35² = 1225).
             if (supply.Collected || supply.ReadyTick(player) > Tick ||
-                Vector2.Distance(player.Position, supply.Position) > 35 || !Map.LineOfSight(player.Position, supply.Position))
+                FixedVector.DistanceSquared(player.Position, supply.Position) > Fixed.FromInt(35 * 35) ||
+                !Map.LineOfSight(player.Position, supply.Position))
             {
                 continue;
             }
@@ -599,7 +630,8 @@ public sealed partial class Match
     {
         for (int i = 0; i < Players.Count; i++)
         {
-            if (Players[i].State == "alive" && Vector2.Distance(Players[i].Position, BattleMap.Extraction) < 80)
+            if (Players[i].State == "alive" &&
+                FixedVector.DistanceSquared(Players[i].Position, BattleMap.Extraction) < Fixed.FromInt(80 * 80))
             {
                 return true;
             }
@@ -638,7 +670,7 @@ public sealed partial class Match
         player.Deaths++;
         player.RequestedSlot = 0;
         player.Actions.Clear();
-        player.Move = Vector2.Zero;
+        player.Move = FixedVector.Zero;
         Note($"{player.Name} 사망 · 증원 위치를 선택하세요");
     }
 
@@ -670,16 +702,16 @@ public sealed partial class Match
         }
     }
 
-    public bool Visible(Vector2 point)
+    public bool Visible(FixedVector point)
     {
-        if (Vector2.DistanceSquared(BattleMap.Camp, point) <= BattleMap.CampVision * BattleMap.CampVision && Map.LineOfSight(BattleMap.Camp, point))
+        if (FixedVector.DistanceSquared(BattleMap.Camp, point) <= CampVisionSquared && Map.LineOfSight(BattleMap.Camp, point))
         {
             return true;
         }
         for (int i = 0; i < Players.Count; i++)
         {
             Player player = Players[i];
-            if (player.State == "alive" && Vector2.DistanceSquared(player.Position, point) <= Rules.Vision * Rules.Vision &&
+            if (player.State == "alive" && FixedVector.DistanceSquared(player.Position, point) <= _visionSquared &&
                 Map.LineOfSight(player.Position, point))
             {
                 return true;
@@ -699,9 +731,9 @@ public sealed partial class Match
         }
     }
 
-    private void Effect(Vector2 at, string kind, double duration)
+    private void Effect(FixedVector at, string kind, double duration)
     {
         _nextId++;
-        Effects.Add(new Effect(_nextId, at.X, at.Y, kind, Tick + Rules.ToTicks(duration)));
+        Effects.Add(new Effect(_nextId, at, kind, Tick + Rules.ToTicks(duration)));
     }
 }

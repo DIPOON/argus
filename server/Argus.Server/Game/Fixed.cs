@@ -195,6 +195,52 @@ public readonly struct Fixed : IEquatable<Fixed>, IComparable<Fixed>
         return checked((int)floored);
     }
 
+    // 가장 가까운 정수로 반올림한다. 딱 절반이면 0에서 먼 쪽이다(0.5는 1, 2.5는 3, -0.5는 -1).
+    // 실수의 Math.Round는 딱 절반이면 짝수 쪽(2.5는 2)으로 가므로, 다른 연산과 같은 규칙이 되도록 Raw에서 바로 반올림한다.
+    public int RoundToInt()
+    {
+        long rounded = ShiftRounded(Raw, FractionBits);
+        return checked((int)rounded);
+    }
+
+    // 정수 divisor로 나눈 몫을 작은 쪽 정수로 내린다. 좌표를 타일 크기로 나눠 타일 번호를 구할 때 쓴다.
+    // 나눗셈 연산자(/)는 가장 가까운 값으로 반올림하므로, 그 뒤에 내리면 타일 경계 바로 앞의 값이 다음 타일로 넘어갈 수 있다.
+    // 그래서 Raw를 (divisor × 4096)으로 직접 나눠 정확히 내린다. 음수는 작은 쪽(-0.5는 -1)으로 내린다.
+    public int FloorDivide(int divisor)
+    {
+        if (divisor <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(divisor), divisor, "양의 정수로만 나눌 수 있습니다");
+        }
+        long whole = divisor * Scale;
+        long quotient = Raw / whole;
+        // C#의 정수 나눗셈은 0 쪽으로 버리므로, 음수에서 나머지가 있으면 하나 더 내린다.
+        if (Raw < 0 && Raw % whole != 0)
+        {
+            quotient--;
+        }
+        return checked((int)quotient);
+    }
+
+    // 정수 divisor로 나눈 몫을 큰 쪽 정수로 올린다. 이동을 몇 걸음으로 나눌지 구할 때 쓴다.
+    // FloorDivide와 같은 이유로, 반올림하는 나눗셈 연산자(/) 뒤에 올리지 않고 Raw를 (divisor × 4096)으로 직접 나눠 올린다.
+    // 음수는 큰 쪽(-0.5는 0)으로 올린다.
+    public int CeilingDivide(int divisor)
+    {
+        if (divisor <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(divisor), divisor, "양의 정수로만 나눌 수 있습니다");
+        }
+        long whole = divisor * Scale;
+        long quotient = Raw / whole;
+        // C#의 정수 나눗셈은 0 쪽으로 버리므로, 양수에서 나머지가 있으면 하나 더 올린다.
+        if (Raw > 0 && Raw % whole != 0)
+        {
+            quotient++;
+        }
+        return checked((int)quotient);
+    }
+
     // 제곱근을 가장 가까운 고정소수점 값으로 구한다. 실수 제곱근을 거치지 않고 정수 연산만 쓴다.
     public static Fixed Sqrt(Fixed value)
     {

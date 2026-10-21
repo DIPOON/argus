@@ -15,13 +15,6 @@ internal static class PortabilityCheck
         "Equals", "GetHashCode", "CompareTo", "ToString"
     };
 
-    // 좌표에 쓰는 Vector2는 곱셈·덧셈·제곱근만 쓰는 연산만 허용한다. Lerp처럼 곱셈과 덧셈을 한 번에(FMA) 할 수 있는 것은 뺀다.
-    private static readonly string[] ExactVector = new string[]
-    {
-        ".ctor", "op_Addition", "op_Subtraction", "op_Multiply", "op_Division", "op_UnaryNegation", "op_Equality", "op_Inequality",
-        "get_Zero", "Length", "LengthSquared", "Distance", "DistanceSquared", "Dot", "Normalize", "Equals", "GetHashCode", "ToString"
-    };
-
     // 일반화 수학 인터페이스의 연산자와 기본값이다. 사칙연산과 비교라 결과가 정해져 있다.
     private static readonly string[] ExactOperators = new string[]
     {
@@ -191,15 +184,8 @@ internal static class PortabilityCheck
             }
             return full;
         }
-        if (ownerName == "System.Numerics.Vector2")
-        {
-            if (Array.IndexOf(ExactVector, name) >= 0)
-            {
-                return null;
-            }
-            return full;
-        }
-        // 다른 벡터·행렬·하드웨어 가속 형식은 하나도 쓰지 않는다. 정수 연산인 BitOperations는 여기에 들지 않는다.
+        // 실수 벡터(Vector2 등)·행렬·하드웨어 가속 형식은 하나도 쓰지 않는다. 좌표와 거리는 고정소수점(FixedVector)으로 계산한다.
+        // Vector2.Lerp처럼 곱셈과 덧셈을 한 번에(FMA) 하는지가 CPU에 따라 달라지는 연산도 있다. 정수 연산인 BitOperations는 여기에 들지 않는다.
         if (ownerName.StartsWith("System.Numerics.Vector", StringComparison.Ordinal) ||
             ownerName.StartsWith("System.Numerics.Matrix", StringComparison.Ordinal) ||
             ownerName == "System.Numerics.Quaternion" || ownerName == "System.Numerics.Plane" ||

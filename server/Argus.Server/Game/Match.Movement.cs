@@ -1,11 +1,9 @@
-using System.Numerics;
-
 namespace Argus.Server.Game;
 
 public sealed partial class Match
 {
     // mover가 null이면 플레이어다. 플레이어끼리는 통과하고 나머지 몸 충돌은 막는다.
-    private bool CanOccupy(Vector2 position, float radius, Enemy? mover)
+    private bool CanOccupy(FixedVector position, Fixed radius, Enemy? mover)
     {
         if (!Map.CanStand(position, radius))
         {
@@ -18,8 +16,8 @@ public sealed partial class Match
             {
                 continue;
             }
-            double minimum = radius + other.Definition.Radius;
-            if (Vector2.DistanceSquared(position, other.Position) < minimum * minimum - 0.001)
+            Fixed minimum = radius + other.Definition.Radius;
+            if (FixedVector.DistanceSquared(position, other.Position) < minimum * minimum - TouchTolerance)
             {
                 return false;
             }
@@ -29,8 +27,9 @@ public sealed partial class Match
             for (int i = 0; i < Players.Count; i++)
             {
                 Player player = Players[i];
-                double minimum = radius + Rules.PlayerRadius;
-                if (player.State == "alive" && Vector2.DistanceSquared(position, player.Position) < minimum * minimum - 0.001)
+                Fixed minimum = radius + Rules.PlayerRadius;
+                if (player.State == "alive" &&
+                    FixedVector.DistanceSquared(position, player.Position) < minimum * minimum - TouchTolerance)
                 {
                     return false;
                 }
@@ -39,45 +38,33 @@ public sealed partial class Match
         return true;
     }
 
-    private Vector2 MoveBody(Vector2 from, Vector2 delta, float radius, Enemy? mover)
+    // delta만큼 움직이되 4단위보다 길면 나눠서 조금씩 움직인다. 한 번에 멀리 움직이면 얇은 벽이나 다른 몸을 뛰어넘을 수 있다.
+    // 조각마다 가로와 세로를 따로 움직여, 막힌 쪽만 멈추고 벽을 따라 미끄러지게 한다.
+    private FixedVector MoveBody(FixedVector from, FixedVector delta, Fixed radius, Enemy? mover)
     {
-        int steps = Math.Max(1, (int)Math.Ceiling(delta.Length() / 4));
-        delta /= steps;
-        for (int i = 0; i < steps; i++)
+        // 걸음 수는 길이를 4로 나눈 몫을 올린 값이다.
+        int steps = Math.Max(1, delta.Length().CeilingDivide(4));
+        // i번째 걸음까지 나아갈 양(delta × i / 걸음 수)에서 앞 걸음까지의 양을 빼 이번 걸음을 정한다.
+        // delta / 걸음 수를 걸음마다 쓰면 성분마다 반올림한 오차가 걸음 수만큼 쌓이지만, 이렇게 하면 걸음을 다 더해 정확히 delta가 된다.
+        // 막혀서 못 간 걸음의 몫은 다음 걸음으로 넘기지 않는다.
+        FixedVector planned = FixedVector.Zero;
+        for (int i = 1; i <= steps; i++)
         {
-            Vector2 next = new Vector2(from.X + delta.X, from.Y);
+            FixedVector reach = delta * i / steps;
+            FixedVector step = reach - planned;
+            planned = reach;
+            FixedVector next = new FixedVector(from.X + step.X, from.Y);
             if (CanOccupy(next, radius, mover))
             {
                 from = next;
             }
-            next = new Vector2(from.X, from.Y + delta.Y);
+            next = new FixedVector(from.X, from.Y + step.Y);
             if (CanOccupy(next, radius, mover))
             {
                 from = next;
             }
         }
         return from;
-    }
-
-    // 각도의 방향(길이 1)을 지금의 실수 좌표 벡터로 바꾼다. 방향은 정수로 구했으므로 어느 기계에서나 같다.
-    // 좌표까지 고정소수점으로 옮기면 필요 없어진다.
-    internal static Vector2 Direction(Angle angle)
-    {
-        FixedVector direction = angle.Direction();
-        return new Vector2((float)direction.X.ToDouble(), (float)direction.Y.ToDouble());
-    }
-
-    // 원점에서 offset을 향하는 방향을 정수 계산으로 구한다. 운영체제의 아크탄젠트는 마지막 자리가 기계마다 다를 수 있다.
-    // 좌표는 벽 검사(CanStand)와 입력·투입 검사를 거쳐 늘 유한하다. 유한하지 않다면 진행 상태가 이미 망가진 결함이므로,
-    // 0 각도로 조용히 바꿔 계속하지 않고 예외로 알린다. 방은 연속 실패를 세어 닫고 결함을 기록한다(StepRoom).
-    // 좌표까지 고정소수점 정수로 옮기면 이런 값은 생길 수 없다.
-    internal static Angle Heading(Vector2 offset)
-    {
-        if (!float.IsFinite(offset.X) || !float.IsFinite(offset.Y))
-        {
-            throw new InvalidOperationException($"방향을 구할 좌표 차이가 유한하지 않습니다: {offset}");
-        }
-        return Angle.Of(FixedVector.FromDouble(offset.X, offset.Y));
     }
 
     // 적 id는 무작위로 정한다. 효과·행동과 같은 순번을 쓰면 보이는 id 사이의 빈 번호로
@@ -108,17 +95,17 @@ public sealed partial class Match
     // 처음 배치하는 적의 자리다. 엘리트를 켠 작전도 같은 자리에 종류만 바꿔 둔다.
     // 셋 모두 가장 가까운 벽에서 60 넘게 떨어진 빈 땅이라, 가장 큰 적(철위병, 반지름 24)도 넉넉히 들어간다.
     // (970, 640)은 시설 1 아래 장애물의 남쪽이다.
-    public static IReadOnlyList<Vector2> InitialEnemySpots { get; } = new Vector2[]
+    public static IReadOnlyList<FixedVector> InitialEnemySpots { get; } = new FixedVector[]
     {
-        new Vector2(610, 730),
-        new Vector2(970, 640),
-        new Vector2(1260, 770)
+        FixedVector.FromInt(610, 730),
+        FixedVector.FromInt(970, 640),
+        FixedVector.FromInt(1260, 770)
     };
 
     // 처음 배치는 정해진 자료이므로 자리가 막혀 있으면 결함이다. AddEnemy처럼 조용히 빼지 않고 예외를 낸다.
     // 이 시점에는 대원도 숨은 정보도 없으므로 실패를 알려도 안개 속을 엿보는 수단이 되지 않는다.
     // 규칙이 적을 두지 않게 한 경우(검사의 MaxEnemies = 0 등)는 결함이 아니므로 그냥 넘어간다.
-    private void PlaceInitialEnemy(Vector2 spot, EnemyDefinition definition)
+    private void PlaceInitialEnemy(FixedVector spot, EnemyDefinition definition)
     {
         if (Enemies.Count >= Rules.MaxEnemies)
         {
@@ -131,7 +118,7 @@ public sealed partial class Match
     }
 
     // 자리가 비어 있으면 적을 추가하고 true를 돌려준다.
-    private bool AddEnemy(Vector2 position, EnemyDefinition definition)
+    private bool AddEnemy(FixedVector position, EnemyDefinition definition)
     {
         if (Enemies.Count >= Rules.MaxEnemies)
         {
@@ -166,9 +153,10 @@ public sealed partial class Match
         // 분대가 보고 있거나 벽·몸에 막힌 자리면 각도를 다시 뽑는다. 끝까지 못 찾으면 이번 회차는 넘긴다.
         for (int attempt = 0; attempt < 12; attempt++)
         {
+            // 맵 가운데(1080, 710)를 둘러싼 타원(가로 650, 세로 540) 위의 한 점이다.
             Angle angle = Angle.FromUnits(_random.NextInt(0, Angle.UnitsPerTurn));
-            Vector2 direction = Direction(angle);
-            Vector2 position = new Vector2(1080 + direction.X * 650, 710 + direction.Y * 540);
+            FixedVector direction = angle.Direction();
+            FixedVector position = new FixedVector(Fixed.FromInt(1080) + direction.X * 650, Fixed.FromInt(710) + direction.Y * 540);
             if (Visible(position))
             {
                 continue;
@@ -190,8 +178,8 @@ public sealed partial class Match
             {
                 continue;
             }
-            Vector2 position = Players[i].Position;
-            int index = (int)(position.Y / BattleMap.Cell) * BattleMap.Columns + (int)(position.X / BattleMap.Cell);
+            FixedVector position = Players[i].Position;
+            int index = position.Y.FloorDivide(BattleMap.Cell) * BattleMap.Columns + position.X.FloorDivide(BattleMap.Cell);
             if (index >= 0 && index < _flow.Length && _flow[index] != 0)
             {
                 _flow[index] = 0;
@@ -224,16 +212,16 @@ public sealed partial class Match
 
     // 흐름장에서 다음으로 갈 방향을 찾는다. 자기 칸보다 비용이 낮은 이웃이 없으면(대원이 있는 출발점 칸)
     // 0 벡터를 돌려주어 부르는 쪽이 대원에게 직진하게 한다. 이웃 칸(비용 1)으로 향하면 오히려 멀어진다.
-    public Vector2 FlowHeading(Vector2 position)
+    public FixedVector FlowHeading(FixedVector position)
     {
-        int x = (int)(position.X / BattleMap.Cell);
-        int y = (int)(position.Y / BattleMap.Cell);
+        int x = position.X.FloorDivide(BattleMap.Cell);
+        int y = position.Y.FloorDivide(BattleMap.Cell);
         int best = int.MaxValue;
         if (!Map.Solid(x, y))
         {
             best = _flow[y * BattleMap.Columns + x];
         }
-        Vector2 heading = Vector2.Zero;
+        FixedVector heading = FixedVector.Zero;
         for (int direction = 0; direction < 4; direction++)
         {
             int nx = x + NeighborX[direction];
@@ -246,7 +234,9 @@ public sealed partial class Match
             if (cost < best)
             {
                 best = cost;
-                heading = new Vector2((nx + 0.5f) * BattleMap.Cell, (ny + 0.5f) * BattleMap.Cell) - position;
+                // 이웃 칸의 가운데를 향한다.
+                FixedVector center = FixedVector.FromInt(nx * BattleMap.Cell + BattleMap.Cell / 2, ny * BattleMap.Cell + BattleMap.Cell / 2);
+                heading = center - position;
             }
         }
         return heading;
@@ -255,15 +245,16 @@ public sealed partial class Match
     // 몸이 직선으로 지나갈 수 있는지 본다. 몸 중심선은 호출 전에 사선으로 이미 확인했고,
     // 여기서는 몸 양옆 가장자리를 지나는 두 선을 본다. 세 선의 간격(반지름 이하)이 벽 타일(48)보다 좁아서
     // 그 사이로 벽이 빠져나가지 못한다.
-    private bool BodyCanPass(Enemy enemy, Vector2 target)
+    private bool BodyCanPass(Enemy enemy, FixedVector target)
     {
-        Vector2 direction = target - enemy.Position;
-        if (direction.LengthSquared() < 0.001f)
+        FixedVector direction = target - enemy.Position;
+        if (direction.LengthSquared() < TinyLengthSquared)
         {
             return true;
         }
-        // 옆선 간격을 반지름보다 조금 줄인다. 벽에 딱 붙은 적은 옆선이 벽 면 위에서 시작해 거리 0에서 막혔다고 나오기 때문이다.
-        Vector2 normal = Vector2.Normalize(new Vector2(-direction.Y, direction.X)) * (enemy.Definition.Radius - 0.5f);
+        // 옆선 간격을 반지름보다 조금(0.5) 줄인다. 벽에 딱 붙은 적은 옆선이 벽 면 위에서 시작해 거리 0에서 막혔다고 나오기 때문이다.
+        FixedVector side = new FixedVector(-direction.Y, direction.X);
+        FixedVector normal = side.Normalize() * (enemy.Definition.Radius - Fixed.One / 2);
         if (!Map.LineOfSight(enemy.Position + normal, target + normal))
         {
             return false;
@@ -272,9 +263,9 @@ public sealed partial class Match
     }
 
     // 가까운 적끼리 서로 밀어내는 방향을 구한다. 몸이 닿기 조금 전부터, 가까울수록 세게 민다.
-    private Vector2 Separation(Enemy enemy)
+    private FixedVector Separation(Enemy enemy)
     {
-        Vector2 push = Vector2.Zero;
+        FixedVector push = FixedVector.Zero;
         for (int i = 0; i < Enemies.Count; i++)
         {
             Enemy other = Enemies[i];
@@ -282,19 +273,21 @@ public sealed partial class Match
             {
                 continue;
             }
-            Vector2 away = enemy.Position - other.Position;
-            float reach = enemy.Definition.Radius + other.Definition.Radius + 12;
-            float distance = away.Length();
-            if (distance >= reach || distance < 0.001f)
+            FixedVector away = enemy.Position - other.Position;
+            Fixed reach = enemy.Definition.Radius + other.Definition.Radius + Fixed.FromInt(12);
+            Fixed distance = away.Length();
+            // 아주 가까우면 길이의 반올림 오차 때문에 밀어낼 방향의 길이가 1에서 벗어나므로 넘어간다(SeparationMinimum).
+            if (distance >= reach || distance < SeparationMinimum)
             {
                 continue;
             }
+            // 상대에게서 멀어지는 방향(길이 1)에, 가까울수록 커지는 세기(0~1)를 곱해 더한다.
             push += away / distance * ((reach - distance) / reach);
         }
         return push;
     }
 
-    private void UpdateEnemies(double dt)
+    private void UpdateEnemies()
     {
         for (int i = 0; i < Enemies.Count; i++)
         {
@@ -311,13 +304,18 @@ public sealed partial class Match
                 }
                 enemy.Action = null;
             }
+            // 가장 가까운 살아 있는 대원을 쫓는다. 거리가 같으면 먼저 참가한 대원이다.
             Player? target = null;
-            double closest = double.PositiveInfinity;
+            Fixed closest = Fixed.Zero;
             for (int j = 0; j < Players.Count; j++)
             {
                 Player player = Players[j];
-                double distance = Vector2.DistanceSquared(player.Position, enemy.Position);
-                if (player.State == "alive" && distance < closest)
+                if (player.State != "alive")
+                {
+                    continue;
+                }
+                Fixed distance = FixedVector.DistanceSquared(player.Position, enemy.Position);
+                if (target == null || distance < closest)
                 {
                     closest = distance;
                     target = player;
@@ -327,14 +325,14 @@ public sealed partial class Match
             {
                 continue;
             }
-            Vector2 direct = target.Position - enemy.Position;
+            FixedVector direct = target.Position - enemy.Position;
             bool sight = Map.LineOfSight(enemy.Position, target.Position);
-            if (Tick >= enemy.NextActionTick && closest < 75 * 75 && sight)
+            if (Tick >= enemy.NextActionTick && closest < Fixed.FromInt(75 * 75) && sight)
             {
                 int index = _random.NextInt(0, enemy.Definition.Skills.Length);
                 EnemySkill skill = enemy.Definition.Skills[index];
                 _nextId++;
-                enemy.Action = new EnemyAction(_nextId, skill, Heading(direct), Tick, Rules.EnemyWindupMultiplier);
+                enemy.Action = new EnemyAction(_nextId, skill, Angle.Of(direct), Tick, Rules.EnemyWindupMultiplier);
                 // 회복이 끝난 틱에서 0.25초(8틱) 쉰 뒤 다음 행동을 고른다.
                 enemy.NextActionTick = enemy.Action.EndsTick + Rules.ToTicks(0.25);
                 continue;
@@ -342,26 +340,26 @@ public sealed partial class Match
 
             // 조향: 움직이기 전에 방향을 한 번 정하고 한 번만 움직인다. 막혔다고 다른 방향을 거듭 시도하지 않는다.
             // 몸이 직선으로 지나갈 수 있으면 직진하고, 사선이 가려졌거나 몸이 모서리에 걸리면 흐름장 경로를 따른다.
-            Vector2 heading = direct;
+            FixedVector heading = direct;
             if (!sight || !BodyCanPass(enemy, target.Position))
             {
-                Vector2 flow = FlowHeading(enemy.Position);
-                if (flow.LengthSquared() > 0.001f)
+                FixedVector flow = FlowHeading(enemy.Position);
+                if (flow.LengthSquared() > TinyLengthSquared)
                 {
                     heading = flow;
                 }
             }
-            if (heading.LengthSquared() < 0.001f)
+            if (heading.LengthSquared() < TinyLengthSquared)
             {
                 continue;
             }
-            // 가까운 적끼리 밀어내는 방향을 더해, 줄지어 막히지 않고 옆으로 비켜 가게 한다.
-            Vector2 steer = Vector2.Normalize(heading) + Separation(enemy) * 0.8f;
-            if (steer.LengthSquared() < 0.001f)
+            // 가까운 적끼리 밀어내는 방향을 0.8배(4/5)로 더해, 줄지어 막히지 않고 옆으로 비켜 가게 한다.
+            FixedVector steer = heading.Normalize() + Separation(enemy) * 4 / 5;
+            if (steer.LengthSquared() < TinyLengthSquared)
             {
                 continue;
             }
-            Vector2 movement = Vector2.Normalize(steer) * (float)(enemy.Definition.Speed * dt);
+            FixedVector movement = steer.Normalize() * enemy.Definition.StepPerTick;
             enemy.Position = MoveBody(enemy.Position, movement, enemy.Definition.Radius, enemy);
         }
     }

@@ -65,8 +65,7 @@ public sealed partial class Match
         {
             Effect effect = Effects[i];
             hasher.AddInt(effect.Id);
-            hasher.AddDouble(effect.X);
-            hasher.AddDouble(effect.Y);
+            hasher.AddPoint(effect.Position);
             hasher.AddText(effect.Kind);
             hasher.AddLong(effect.UntilTick);
         }

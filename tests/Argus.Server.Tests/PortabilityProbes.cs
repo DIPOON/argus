@@ -49,6 +49,12 @@ internal static class Probe
         return Vector2.Lerp(a, b, 0.5f);
     }
 
+    // 게임 코드는 좌표를 고정소수점으로 계산하므로, 곱셈과 제곱근만 쓰는 Vector2 연산이라도 걸려야 한다.
+    internal static float VectorLength(Vector2 a)
+    {
+        return a.Length();
+    }
+
     internal static int Unseeded()
     {
         Random random = new Random();
@@ -80,6 +86,6 @@ internal static class Probe
     // 허용한 함수만 쓴다. 검사에 걸리면 안 된다.
     internal static double Allowed(double x)
     {
-        return Math.Sqrt(Math.Abs(x)) + Math.Floor(x) + Vector2.Distance(Vector2.Zero, new Vector2(3, 4));
+        return Math.Sqrt(Math.Abs(x)) + Math.Floor(x) + Math.Max(x, 1);
     }
 }

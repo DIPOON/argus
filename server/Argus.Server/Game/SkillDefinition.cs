@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Argus.Server.Game;
 
 public sealed class SkillDefinition
@@ -8,8 +10,14 @@ public sealed class SkillDefinition
     public double ContactAfter { get; }
     public double ActiveSeconds { get; }
     public double Duration { get; }
+    // 사거리와 반폭은 클라이언트에 그대로 보내는 설정 값이다. 판정은 아래의 고정소수점 값으로 한다.
     public double Range { get; }
     public double HalfWidth { get; }
+    // 판정용 고정소수점 사거리와 반폭이다. 설정 값에서 한 번만 바꿔 둔다. 통신과 상태 요약의 JSON에는 넣지 않는다.
+    [JsonIgnore]
+    public Fixed RangeFixed { get; }
+    [JsonIgnore]
+    public Fixed HalfWidthFixed { get; }
     // 기술별 동작은 id가 아니라 아래 속성으로 판단한다. 같은 종류의 새 기술도 속성만 정하면 같은 판정을 받는다.
     // 먼저 치지 않고, 유효 시간 동안 앞에서 들어오는 공격에만 반응한다.
     public bool GuardsFront { get; }
@@ -34,6 +42,8 @@ public sealed class SkillDefinition
         Duration = duration;
         Range = range;
         HalfWidth = halfWidth;
+        RangeFixed = Fixed.FromDouble(range);
+        HalfWidthFixed = Fixed.FromDouble(halfWidth);
         GuardsFront = guardsFront;
         HasFollowup = hasFollowup;
         SingleTarget = singleTarget;
@@ -59,8 +69,13 @@ public sealed class EnemySkill
     public int Tier { get; }
     public int PartialDamage { get; }
     public double Windup { get; }
+    // 사거리와 반폭은 클라이언트에 그대로 보내는 설정 값이고, 판정은 고정소수점 값으로 한다.
     public double Range { get; }
     public double HalfWidth { get; }
+    [JsonIgnore]
+    public Fixed RangeFixed { get; }
+    [JsonIgnore]
+    public Fixed HalfWidthFixed { get; }
 
     public EnemySkill(string kind, int tier, int partialDamage, double windup, double range, double halfWidth)
     {
@@ -70,6 +85,8 @@ public sealed class EnemySkill
         Windup = windup;
         Range = range;
         HalfWidth = halfWidth;
+        RangeFixed = Fixed.FromDouble(range);
+        HalfWidthFixed = Fixed.FromDouble(halfWidth);
     }
 }
 
@@ -77,22 +94,27 @@ public sealed class EnemyDefinition
 {
     public string Id { get; }
     public string Name { get; }
-    public float Radius { get; }
+    // 몸의 반지름이다. 판정에 쓰는 고정소수점 값이고, 스냅샷에는 실수로 바꿔 보낸다.
+    public Fixed Radius { get; }
     public int Health { get; }
+    // 초당 이동 거리(설정 값)다. 판정은 한 틱에 움직이는 거리(StepPerTick)로 한다.
     public double Speed { get; }
+    // 한 틱에 움직이는 거리다. 1/30을 곱하지 않고 30으로 나눈다. 1/30을 고정소수점으로 반올림하면 0.3% 어긋난다.
+    public Fixed StepPerTick { get; }
     public EnemySkill[] Skills { get; }
 
-    public EnemyDefinition(string id, string name, float radius, int health, double speed, EnemySkill[] skills)
+    public EnemyDefinition(string id, string name, Fixed radius, int health, double speed, EnemySkill[] skills)
     {
         Id = id;
         Name = name;
         Radius = radius;
         Health = health;
         Speed = speed;
+        StepPerTick = Fixed.FromDouble(speed) / Rules.TicksPerSecond;
         Skills = skills;
     }
 
-    public static readonly EnemyDefinition Grunt = new EnemyDefinition("grunt", "병사", 13, 1, 100,
+    public static readonly EnemyDefinition Grunt = new EnemyDefinition("grunt", "병사", Fixed.FromInt(13), 1, 100,
         new EnemySkill[]
         {
             new EnemySkill("strike", 1, 0, 0.85, 65, 15),
@@ -101,7 +123,7 @@ public sealed class EnemyDefinition
         });
 
     // 분쇄자는 타격만 강화한다. 부분 방어로는 분쇄자에게 피해를 주지 못한다.
-    public static readonly EnemyDefinition Breaker = new EnemyDefinition("breaker", "분쇄자", 22, 2, 82,
+    public static readonly EnemyDefinition Breaker = new EnemyDefinition("breaker", "분쇄자", Fixed.FromInt(22), 2, 82,
         new EnemySkill[]
         {
             new EnemySkill("strike", 2, 0, 1.1, 82, 24),
@@ -110,7 +132,7 @@ public sealed class EnemyDefinition
         });
 
     // 철위병은 타격과 방어를 강화한다. 부분 파훼로 체력 1까지 깎을 수 있다.
-    public static readonly EnemyDefinition Warden = new EnemyDefinition("warden", "철위병", 24, 2, 76,
+    public static readonly EnemyDefinition Warden = new EnemyDefinition("warden", "철위병", Fixed.FromInt(24), 2, 76,
         new EnemySkill[]
         {
             new EnemySkill("strike", 2, 1, 1.1, 82, 24),

@@ -1,4 +1,3 @@
-using System.Numerics;
 using Argus.Server.Game;
 using static TestTools;
 
@@ -33,7 +32,7 @@ internal static class EncounterTests
         for (int i = 0; i < kinds.Length; i++)
         {
             Enemy enemy = match.Enemies[i];
-            Vector2 spot = Match.InitialEnemySpots[i];
+            FixedVector spot = Match.InitialEnemySpots[i];
             Check(enemy.Position == spot, $"{i}번째 적이 {enemy.Position}에 있습니다. 자리는 {spot}입니다");
             Equal(enemy.Definition.Id, kinds[i]);
         }
@@ -92,7 +91,7 @@ internal static class EncounterTests
         f.Player.Hp = 1000;
         // 캠프의 대원 한 명만으로는 생성 타원의 왼쪽 일부만 보인다. 타원 위 세 곳에 관찰자를 세워
         // 타원 대부분이 분대 시야에 들어오게 한다. 시야 조건이 빠지면 대부분의 생성이 보이는 곳에서 일어난다.
-        Vector2[] posts = new Vector2[] { new Vector2(1730, 710), new Vector2(755, 1178), new Vector2(755, 242) };
+        FixedVector[] posts = new FixedVector[] { FixedVector.FromInt(1730, 710), FixedVector.FromInt(755, 1178), FixedVector.FromInt(755, 242) };
         for (int i = 0; i < posts.Length; i++)
         {
             Check(f.Match.Map.CanStand(posts[i], Rules.PlayerRadius), "관찰자 위치가 막혀 있습니다");
@@ -108,7 +107,7 @@ internal static class EncounterTests
         int observed = 0;
         // 한 틱씩 진행해 적이 생성된 직후의 위치를 확인한다. 생성된 틱에 적이 한 번 움직이므로
         // 그만큼의 거리를 허용해 판단한다.
-        float reach = (float)(EnemyDefinition.Grunt.Speed * Rules.Step) + 0.5f;
+        Fixed reach = EnemyDefinition.Grunt.StepPerTick + Fixed.One / 2;
         for (int step = 0; step < 2700; step++)
         {
             Advance(f.Match, Rules.Step);
@@ -129,7 +128,7 @@ internal static class EncounterTests
     // 생성된 틱에 적이 한 번 움직였으므로 생성 위치는 지금 위치에서 reach 안쪽 어딘가다.
     // 그 범위 어느 점에서 봐도 보일 때만 시야 안에서 생성된 것으로 본다. 시야 경계 바로 밖에서 생긴 적이
     // 한 걸음 들어와 보이는 정상적인 경우를 위반으로 잘못 판단하지 않기 위해서다.
-    private static bool SurelyVisible(Match match, Vector2 point, float reach)
+    private static bool SurelyVisible(Match match, FixedVector point, Fixed reach)
     {
         if (!match.Visible(point))
         {
@@ -137,8 +136,7 @@ internal static class EncounterTests
         }
         for (int i = 0; i < 8; i++)
         {
-            double angle = i * Math.Tau / 8;
-            Vector2 around = point + new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * reach;
+            FixedVector around = point + Angle.FromFraction(i, 8).Direction() * reach;
             if (!match.Visible(around))
             {
                 return false;
@@ -153,15 +151,15 @@ internal static class EncounterTests
         f.Player.Hp = 1000;
         // 벽 타일 (32,10)–(32,11)의 아래쪽 면은 y = 576이다. y = 588 직선은 몸 중심의 사선은 열려 있지만
         // 반지름 13인 몸은 모서리에 12만큼 걸린다.
-        Vector2 start = new Vector2(1505, 588);
-        f.Player.Position = new Vector2(1615, 588);
+        FixedVector start = FixedVector.FromInt(1505, 588);
+        f.Player.Position = FixedVector.FromInt(1615, 588);
         Check(f.Match.Map.LineOfSight(start, f.Player.Position), "사선이 막혀 있어 검사 조건이 아닙니다");
         // id가 짝수인 적은 예전 방식에서 위(벽 쪽)로 비켜 가려다 계속 걸렸다. 행동 없이 이동만 본다.
         Enemy enemy = new Enemy(30020, start, EnemyDefinition.Grunt);
         enemy.NextActionTick = long.MaxValue;
         f.Match.Enemies.Add(enemy);
         Advance(f.Match, 2);
-        Check(enemy.Position.X > 1560, "모서리에 걸려 멈췄습니다");
+        Check(enemy.Position.X > Fixed.FromInt(1560), "모서리에 걸려 멈췄습니다");
     }
 
     private static void FlowSource()
@@ -169,11 +167,11 @@ internal static class EncounterTests
         // 대원은 캠프에 있고 흐름장도 캠프 칸을 출발점(비용 0)으로 만들어졌다.
         Fixture f = new Fixture();
         // 출발점 칸 안에서는 더 나은 이웃이 없다. 이웃 칸(비용 1)으로 향하면 대원에게서 멀어진다.
-        Vector2 inside = f.Match.FlowHeading(BattleMap.Camp);
-        Check(inside.LengthSquared() < 0.001f, "출발점 칸 안에서 이웃 칸으로 향합니다");
+        FixedVector inside = f.Match.FlowHeading(BattleMap.Camp);
+        Check(inside.IsZero(), "출발점 칸 안에서 이웃 칸으로 향합니다");
         // 옆 칸에서는 출발점 칸 쪽을 가리킨다.
-        Vector2 beside = f.Match.FlowHeading(BattleMap.Camp + new Vector2(BattleMap.Cell, 0));
-        Check(beside.X < 0, "옆 칸에서 출발점 쪽을 가리키지 않습니다");
+        FixedVector beside = f.Match.FlowHeading(BattleMap.Camp + FixedVector.FromInt(BattleMap.Cell, 0));
+        Check(beside.X < Fixed.Zero, "옆 칸에서 출발점 쪽을 가리키지 않습니다");
     }
 
     private static void WallHug()
@@ -181,15 +179,15 @@ internal static class EncounterTests
         Fixture f = new Fixture();
         f.Player.Hp = 1000;
         // 벽 타일 (32,10)–(32,11)의 왼쪽 면은 x = 1536이다. 반지름 13인 적이 면에 딱 붙어 아래로 내려간다.
-        Vector2 start = new Vector2(1523, 470);
-        f.Player.Position = new Vector2(1523, 650);
+        FixedVector start = FixedVector.FromInt(1523, 470);
+        f.Player.Position = FixedVector.FromInt(1523, 650);
         Enemy enemy = new Enemy(30030, start, EnemyDefinition.Grunt);
         enemy.NextActionTick = long.MaxValue;
         f.Match.Enemies.Add(enemy);
         Advance(f.Match, 1);
-        Check(enemy.Position.Y > start.Y + 60, "아래로 내려가지 않았습니다");
+        Check(enemy.Position.Y > start.Y + Fixed.FromInt(60), "아래로 내려가지 않았습니다");
         // 몸이 지나갈 수 있는 직선이므로 옆으로 흔들리지 않아야 한다.
-        Check(Math.Abs(enemy.Position.X - start.X) < 1, "벽에 붙은 적이 직진하지 않고 옆으로 흔들립니다");
+        Check(Fixed.Abs(enemy.Position.X - start.X) < Fixed.One, "벽에 붙은 적이 직진하지 않고 옆으로 흔들립니다");
     }
 
     private static void LongerWindup()
@@ -205,7 +203,7 @@ internal static class EncounterTests
                     rules = new Rules { MaxEnemies = 0, EnemyWindupMultiplier = 1 };
                 }
                 Fixture f = new Fixture(rules);
-                EnemyDefinition singleSkill = new EnemyDefinition("grunt", "병사", 13, 1, 0,
+                EnemyDefinition singleSkill = new EnemyDefinition("grunt", "병사", Fixed.FromInt(13), 1, 0,
                     new EnemySkill[] { skill });
                 Enemy enemy = Target(f, singleSkill);
                 enemy.NextActionTick = f.Match.Tick;

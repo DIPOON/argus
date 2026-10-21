@@ -63,6 +63,34 @@ internal static class FixedTests
         Equal(Fixed.FromInt(-2).FloorToInt(), -2);
         Equal(Fixed.FromInt(-2).CeilingToInt(), -2);
 
+        // 타일 번호: 정수로 나눈 몫을 정확히 내린다. 나눗셈 연산자(/)는 반올림하므로, 경계 바로 앞의 값(Raw 하나 모자람)도
+        // 다음 타일로 넘어가지 않아야 한다. 음수는 작은 쪽으로 내린다.
+        Equal(Fixed.FromInt(96).FloorDivide(48), 2);
+        Equal(Fixed.FromRaw(96 * Fixed.Scale - 1).FloorDivide(48), 1);
+        Equal(Fixed.FromInt(47).FloorDivide(48), 0);
+        Equal(Fixed.Zero.FloorDivide(48), 0);
+        Equal(Fixed.FromRaw(-1).FloorDivide(48), -1);
+        Equal(Fixed.FromInt(-48).FloorDivide(48), -1);
+        Equal(Fixed.FromRaw(-48 * Fixed.Scale - 1).FloorDivide(48), -2);
+        Throws<ArgumentOutOfRangeException>(() => Fixed.One.FloorDivide(0));
+
+        // 걸음 수: 정수로 나눈 몫을 정확히 올린다. 나누어떨어지는 값보다 Raw 하나만 길어도 한 걸음이 늘고, 음수는 큰 쪽으로 올린다.
+        Equal(Fixed.FromInt(8).CeilingDivide(4), 2);
+        Equal(Fixed.FromRaw(8 * Fixed.Scale + 1).CeilingDivide(4), 3);
+        Equal(Fixed.FromRaw(8 * Fixed.Scale - 1).CeilingDivide(4), 2);
+        Equal(Fixed.Zero.CeilingDivide(4), 0);
+        Equal(Fixed.FromRaw(-1).CeilingDivide(4), 0);
+        Equal(Fixed.FromInt(-4).CeilingDivide(4), -1);
+        Equal(Fixed.FromRaw(-4 * Fixed.Scale - 1).CeilingDivide(4), -1);
+        Throws<ArgumentOutOfRangeException>(() => Fixed.One.CeilingDivide(-1));
+
+        // 정수 반올림: 딱 절반이면 0에서 먼 쪽이다. 실수의 Math.Round(2.5)는 2지만 여기서는 3이다.
+        Equal(Fixed.FromRaw(2047).RoundToInt(), 0);
+        Equal(Fixed.FromRaw(2048).RoundToInt(), 1);
+        Equal(Fixed.FromRaw(5 * Fixed.Scale / 2).RoundToInt(), 3);
+        Equal(Fixed.FromRaw(-2048).RoundToInt(), -1);
+        Equal(Fixed.FromRaw(-2047).RoundToInt(), 0);
+
         Equal(Fixed.Abs(Fixed.FromInt(-3)), Fixed.FromInt(3));
         Equal(Fixed.Min(Fixed.One, Fixed.Zero), Fixed.Zero);
         Equal(Fixed.Max(Fixed.One, Fixed.Zero), Fixed.One);
