@@ -7,6 +7,11 @@ internal static class Program
         // 인자 없이 돌리면 모든 검사를 등록한다. "determinism"을 주면 운영체제와 CPU에 따라 달라질 수 있는 계산의 검사만 돌린다.
         // CI는 리눅스에서 모두 돌리고, Windows와 macOS에서는 이것만 돌린다. 서버는 리눅스에서만 운영하고,
         // 실제 시간과 소켓에 기대는 검사는 공유 실행기의 타이머 해상도와 일정 흔들림 때문에 가끔 실패할 수 있어서다.
+        // "vectors"를 주면 검사 대신 클라이언트 예측의 대조 자료(client/tests/fixed-vectors.json)를 지금 계산한 값으로 다시 쓴다.
+        if (args.Length == 1 && args[0] == "vectors")
+        {
+            return ClientParityTests.Write();
+        }
         List<TestCase> tests = new List<TestCase>();
         if (args.Length == 0)
         {
@@ -17,15 +22,17 @@ internal static class Program
             DeterminismTests.Register(tests);
             RecordingTests.Register(tests);
             FixedTests.Register(tests);
+            ClientParityTests.Register(tests);
         }
         else if (args.Length == 1 && args[0] == "determinism")
         {
             DeterminismTests.Register(tests);
             FixedTests.Register(tests);
+            ClientParityTests.Register(tests);
         }
         else
         {
-            Console.Error.WriteLine("사용법: dotnet run --project tests/Argus.Server.Tests [-- determinism]");
+            Console.Error.WriteLine("사용법: dotnet run --project tests/Argus.Server.Tests [-- determinism | -- vectors]");
             return 2;
         }
         int failed = 0;

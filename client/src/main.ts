@@ -435,7 +435,7 @@ window.addEventListener('keydown', event => {
   if (event.code === 'KeyM' && world) world.overview = !world.overview;
 });
 window.addEventListener('keyup', event => { keys.delete(event.code); staleKeys.delete(event.code); });
-window.setInterval(() => {
+function sendControl() {
   if (!world || !snapshot || me()?.state !== 'alive' || snapshot.phase !== 'active') return;
   let x = Number(keys.has('KeyD') || keys.has('ArrowRight')) - Number(keys.has('KeyA') || keys.has('ArrowLeft'));
   let y = Number(keys.has('KeyS') || keys.has('ArrowDown')) - Number(keys.has('KeyW') || keys.has('ArrowUp'));
@@ -447,7 +447,20 @@ window.setInterval(() => {
   for (const candidate of slotOrder) { if (slotHeld(candidate)) slot = candidate; }
   world.control = { x, y, aim, slot };
   sendInput(x, y, aim, slot);
-}, 1000 / 30);
+}
+// 입력은 서버의 틱과 같은 빠르기(초당 30번)로 보낸다. 클라이언트 예측이 보낸 입력 하나를 한 틱으로 치기 때문이다.
+// setInterval(…, 1000 / 30)은 브라우저가 33ms로 내려 초당 30.3번이 되고 예측이 조금씩 앞서므로, 보낼 시각을 1/30초씩 더해 정한다.
+// 창이 가려진 동안처럼 한 번 넘게 늦게 깨면 밀린 입력을 몰아 보내지 않고 지금부터 다시 센다.
+const inputInterval = 1000 / 30;
+let nextInputAt = performance.now();
+function pumpInput() {
+  sendControl();
+  const now = performance.now();
+  nextInputAt += inputInterval;
+  if (nextInputAt <= now) nextInputAt = now + inputInterval;
+  window.setTimeout(pumpInput, nextInputAt - now);
+}
+pumpInput();
 window.setInterval(() => send({ type: 'ping', sent: performance.now() }), 2000);
 
 try { const saved = sessionStorage.getItem('argus-guest'); if (saved) guest = JSON.parse(saved) as Guest; } catch { sessionStorage.removeItem('argus-guest'); }

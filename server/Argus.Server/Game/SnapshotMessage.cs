@@ -51,8 +51,12 @@ public sealed class PlayerSnapshot
     public string State { get; set; } = "";
     public bool Connected { get; set; }
     public bool HasDeployed { get; set; }
+    // 그리기용 좌표(소수 둘째 자리로 반올림)다.
     public double X { get; set; }
     public double Y { get; set; }
+    // 예측용 좌표다. 고정소수점의 Raw(4096분의 1 단위 정수)를 반올림 없이 보내, 클라이언트가 서버와 같은 자리에서 계산을 시작하게 한다.
+    public long RawX { get; set; }
+    public long RawY { get; set; }
     public double Aim { get; set; }
     public double Hp { get; set; }
     public double MaxHp { get; set; }
@@ -92,6 +96,9 @@ public sealed class EnemySnapshot
     public int Id { get; set; }
     public double X { get; set; }
     public double Y { get; set; }
+    // 예측용 좌표(Raw)다. 클라이언트 예측이 대원을 막는 몸을 서버와 같은 자리로 본다.
+    public long RawX { get; set; }
+    public long RawY { get; set; }
     public string Kind { get; set; } = "";
     public string Name { get; set; } = "";
     public double Radius { get; set; }

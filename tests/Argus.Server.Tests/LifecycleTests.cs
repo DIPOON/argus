@@ -31,7 +31,7 @@ internal static class LifecycleTests
         tests.Add(new TestCase("Effects, notices and actions keep their wire shape and send tick times as seconds rounded like now", TimedWireShape));
         tests.Add(new TestCase("A parry followup ends on the tick its followupUntil names, not after the followup time rounded on its own", FollowupWireTime));
         tests.Add(new TestCase("Extraction progress times sixty rounds back to the exact half-tick count, odd counts included", ExtractionProgressWire));
-        tests.Add(new TestCase("Coordinates and radii go out rounded to hundredths with exact halves away from zero", CoordinateWireRounding));
+        tests.Add(new TestCase("Coordinates go out rounded to hundredths for drawing and as exact raw values for prediction", CoordinateWireRounding));
         tests.Add(new TestCase("Two identical notices on the same tick keep distinct ids that keep growing", NoticeIds));
         tests.Add(new TestCase("A slot that never connects is released quickly while a dropped member keeps the long grace", FirstConnectGrace));
         tests.Add(new TestCase("A long session keeps its room for the full retention time after the last disconnect", RoomRetention));
@@ -461,6 +461,8 @@ internal static class LifecycleTests
         Fixed y = Fixed.FromRaw(730 * Fixed.Scale + 2560);
         f.Player.Position = new FixedVector(x, y);
         Enemy enemy = Target(f);
+        Enemy breaker = Target(f, EnemyDefinition.Breaker);
+        Enemy warden = Target(f, EnemyDefinition.Warden);
         byte[] bytes = Snapshot.Create(f.Match, f.Player, RoomHost.Json);
         using (JsonDocument json = JsonDocument.Parse(bytes))
         {
@@ -468,6 +470,9 @@ internal static class LifecycleTests
             JsonElement player = root.GetProperty("players")[0];
             Equal(player.GetProperty("x").GetDouble(), 300.13);
             Equal(player.GetProperty("y").GetDouble(), 730.63);
+            // 클라이언트 예측은 반올림하지 않은 Raw에서 출발해야 서버와 같은 계산이 된다.
+            Equal(player.GetProperty("rawX").GetInt64(), x.Raw);
+            Equal(player.GetProperty("rawY").GetInt64(), y.Raw);
 
             // 시설·보급·탈출 지점·캠프의 좌표와 몸 반지름도 같은 도우미를 거친다. 지금은 모두 정수라 값이 그대로다.
             JsonElement facility = root.GetProperty("facilities")[0];
@@ -486,6 +491,18 @@ internal static class LifecycleTests
             Equal(rules.GetProperty("playerRadius").GetDouble(), Rules.PlayerRadius.ToDouble());
             JsonElement seen = root.GetProperty("enemies")[0];
             Equal(seen.GetProperty("radius").GetDouble(), enemy.Definition.Radius.ToDouble());
+            Equal(seen.GetProperty("rawX").GetInt64(), enemy.Position.X.Raw);
+            Equal(seen.GetProperty("rawY").GetInt64(), enemy.Position.Y.Raw);
+
+            // 클라이언트는 받은 반지름을 FromDouble로 다시 Raw로 바꿔 예측에 쓴다. 지금 반지름은 모두 정수라 소수 둘째 자리로 보내도
+            // 그대로 돌아온다. 그 자리에서 그대로 돌아오지 않는 반지름을 쓰게 되면 이 검사가 실패하므로, 그때는 반지름의 Raw도 함께 보내야 한다.
+            Equal(Fixed.FromDouble(rules.GetProperty("playerRadius").GetDouble()), Rules.PlayerRadius);
+            Enemy[] kinds = new Enemy[] { enemy, breaker, warden };
+            for (int i = 0; i < kinds.Length; i++)
+            {
+                JsonElement sent = Find(root.GetProperty("enemies"), "kind", kinds[i].Definition.Id);
+                Equal(Fixed.FromDouble(sent.GetProperty("radius").GetDouble()), kinds[i].Definition.Radius);
+            }
         }
     }
 
