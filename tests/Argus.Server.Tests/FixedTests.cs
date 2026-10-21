@@ -375,16 +375,4 @@ internal static class FixedTests
         return unchecked(checksum * 1_000_003 + value);
     }
 
-    private static void Throws<TException>(Func<object> action) where TException : Exception
-    {
-        try
-        {
-            action();
-        }
-        catch (TException)
-        {
-            return;
-        }
-        throw new Exception($"{typeof(TException).Name} 예외가 나지 않았습니다");
-    }
 }

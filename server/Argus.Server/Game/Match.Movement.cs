@@ -92,16 +92,6 @@ public sealed partial class Match
         }
     }
 
-    // 처음 배치하는 적의 자리다. 엘리트를 켠 작전도 같은 자리에 종류만 바꿔 둔다.
-    // 셋 모두 가장 가까운 벽에서 60 넘게 떨어진 빈 땅이라, 가장 큰 적(철위병, 반지름 24)도 넉넉히 들어간다.
-    // (970, 640)은 시설 1 아래 장애물의 남쪽이다.
-    public static IReadOnlyList<FixedVector> InitialEnemySpots { get; } = new FixedVector[]
-    {
-        FixedVector.FromInt(610, 730),
-        FixedVector.FromInt(970, 640),
-        FixedVector.FromInt(1260, 770)
-    };
-
     // 처음 배치는 정해진 자료이므로 자리가 막혀 있으면 결함이다. AddEnemy처럼 조용히 빼지 않고 예외를 낸다.
     // 이 시점에는 대원도 숨은 정보도 없으므로 실패를 알려도 안개 속을 엿보는 수단이 되지 않는다.
     // 규칙이 적을 두지 않게 한 경우(검사의 MaxEnemies = 0 등)는 결함이 아니므로 그냥 넘어간다.
@@ -153,10 +143,11 @@ public sealed partial class Match
         // 분대가 보고 있거나 벽·몸에 막힌 자리면 각도를 다시 뽑는다. 끝까지 못 찾으면 이번 회차는 넘긴다.
         for (int attempt = 0; attempt < 12; attempt++)
         {
-            // 맵 가운데(1080, 710)를 둘러싼 타원(가로 650, 세로 540) 위의 한 점이다.
+            // 배치가 정한 증원 타원(Layout.Reinforcements) 위의 한 점이다.
             Angle angle = Angle.FromUnits(_random.NextInt(0, Angle.UnitsPerTurn));
             FixedVector direction = angle.Direction();
-            FixedVector position = new FixedVector(Fixed.FromInt(1080) + direction.X * 650, Fixed.FromInt(710) + direction.Y * 540);
+            SpawnRing ring = Layout.Reinforcements;
+            FixedVector position = new FixedVector(ring.Center.X + direction.X * ring.RadiusX, ring.Center.Y + direction.Y * ring.RadiusY);
             if (Visible(position))
             {
                 continue;
@@ -179,7 +170,7 @@ public sealed partial class Match
                 continue;
             }
             FixedVector position = Players[i].Position;
-            int index = position.Y.FloorDivide(BattleMap.Cell) * BattleMap.Columns + position.X.FloorDivide(BattleMap.Cell);
+            int index = position.Y.FloorDivide(BattleMap.Cell) * Map.Columns + position.X.FloorDivide(BattleMap.Cell);
             if (index >= 0 && index < _flow.Length && _flow[index] != 0)
             {
                 _flow[index] = 0;
@@ -189,8 +180,8 @@ public sealed partial class Match
         while (queue.Count > 0)
         {
             int index = queue.Dequeue();
-            int x = index % BattleMap.Columns;
-            int y = index / BattleMap.Columns;
+            int x = index % Map.Columns;
+            int y = index / Map.Columns;
             for (int direction = 0; direction < 4; direction++)
             {
                 int nx = x + NeighborX[direction];
@@ -199,7 +190,7 @@ public sealed partial class Match
                 {
                     continue;
                 }
-                int next = ny * BattleMap.Columns + nx;
+                int next = ny * Map.Columns + nx;
                 if (_flow[next] <= _flow[index] + 1)
                 {
                     continue;
@@ -219,7 +210,7 @@ public sealed partial class Match
         int best = int.MaxValue;
         if (!Map.Solid(x, y))
         {
-            best = _flow[y * BattleMap.Columns + x];
+            best = _flow[y * Map.Columns + x];
         }
         FixedVector heading = FixedVector.Zero;
         for (int direction = 0; direction < 4; direction++)
@@ -230,7 +221,7 @@ public sealed partial class Match
             {
                 continue;
             }
-            int cost = _flow[ny * BattleMap.Columns + nx];
+            int cost = _flow[ny * Map.Columns + nx];
             if (cost < best)
             {
                 best = cost;

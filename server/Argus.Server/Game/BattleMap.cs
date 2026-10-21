@@ -20,79 +20,47 @@ public readonly struct WallHit
 
 public sealed class BattleMap
 {
-    public const int Columns = 40;
-    public const int Rows = 30;
     public const int Cell = 48;
-    public const int Width = Columns * Cell;
-    public const int Height = Rows * Cell;
-    public static readonly FixedVector Camp = FixedVector.FromInt(300, 730);
-    public static readonly FixedVector Extraction = FixedVector.FromInt(1080, 1130);
+    // 캠프의 시야 반경이다. 캠프 둘레는 대원이 없어도 늘 보인다.
     public const int CampVision = 260;
-    public byte[] Tiles { get; } = new byte[Columns * Rows];
-    private readonly double[] _hp = new double[Columns * Rows];
+    // 부술 수 있는 벽(종류 1)의 체력이다. 다른 칸은 부서지지 않아 체력을 쓰지 않는다.
+    private const double BreakableWallHp = 3;
+    public int Columns { get; }
+    public int Rows { get; }
+    public byte[] Tiles { get; }
+    private readonly double[] _hp;
     public int Revision { get; private set; }
 
-    public BattleMap()
+    // 작전 배치의 처음 벽으로 맵을 만든다. 진행 중에는 벽이 부서지며 Tiles가 바뀐다.
+    public BattleMap(MissionLayout layout)
     {
-        for (int y = 0; y < Rows; y++)
+        Columns = layout.Columns;
+        Rows = layout.Rows;
+        Tiles = new byte[Columns * Rows];
+        _hp = new double[Columns * Rows];
+        for (int i = 0; i < Tiles.Length; i++)
         {
-            for (int x = 0; x < Columns; x++)
+            Tiles[i] = layout.Tiles[i];
+            if (Tiles[i] == 1)
             {
-                if (x == 0 || y == 0 || x == Columns - 1 || y == Rows - 1)
-                {
-                    Set(x, y, 2);
-                }
+                _hp[i] = BreakableWallHp;
             }
-        }
-
-        // 임무 시설을 둘러싼 벽을 만든다. 맵 안쪽 벽은 모두 파괴할 수 있다.
-        for (int x = 15; x <= 29; x++)
-        {
-            Set(x, 7, 1);
-            Set(x, 21, 1);
-        }
-        for (int y = 7; y <= 21; y++)
-        {
-            Set(15, y, 1);
-            Set(29, y, 1);
-        }
-
-        // 벽 일부를 지워 출입구를 만든다.
-        for (int y = 13; y <= 15; y++)
-        {
-            Set(15, y, 0);
-            Set(29, y, 0);
-        }
-        for (int x = 21; x <= 23; x++)
-        {
-            Set(x, 7, 0);
-            Set(x, 21, 0);
-        }
-
-        int[,] obstacles = new int[,]
-        {
-            { 19, 11 }, { 20, 11 }, { 25, 12 }, { 25, 13 },
-            { 20, 17 }, { 21, 17 }, { 26, 18 }, { 10, 10 },
-            { 10, 11 }, { 10, 18 }, { 11, 18 }, { 32, 10 },
-            { 32, 11 }, { 33, 19 }
-        };
-        for (int i = 0; i < obstacles.GetLength(0); i++)
-        {
-            Set(obstacles[i, 0], obstacles[i, 1], 1);
         }
     }
 
-    private void Set(int x, int y, byte kind)
+    public int Width
     {
-        int index = y * Columns + x;
-        Tiles[index] = kind;
-        if (kind == 1)
+        get
         {
-            _hp[index] = 3;
+            return Columns * Cell;
         }
-        else
+    }
+
+    public int Height
+    {
+        get
         {
-            _hp[index] = double.PositiveInfinity;
+            return Rows * Cell;
         }
     }
 
@@ -161,7 +129,7 @@ public sealed class BattleMap
     // from에서 to까지의 선분이 처음 닿는 벽을 찾는다. 타일 경계를 지나는 순서대로 한 칸씩 나아간다.
     // 일정 간격으로 점을 찍어 보는 방식은 모서리를 조금 스친 벽을 놓칠 수 있다.
     // 경계마다 지나는 비율은 (경계까지 남은 거리) / (선분의 길이)다. 두 축 중 어느 경계를 먼저 지나는지는 나누지 않고
-    // 엇갈려 곱해 비교한다(a / b < c / d ⟺ a × d < c × b). 그래서 순서가 반올림 없이 정확하고, 곱은 맵 안에서 2^47 아래라
+    // 엇갈려 곱해 비교한다(a / b < c / d ⟺ a × d < c × b). 그래서 순서가 반올림 없이 정확하고, 곱은 가장 큰 맵(MissionLayout.MaximumSize)에서도 2^50 아래라
     // JavaScript로도 같은 계산을 할 수 있다.
     public WallHit RayWall(FixedVector from, FixedVector to)
     {
@@ -265,7 +233,7 @@ public sealed class BattleMap
         return Fixed.FromRaw(Fixed.DivideRounded(part * Fixed.Scale, whole));
     }
 
-    private static WallHit TileHit(Fixed fraction, int x, int y)
+    private WallHit TileHit(Fixed fraction, int x, int y)
     {
         int tile = -1;
         if (x >= 0 && y >= 0 && x < Columns && y < Rows)

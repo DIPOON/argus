@@ -377,10 +377,10 @@ internal static class ClientParityTests
 
     private static void AppendMap(StringBuilder text)
     {
-        BattleMap map = new BattleMap();
+        BattleMap map = new BattleMap(MissionLayout.CreateHandmade());
         text.Append("  \"map\": { \"cell\": ").Append(Number(BattleMap.Cell));
-        text.Append(", \"columns\": ").Append(Number(BattleMap.Columns));
-        text.Append(", \"rows\": ").Append(Number(BattleMap.Rows));
+        text.Append(", \"columns\": ").Append(Number(map.Columns));
+        text.Append(", \"rows\": ").Append(Number(map.Rows));
         text.Append(", \"walls\": \"").Append(Convert.ToBase64String(map.Tiles)).Append("\" },\n");
     }
 
@@ -495,7 +495,7 @@ internal static class ClientParityTests
         Match match = new Match("PARITY", rules, 73);
         Player player = match.Join("p", "pilot")!;
         player.Connected = true;
-        Check(match.Deploy(player, BattleMap.Camp.X.ToDouble(), BattleMap.Camp.Y.ToDouble()));
+        Check(match.Deploy(player, match.Layout.Camp.X.ToDouble(), match.Layout.Camp.Y.ToDouble()));
         Advance(match, rules.DeploySeconds + 0.01);
         Equal(player.State, "alive");
         player.Position = start;

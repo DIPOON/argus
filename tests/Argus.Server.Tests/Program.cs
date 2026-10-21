@@ -23,6 +23,7 @@ internal static class Program
             RecordingTests.Register(tests);
             FixedTests.Register(tests);
             ClientParityTests.Register(tests);
+            LayoutTests.Register(tests);
         }
         else if (args.Length == 1 && args[0] == "determinism")
         {
@@ -85,7 +86,7 @@ internal sealed class Fixture
         Match = new Match("TEST01", rules, 73);
         Player = Match.Join("p", "pilot")!;
         Player.Connected = true;
-        TestTools.Check(Match.Deploy(Player, BattleMap.Camp.X.ToDouble(), BattleMap.Camp.Y.ToDouble()));
+        TestTools.Check(Match.Deploy(Player, Match.Layout.Camp.X.ToDouble(), Match.Layout.Camp.Y.ToDouble()));
         TestTools.Advance(Match, rules.DeploySeconds + 0.01);
         TestTools.Equal(Player.State, "alive");
     }
@@ -112,6 +113,20 @@ internal static class TestTools
         {
             throw new Exception(message);
         }
+    }
+
+    // action이 TException(또는 그것을 물려받은 예외)을 내야 통과한다.
+    public static void Throws<TException>(Func<object> action) where TException : Exception
+    {
+        try
+        {
+            action();
+        }
+        catch (TException)
+        {
+            return;
+        }
+        throw new Exception($"{typeof(TException).Name} 예외가 나지 않았습니다");
     }
 
     public static void Equal<T>(T actual, T expected)

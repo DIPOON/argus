@@ -103,7 +103,7 @@ internal static class RecordingTests
                 }
                 if (player.State == "waiting")
                 {
-                    match.Deploy(player, BattleMap.Camp.X.ToDouble() + i * 30, BattleMap.Camp.Y.ToDouble());
+                    match.Deploy(player, match.Layout.Camp.X.ToDouble() + i * 30, match.Layout.Camp.Y.ToDouble());
                     continue;
                 }
                 double heading = tick * 0.05;
@@ -225,7 +225,7 @@ internal static class RecordingTests
             (Room room, Player player, Peer peer) = host.Attach(guest.Room, guest.Token)!.Value;
             lock (room.Gate)
             {
-                Check(room.Match.Deploy(player, BattleMap.Camp.X.ToDouble(), BattleMap.Camp.Y.ToDouble()));
+                Check(room.Match.Deploy(player, room.Match.Layout.Camp.X.ToDouble(), room.Match.Layout.Camp.Y.ToDouble()));
             }
             // 투입을 기다렸다가 20초 동안 걸으며 기술을 쓴다. 서버처럼 틱 사이에 잠금을 잡고 입력을 넣는다.
             long sequence = 0;

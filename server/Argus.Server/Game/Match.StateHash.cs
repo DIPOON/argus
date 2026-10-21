@@ -29,6 +29,7 @@ public sealed partial class Match
         hasher.AddLong(_nextFlowTick);
         hasher.AddIntArray(_flow);
         hasher.AddLong(_random.Position);
+        Layout.AddState(hasher);
         Map.AddState(hasher);
 
         hasher.AddInt(Players.Count);

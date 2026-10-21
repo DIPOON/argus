@@ -349,8 +349,8 @@ internal static class CombatTests
     {
         // 장애물 타일 (10, 10)은 x 480~528, y 480~528이다. 경계를 지나는 순서를 나누지 않고 엇갈려 곱해 비교하므로
         // 꼭짓점이나 경계 위를 지나는 선분도 반올림 없이 판정한다. 비율은 1/4096 단위로 반올림한 값이다.
-        BattleMap map = new BattleMap();
-        int tile = 10 * BattleMap.Columns + 10;
+        BattleMap map = new BattleMap(MissionLayout.CreateHandmade());
+        int tile = 10 * map.Columns + 10;
         bool layout = map.Solid(10, 10) && !map.Solid(9, 10) && !map.Solid(10, 9);
         Check(layout, "검사 조건(타일 배치)이 바뀌었습니다");
 

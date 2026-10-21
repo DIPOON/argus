@@ -5,7 +5,9 @@ public sealed partial class Match
 {
     public string Code { get; }
     public Rules Rules { get; }
-    public BattleMap Map { get; } = new BattleMap();
+    public BattleMap Map { get; }
+    // 이 방의 맵 크기와 임무 배치다. 진행 중에는 바뀌지 않는다.
+    public MissionLayout Layout { get; }
     public List<Player> Players { get; } = new List<Player>();
     public List<Enemy> Enemies { get; } = new List<Enemy>();
     public List<Facility> Facilities { get; } = new List<Facility>();
@@ -34,7 +36,7 @@ public sealed partial class Match
     private int _nextId = 100;
     // 안내 순번이다. 효과·행동의 순번(_nextId)과 따로 센다.
     private int _nextNoticeId;
-    private readonly int[] _flow = new int[BattleMap.Columns * BattleMap.Rows];
+    private readonly int[] _flow;
     private long _nextFlowTick;
     // 탈출 진행도다. 탈출 지점을 비우면 절반 속도로 줄어들므로 반 틱 단위로 센다.
     private long _extractionHalfTicks;
@@ -70,10 +72,13 @@ public sealed partial class Match
 
     // 코드·규칙·시드가 같은 두 방에 같은 틱마다 같은 입력을 넣으면, 언제 어느 기계에서 돌려도 같은 상태가 된다.
     // 운영 방은 RoomHost가 만든 비밀 시드를 넘긴다. 시드를 알면 적의 행동과 생성 위치를 미리 알 수 있으므로 클라이언트에 보내지 않는다.
-    public Match(string code, Rules rules, byte[] seed)
+    public Match(string code, Rules rules, byte[] seed, MissionLayout layout)
     {
         Code = code;
         Rules = rules;
+        Layout = layout;
+        Map = new BattleMap(layout);
+        _flow = new int[Map.Columns * Map.Rows];
         _random = new SeededRandom(seed);
         _rulesJson = StateHasher.ToJson(rules);
         int guardHalfAngle = Angle.SpanUnits(rules.GuardHalfAngle);
@@ -86,26 +91,35 @@ public sealed partial class Match
         _playerStep = Fixed.FromDouble(rules.PlayerSpeed) / Rules.TicksPerSecond;
         VisionRange = Fixed.FromDouble(rules.Vision);
         _visionSquared = VisionRange * VisionRange;
-        Facilities.Add(new Facility(1, FixedVector.FromInt(960, 485)));
-        Facilities.Add(new Facility(2, FixedVector.FromInt(1210, 695)));
-        Facilities.Add(new Facility(3, FixedVector.FromInt(990, 920)));
-        Supplies.Add(new Supply(1, BattleMap.Camp + FixedVector.FromInt(70, 40), false));
-        Supplies.Add(new Supply(2, FixedVector.FromInt(845, 640), true));
-        Supplies.Add(new Supply(3, FixedVector.FromInt(1150, 835), true));
-        Supplies.Add(new Supply(4, FixedVector.FromInt(815, 985), false));
-        Supplies.Add(new Supply(5, FixedVector.FromInt(1080, 740), false));
-        // 처음 배치하는 적의 종류다. 첫 작전은 모두 병사이고, 엘리트를 켠 작전은 뒤의 둘이 분쇄자와 철위병이다.
-        // 자리는 InitialEnemySpots 한 곳에서 정하고 여기서는 종류만 고른다.
-        EnemyDefinition[] kinds = new EnemyDefinition[] { EnemyDefinition.Grunt, EnemyDefinition.Grunt, EnemyDefinition.Grunt };
-        if (Rules.AllowEliteEnemies)
+        // 시설과 보급은 배치의 순서대로 1번부터 번호를 붙인다.
+        for (int i = 0; i < layout.Facilities.Count; i++)
         {
-            kinds[1] = EnemyDefinition.Breaker;
-            kinds[2] = EnemyDefinition.Warden;
+            Facilities.Add(new Facility(i + 1, layout.Facilities[i]));
         }
-        for (int i = 0; i < InitialEnemySpots.Count; i++)
+        for (int i = 0; i < layout.Supplies.Count; i++)
         {
-            PlaceInitialEnemy(InitialEnemySpots[i], kinds[i]);
+            Supplies.Add(new Supply(i + 1, layout.Supplies[i].Position, layout.Supplies[i].Objective));
         }
+        // 처음 배치하는 적의 종류다. 모두 병사이고, 엘리트를 켠 작전은 세 자리마다 둘째가 분쇄자, 셋째가 철위병이다.
+        // 자리는 배치(Layout.InitialEnemySpots)가 정하고 여기서는 종류만 고른다.
+        for (int i = 0; i < layout.InitialEnemySpots.Count; i++)
+        {
+            EnemyDefinition kind = EnemyDefinition.Grunt;
+            if (Rules.AllowEliteEnemies && i % 3 == 1)
+            {
+                kind = EnemyDefinition.Breaker;
+            }
+            else if (Rules.AllowEliteEnemies && i % 3 == 2)
+            {
+                kind = EnemyDefinition.Warden;
+            }
+            PlaceInitialEnemy(layout.InitialEnemySpots[i], kind);
+        }
+    }
+
+    // 손으로 만든 고정 맵의 방이다. 검사와 재현에 쓴다.
+    public Match(string code, Rules rules, byte[] seed) : this(code, rules, seed, MissionLayout.CreateHandmade())
+    {
     }
 
     // 검사와 재현용이다. 정수에서 32바이트 시드를 만든다.
@@ -202,7 +216,7 @@ public sealed partial class Match
             return null;
         }
         Player player = new Player(id, name);
-        player.Position = BattleMap.Camp;
+        player.Position = Layout.Camp;
         player.MaxHp = Rules.PlayerHealth;
         player.Hp = player.MaxHp;
         player.MaxMana = Rules.MaxMana;
@@ -527,9 +541,9 @@ public sealed partial class Match
                 }
             }
         }
-        if (CanOccupy(BattleMap.Camp, Rules.PlayerRadius, null))
+        if (CanOccupy(Layout.Camp, Rules.PlayerRadius, null))
         {
-            return BattleMap.Camp;
+            return Layout.Camp;
         }
         // 근처와 캠프가 모두 막힌 드문 경우다. 투입 중 상태에 묶어 두지 않도록 원래 지점에서 점점 넓혀 빈 자리를 찾는다.
         // 여기서는 원래 지점이 보이는지 따지지 않는다. 이만큼 막힌 곳이라면 옮겨진 사실로 새로 알게 되는 것이 거의 없다.
@@ -634,7 +648,7 @@ public sealed partial class Match
         for (int i = 0; i < Players.Count; i++)
         {
             if (Players[i].State == "alive" &&
-                FixedVector.DistanceSquared(Players[i].Position, BattleMap.Extraction) < Fixed.FromInt(80 * 80))
+                FixedVector.DistanceSquared(Players[i].Position, Layout.Extraction) < Fixed.FromInt(80 * 80))
             {
                 return true;
             }
@@ -707,7 +721,7 @@ public sealed partial class Match
 
     public bool Visible(FixedVector point)
     {
-        if (FixedVector.DistanceSquared(BattleMap.Camp, point) <= CampVisionSquared && Map.LineOfSight(BattleMap.Camp, point))
+        if (FixedVector.DistanceSquared(Layout.Camp, point) <= CampVisionSquared && Map.LineOfSight(Layout.Camp, point))
         {
             return true;
         }

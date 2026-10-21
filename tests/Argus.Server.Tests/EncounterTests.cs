@@ -27,12 +27,12 @@ internal static class EncounterTests
 
     private static void CheckPlacement(Match match, string[] kinds)
     {
-        Equal(Match.InitialEnemySpots.Count, kinds.Length);
+        Equal(match.Layout.InitialEnemySpots.Count, kinds.Length);
         Equal(match.Enemies.Count, kinds.Length);
         for (int i = 0; i < kinds.Length; i++)
         {
             Enemy enemy = match.Enemies[i];
-            FixedVector spot = Match.InitialEnemySpots[i];
+            FixedVector spot = match.Layout.InitialEnemySpots[i];
             Check(enemy.Position == spot, $"{i}번째 적이 {enemy.Position}에 있습니다. 자리는 {spot}입니다");
             Equal(enemy.Definition.Id, kinds[i]);
         }
@@ -167,10 +167,10 @@ internal static class EncounterTests
         // 대원은 캠프에 있고 흐름장도 캠프 칸을 출발점(비용 0)으로 만들어졌다.
         Fixture f = new Fixture();
         // 출발점 칸 안에서는 더 나은 이웃이 없다. 이웃 칸(비용 1)으로 향하면 대원에게서 멀어진다.
-        FixedVector inside = f.Match.FlowHeading(BattleMap.Camp);
+        FixedVector inside = f.Match.FlowHeading(f.Match.Layout.Camp);
         Check(inside.IsZero(), "출발점 칸 안에서 이웃 칸으로 향합니다");
         // 옆 칸에서는 출발점 칸 쪽을 가리킨다.
-        FixedVector beside = f.Match.FlowHeading(BattleMap.Camp + FixedVector.FromInt(BattleMap.Cell, 0));
+        FixedVector beside = f.Match.FlowHeading(f.Match.Layout.Camp + FixedVector.FromInt(BattleMap.Cell, 0));
         Check(beside.X < Fixed.Zero, "옆 칸에서 출발점 쪽을 가리키지 않습니다");
     }
 
