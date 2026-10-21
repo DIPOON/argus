@@ -94,7 +94,7 @@ public sealed class EnemySnapshot
     public double Y { get; set; }
     public string Kind { get; set; } = "";
     public string Name { get; set; } = "";
-    public float Radius { get; set; }
+    public double Radius { get; set; }
     public double Hp { get; set; }
     public int MaxHp { get; set; }
     public int[] Tiers { get; set; } = Array.Empty<int>();
@@ -122,8 +122,8 @@ public sealed class NoticeSnapshot
 public sealed class FacilitySnapshot
 {
     public int Id { get; set; }
-    public float X { get; set; }
-    public float Y { get; set; }
+    public double X { get; set; }
+    public double Y { get; set; }
     public double Hp { get; set; }
     public double MaxHp { get; set; }
 }
@@ -131,8 +131,8 @@ public sealed class FacilitySnapshot
 public sealed class SupplySnapshot
 {
     public int Id { get; set; }
-    public float X { get; set; }
-    public float Y { get; set; }
+    public double X { get; set; }
+    public double Y { get; set; }
     public bool Objective { get; set; }
     public bool Collected { get; set; }
     public double Cooldown { get; set; }
@@ -140,8 +140,8 @@ public sealed class SupplySnapshot
 
 public sealed class ExtractionSnapshot
 {
-    public float X { get; set; }
-    public float Y { get; set; }
+    public double X { get; set; }
+    public double Y { get; set; }
     public double Progress { get; set; }
     public double Duration { get; set; }
     public bool Unlocked { get; set; }
@@ -154,15 +154,15 @@ public sealed class MapSnapshot
     public int Cell { get; set; } = BattleMap.Cell;
     public int Columns { get; set; } = BattleMap.Columns;
     public int Rows { get; set; } = BattleMap.Rows;
-    public float CampX { get; set; } = (float)BattleMap.Camp.X.ToDouble();
-    public float CampY { get; set; } = (float)BattleMap.Camp.Y.ToDouble();
+    public double CampX { get; set; }
+    public double CampY { get; set; }
 }
 
 public sealed class RulesSnapshot
 {
     public double Deploy { get; set; }
     public double Speed { get; set; }
-    public float PlayerRadius { get; set; } = (float)Rules.PlayerRadius.ToDouble();
+    public double PlayerRadius { get; set; }
     public double GuardHalfAngle { get; set; }
     public double ParryFollowupSeconds { get; set; }
     public List<SkillDefinition> Skills { get; set; } = new List<SkillDefinition>();

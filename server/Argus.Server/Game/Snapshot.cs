@@ -48,8 +48,8 @@ public static class Snapshot
         message.Pulse = match.Pulse;
         long nextPulseTick = Rules.ToTicks((match.Pulse + 1) * match.Rules.PulseSeconds);
         message.NextPulse = Seconds(nextPulseTick - match.ElapsedTicks);
-        message.Extraction.X = (float)BattleMap.Extraction.X.ToDouble();
-        message.Extraction.Y = (float)BattleMap.Extraction.Y.ToDouble();
+        message.Extraction.X = Round(BattleMap.Extraction.X);
+        message.Extraction.Y = Round(BattleMap.Extraction.Y);
         message.Extraction.Progress = Round(match.ExtractionProgress);
         message.Extraction.Duration = match.Rules.ExtractionSeconds;
         message.Extraction.Unlocked = match.ObjectivesComplete;
@@ -75,7 +75,7 @@ public static class Snapshot
             entry.Name = enemy.Definition.Name;
             entry.Hp = enemy.Hp;
             entry.MaxHp = enemy.Definition.Health;
-            entry.Radius = (float)enemy.Definition.Radius.ToDouble();
+            entry.Radius = Round(enemy.Definition.Radius);
             entry.Tiers = new int[enemy.Definition.Skills.Length];
             for (int j = 0; j < entry.Tiers.Length; j++)
             {
@@ -129,8 +129,8 @@ public static class Snapshot
             Facility facility = match.Facilities[i];
             FacilitySnapshot entry = new FacilitySnapshot();
             entry.Id = facility.Id;
-            entry.X = (float)facility.Position.X.ToDouble();
-            entry.Y = (float)facility.Position.Y.ToDouble();
+            entry.X = Round(facility.Position.X);
+            entry.Y = Round(facility.Position.Y);
             entry.Hp = facility.Hp;
             entry.MaxHp = facility.MaxHp;
             message.Facilities.Add(entry);
@@ -152,6 +152,7 @@ public static class Snapshot
         RulesSnapshot rules = new RulesSnapshot();
         rules.Deploy = match.Rules.DeploySeconds;
         rules.Speed = match.Rules.PlayerSpeed;
+        rules.PlayerRadius = Round(Rules.PlayerRadius);
         rules.GuardHalfAngle = match.Rules.GuardHalfAngle;
         rules.ParryFollowupSeconds = match.Rules.ParryFollowupSeconds;
         rules.Skills.Add(match.Rules.Strike);
@@ -171,8 +172,8 @@ public static class Snapshot
             Supply supply = match.Supplies[i];
             SupplySnapshot entry = new SupplySnapshot();
             entry.Id = supply.Id;
-            entry.X = (float)supply.Position.X.ToDouble();
-            entry.Y = (float)supply.Position.Y.ToDouble();
+            entry.X = Round(supply.Position.X);
+            entry.Y = Round(supply.Position.Y);
             entry.Objective = supply.Objective;
             entry.Collected = supply.Collected;
             // 보급 대기 시간은 대원마다 다르다.
@@ -185,10 +186,19 @@ public static class Snapshot
         }
         if (includeStatic)
         {
-            personal.Map = new MapSnapshot();
+            personal.Map = CreateMap();
             personal.Rules = CreateRules(match);
         }
         return personal;
+    }
+
+    // 맵의 크기와 칸 수는 정수 상수라 기본값 그대로 보내고, 고정소수점인 캠프 위치만 다른 좌표처럼 바꿔 담는다.
+    private static MapSnapshot CreateMap()
+    {
+        MapSnapshot map = new MapSnapshot();
+        map.CampX = Round(BattleMap.Camp.X);
+        map.CampY = Round(BattleMap.Camp.Y);
+        return map;
     }
 
     private static PlayerSnapshot CreatePlayer(Match match, Player player)
@@ -294,21 +304,27 @@ public static class Snapshot
                 end = FixedVector.Lerp(origin, target, wall.Fraction);
             }
             // 시야 다각형은 그리기에만 쓰이고 1단위 미만은 화면에서 구분되지 않으므로 정수로 보낸다.
-            points[i * 2] = (int)Math.Round(end.X.ToDouble());
-            points[i * 2 + 1] = (int)Math.Round(end.Y.ToDouble());
+            // 다른 좌표처럼 딱 절반이면 0에서 먼 쪽으로 반올림한다.
+            points[i * 2] = end.X.RoundToInt();
+            points[i * 2 + 1] = end.Y.RoundToInt();
         }
         return points;
     }
 
+    // 시간(틱 ÷ 30)과 탈출 진행도(반 틱 ÷ 60)를 소수 둘째 자리로 반올림한다. 둘 다 100을 곱하면 소수 부분이 0, 1/3, 2/3 중
+    // 하나라 딱 절반이 나오지 않으므로, 딱 절반을 짝수 쪽으로 보내는 실수의 기본 반올림을 그대로 써도 결과가 같다.
     private static double Round(double value)
     {
         return Math.Round(value, 2);
     }
 
-    // 좌표를 보낼 실수로 바꿔 소수 둘째 자리로 반올림한다.
+    // 고정소수점 값(좌표·반지름)을 보낼 실수로 바꿔 소수 둘째 자리로 반올림한다. 고정소수점 값에는 0.125(Raw 512)처럼
+    // 소수 셋째 자리가 딱 5인 값이 실제로 있는데, 실수의 Math.Round는 이것을 짝수 쪽(0.12)으로 보낸다.
+    // 그래서 Raw에서 100분의 1 단위 정수로 바로 반올림해, Fixed의 다른 연산처럼 딱 절반이면 0에서 먼 쪽(0.13)으로 보낸다.
     private static double Round(Fixed value)
     {
-        return Math.Round(value.ToDouble(), 2);
+        long hundredths = Fixed.DivideRounded(checked(value.Raw * 100), Fixed.Scale);
+        return hundredths / 100.0;
     }
 
     // 틱 시각과 틱 수를 보낼 초로 바꾼다. 틱으로 된 시간 필드는 모두 이것을 거쳐 같은 방식(소수 둘째 자리)으로 반올림되므로,

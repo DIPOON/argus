@@ -464,7 +464,8 @@ public sealed partial class Match
                 }
                 FixedVector facing = player.AimDirection;
                 WallHit wall = Map.RayWall(player.Position, player.Position + facing * action.Skill.RangeFixed);
-                if (wall.Tile >= 0 && !action.HitWalls.Contains(wall.Tile))
+                // 맵 밖에서 닿으면 Tile이 -1이다. Hit도 함께 봐서, 닿지 않은 결과(Tile이 0인 default 포함)를 0번 타일로 치지 않는다.
+                if (wall.Hit && wall.Tile >= 0 && !action.HitWalls.Contains(wall.Tile))
                 {
                     action.HitWalls.Add(wall.Tile);
                     // Map.Damage는 벽이 부서졌을 때만 true를 돌려주므로, 부술 수 있는 벽인지는 치기 전에 따로 본다.

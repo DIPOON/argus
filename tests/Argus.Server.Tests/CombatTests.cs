@@ -351,31 +351,56 @@ internal static class CombatTests
         // 꼭짓점이나 경계 위를 지나는 선분도 반올림 없이 판정한다. 비율은 1/4096 단위로 반올림한 값이다.
         BattleMap map = new BattleMap();
         int tile = 10 * BattleMap.Columns + 10;
-        Check(map.Solid(10, 10) && !map.Solid(9, 10) && !map.Solid(10, 9), "검사 조건(타일 배치)이 바뀌었습니다");
+        bool layout = map.Solid(10, 10) && !map.Solid(9, 10) && !map.Solid(10, 9);
+        Check(layout, "검사 조건(타일 배치)이 바뀌었습니다");
 
         // 꼭짓점 (480, 480)을 정확히 지나는 대각선이다. 양옆 타일이 비어 있으므로 대각선 너머의 벽 타일에 닿는다. 비율은 80 / 200 = 0.4다.
-        WallHit corner = map.RayWall(FixedVector.FromInt(400, 400), FixedVector.FromInt(600, 600));
+        FixedVector cornerFrom = FixedVector.FromInt(400, 400);
+        FixedVector cornerTo = FixedVector.FromInt(600, 600);
+        WallHit corner = map.RayWall(cornerFrom, cornerTo);
         Check(corner.Hit, "꼭짓점을 지나는 선분이 벽을 지나쳤습니다");
         Equal(corner.Tile, tile);
         Equal(corner.Fraction.Raw, 1638L);
 
         // 타일 윗면(y = 480) 위를 따라가는 선분은 그 줄(y 480~528)에 있으므로 벽에 닿는다. Raw 하나 위는 윗줄이라 닿지 않는다.
-        WallHit along = map.RayWall(FixedVector.FromInt(400, 480), FixedVector.FromInt(600, 480));
-        Check(along.Hit && along.Tile == tile, "경계 위를 지나는 선분이 벽을 지나쳤습니다");
+        FixedVector edgeFrom = FixedVector.FromInt(400, 480);
+        FixedVector edgeTo = FixedVector.FromInt(600, 480);
+        WallHit along = map.RayWall(edgeFrom, edgeTo);
+        Check(along.Hit, "경계 위를 지나는 선분이 벽을 지나쳤습니다");
+        Equal(along.Tile, tile);
         Equal(along.Fraction.Raw, 1638L);
         Fixed above = Fixed.FromRaw(480 * Fixed.Scale - 1);
-        Check(map.LineOfSight(new FixedVector(Fixed.FromInt(400), above), new FixedVector(Fixed.FromInt(600), above)), "경계 바로 위의 선분이 막혔습니다");
+        FixedVector aboveFrom = new FixedVector(Fixed.FromInt(400), above);
+        FixedVector aboveTo = new FixedVector(Fixed.FromInt(600), above);
+        bool aboveClear = map.LineOfSight(aboveFrom, aboveTo);
+        Check(aboveClear, "경계 바로 위의 선분이 막혔습니다");
 
         // 반대 방향(오른쪽에서 왼쪽)으로는 오른쪽 면 x = 528에서 닿는다. 비율은 72 / 200 = 0.36(1474.56칸)이라 1475다.
-        WallHit back = map.RayWall(FixedVector.FromInt(600, 500), FixedVector.FromInt(400, 500));
-        Check(back.Hit && back.Tile == tile, "반대 방향 선분이 벽을 지나쳤습니다");
+        FixedVector backFrom = FixedVector.FromInt(600, 500);
+        FixedVector backTo = FixedVector.FromInt(400, 500);
+        WallHit back = map.RayWall(backFrom, backTo);
+        Check(back.Hit, "반대 방향 선분이 벽을 지나쳤습니다");
+        Equal(back.Tile, tile);
         Equal(back.Fraction.Raw, 1475L);
 
-        // 벽 안에서 시작하면 비율 0에서 닿는다. 선분이 벽 앞에서 끝나면 닿지 않는다.
-        WallHit inside = map.RayWall(FixedVector.FromInt(500, 500), FixedVector.FromInt(700, 500));
-        Check(inside.Hit && inside.Tile == tile && inside.Fraction == Fixed.Zero, "벽 안에서 시작한 선분이 닿지 않았습니다");
-        Check(!map.RayWall(FixedVector.FromInt(400, 500), FixedVector.FromInt(479, 500)).Hit, "벽 앞에서 끝난 선분이 닿았습니다");
-        Check(map.RayWall(FixedVector.FromInt(400, 500), FixedVector.FromInt(480, 500)).Hit, "벽 면에서 끝난 선분이 닿지 않았습니다");
+        // 벽 안에서 시작하면 비율 0에서 닿는다.
+        FixedVector insideFrom = FixedVector.FromInt(500, 500);
+        FixedVector insideTo = FixedVector.FromInt(700, 500);
+        WallHit inside = map.RayWall(insideFrom, insideTo);
+        Check(inside.Hit, "벽 안에서 시작한 선분이 닿지 않았습니다");
+        Equal(inside.Tile, tile);
+        Equal(inside.Fraction, Fixed.Zero);
+
+        // 벽 면(x = 480) 바로 앞에서 끝나면 닿지 않고, 벽 면에서 끝나면 끝점(비율 1)에서 닿는다.
+        FixedVector approach = FixedVector.FromInt(400, 500);
+        FixedVector beforeFace = FixedVector.FromInt(479, 500);
+        FixedVector onFace = FixedVector.FromInt(480, 500);
+        WallHit stopsShort = map.RayWall(approach, beforeFace);
+        Check(!stopsShort.Hit, "벽 앞에서 끝난 선분이 닿았습니다");
+        WallHit reachesFace = map.RayWall(approach, onFace);
+        Check(reachesFace.Hit, "벽 면에서 끝난 선분이 닿지 않았습니다");
+        Equal(reachesFace.Tile, tile);
+        Equal(reachesFace.Fraction, Fixed.One);
     }
 
     private static void Cover()

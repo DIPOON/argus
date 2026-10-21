@@ -16,6 +16,7 @@ internal static class LifecycleTests
         tests.Add(new TestCase("Entry waits for selection and five seconds without revealing the landing", Deployment));
         tests.Add(new TestCase("A repeated deploy request while deploying is accepted without moving the landing or the timer", RepeatedDeploy));
         tests.Add(new TestCase("Movement rejects invalid/replayed input and normalizes diagonals", InputAuthority));
+        tests.Add(new TestCase("Steps of a split move add up to exactly the move even when it does not divide evenly", StepsAddUp));
         tests.Add(new TestCase("Stale input and disconnect stop movement and further casts", InputExpiry));
         tests.Add(new TestCase("Solo death and all-dead squads fail before pending deployment", Wipe));
         tests.Add(new TestCase("Respawn and late join wait equally, with full health and zero mana", Respawn));
@@ -30,6 +31,7 @@ internal static class LifecycleTests
         tests.Add(new TestCase("Effects, notices and actions keep their wire shape and send tick times as seconds rounded like now", TimedWireShape));
         tests.Add(new TestCase("A parry followup ends on the tick its followupUntil names, not after the followup time rounded on its own", FollowupWireTime));
         tests.Add(new TestCase("Extraction progress times sixty rounds back to the exact half-tick count, odd counts included", ExtractionProgressWire));
+        tests.Add(new TestCase("Coordinates and radii go out rounded to hundredths with exact halves away from zero", CoordinateWireRounding));
         tests.Add(new TestCase("Two identical notices on the same tick keep distinct ids that keep growing", NoticeIds));
         tests.Add(new TestCase("A slot that never connects is released quickly while a dropped member keeps the long grace", FirstConnectGrace));
         tests.Add(new TestCase("A long session keeps its room for the full retention time after the last disconnect", RoomRetention));
@@ -120,6 +122,25 @@ internal static class LifecycleTests
             f.Match.Input(f.Player, i, 1, 0, 0, 0);
         }
         Near(Distance(from, f.Player.Position), 0);
+    }
+
+    private static void StepsAddUp()
+    {
+        // 한 틱의 이동은 4단위보다 길면 여러 걸음으로 나눈다. 초당 200이면 한 틱에 약 6.667(Raw 27307)이라 두 걸음이고,
+        // 둘로 나누어떨어지지 않는다. 걸음마다 delta / 2(Raw 13654)를 쓰면 한 틱에 Raw 하나씩 더 간다.
+        // 걸음을 누적 이동량(delta × i / 걸음 수)의 차로 정하므로, 걸음을 다 더하면 정확히 한 틱의 이동 거리다.
+        Rules rules = new Rules { MaxEnemies = 0, PlayerSpeed = 200 };
+        Fixture f = new Fixture(rules);
+        Fixed step = Fixed.FromDouble(rules.PlayerSpeed) / Rules.TicksPerSecond;
+        Equal(step.Raw, 27307L);
+        FixedVector start = f.Player.Position;
+        for (int i = 0; i < 3; i++)
+        {
+            Check(f.Match.Input(f.Player, i, 1, 0, 0, 0));
+            f.Match.Step();
+        }
+        FixedVector moved = new FixedVector(step * 3, Fixed.Zero);
+        Equal(f.Player.Position, start + moved);
     }
 
     private static void InputExpiry()
@@ -428,6 +449,43 @@ internal static class LifecycleTests
         {
             double progress = json.RootElement.GetProperty("extraction").GetProperty("progress").GetDouble();
             return (long)Math.Round(progress * 2 * Rules.TicksPerSecond);
+        }
+    }
+
+    private static void CoordinateWireRounding()
+    {
+        // 좌표는 4096분의 1 단위라 0.125(Raw 512)나 0.625(Raw 2560)처럼 소수 셋째 자리가 딱 5인 값이 있다.
+        // 실수의 Math.Round는 이런 값을 짝수 쪽(0.12, 0.62)으로 보내지만, 보낼 때는 Fixed처럼 0에서 먼 쪽(0.13, 0.63)으로 반올림한다.
+        Fixture f = new Fixture();
+        Fixed x = Fixed.FromRaw(300 * Fixed.Scale + 512);
+        Fixed y = Fixed.FromRaw(730 * Fixed.Scale + 2560);
+        f.Player.Position = new FixedVector(x, y);
+        Enemy enemy = Target(f);
+        byte[] bytes = Snapshot.Create(f.Match, f.Player, RoomHost.Json);
+        using (JsonDocument json = JsonDocument.Parse(bytes))
+        {
+            JsonElement root = json.RootElement;
+            JsonElement player = root.GetProperty("players")[0];
+            Equal(player.GetProperty("x").GetDouble(), 300.13);
+            Equal(player.GetProperty("y").GetDouble(), 730.63);
+
+            // 시설·보급·탈출 지점·캠프의 좌표와 몸 반지름도 같은 도우미를 거친다. 지금은 모두 정수라 값이 그대로다.
+            JsonElement facility = root.GetProperty("facilities")[0];
+            Equal(facility.GetProperty("x").GetDouble(), f.Match.Facilities[0].Position.X.ToDouble());
+            Equal(facility.GetProperty("y").GetDouble(), f.Match.Facilities[0].Position.Y.ToDouble());
+            JsonElement supply = root.GetProperty("supplies")[0];
+            Equal(supply.GetProperty("x").GetDouble(), f.Match.Supplies[0].Position.X.ToDouble());
+            Equal(supply.GetProperty("y").GetDouble(), f.Match.Supplies[0].Position.Y.ToDouble());
+            JsonElement extraction = root.GetProperty("extraction");
+            Equal(extraction.GetProperty("x").GetDouble(), BattleMap.Extraction.X.ToDouble());
+            Equal(extraction.GetProperty("y").GetDouble(), BattleMap.Extraction.Y.ToDouble());
+            JsonElement map = root.GetProperty("map");
+            Equal(map.GetProperty("campX").GetDouble(), BattleMap.Camp.X.ToDouble());
+            Equal(map.GetProperty("campY").GetDouble(), BattleMap.Camp.Y.ToDouble());
+            JsonElement rules = root.GetProperty("rules");
+            Equal(rules.GetProperty("playerRadius").GetDouble(), Rules.PlayerRadius.ToDouble());
+            JsonElement seen = root.GetProperty("enemies")[0];
+            Equal(seen.GetProperty("radius").GetDouble(), enemy.Definition.Radius.ToDouble());
         }
     }
 

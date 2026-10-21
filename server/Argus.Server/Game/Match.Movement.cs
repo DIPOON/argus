@@ -42,10 +42,17 @@ public sealed partial class Match
     // 조각마다 가로와 세로를 따로 움직여, 막힌 쪽만 멈추고 벽을 따라 미끄러지게 한다.
     private FixedVector MoveBody(FixedVector from, FixedVector delta, Fixed radius, Enemy? mover)
     {
-        int steps = Math.Max(1, (delta.Length() / 4).CeilingToInt());
-        FixedVector step = delta / steps;
-        for (int i = 0; i < steps; i++)
+        // 걸음 수는 길이를 4로 나눈 몫을 올린 값이다.
+        int steps = Math.Max(1, delta.Length().CeilingDivide(4));
+        // i번째 걸음까지 나아갈 양(delta × i / 걸음 수)에서 앞 걸음까지의 양을 빼 이번 걸음을 정한다.
+        // delta / 걸음 수를 걸음마다 쓰면 성분마다 반올림한 오차가 걸음 수만큼 쌓이지만, 이렇게 하면 걸음을 다 더해 정확히 delta가 된다.
+        // 막혀서 못 간 걸음의 몫은 다음 걸음으로 넘기지 않는다.
+        FixedVector planned = FixedVector.Zero;
+        for (int i = 1; i <= steps; i++)
         {
+            FixedVector reach = delta * i / steps;
+            FixedVector step = reach - planned;
+            planned = reach;
             FixedVector next = new FixedVector(from.X + step.X, from.Y);
             if (CanOccupy(next, radius, mover))
             {
@@ -269,8 +276,8 @@ public sealed partial class Match
             FixedVector away = enemy.Position - other.Position;
             Fixed reach = enemy.Definition.Radius + other.Definition.Radius + Fixed.FromInt(12);
             Fixed distance = away.Length();
-            // 아주 가까우면(거의 같은 자리) 밀어낼 방향이 정해지지 않으므로 넘어간다.
-            if (distance >= reach || distance.Raw < 4)
+            // 아주 가까우면 길이의 반올림 오차 때문에 밀어낼 방향의 길이가 1에서 벗어나므로 넘어간다(SeparationMinimum).
+            if (distance >= reach || distance < SeparationMinimum)
             {
                 continue;
             }

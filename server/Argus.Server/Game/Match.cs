@@ -47,12 +47,21 @@ public sealed partial class Match
     private readonly Fixed _playerStep;
     // 시야 반경의 제곱이다. 거리 비교는 제곱근을 구하지 않고 제곱끼리 한다.
     private readonly Fixed _visionSquared;
+    // 캠프 시야 반경의 제곱이다. 캠프 시야는 규칙이 아니라 맵에 정해져 있어 한 번만 구한다.
+    private static readonly Fixed CampVisionSquared = Fixed.FromInt(BattleMap.CampVision * BattleMap.CampVision);
     // 투입 위치로 받을 수 있는 가장 큰 좌표 크기다. 맵(2000 미만)보다 훨씬 큰 값은 고정소수점으로 바꾸기 전에 거른다.
     private const double MaxCoordinate = 1_000_000;
-    // 몸끼리 딱 붙은 자리를 겹친 것으로 보지 않게 하는 여유다(약 0.001). 거리의 제곱은 성분마다 반올림하므로 조금 작게 나올 수 있다.
+    // 아래 세 기준은 뜻이 다르다. 앞의 둘은 값이 같지만(Raw 4, 약 0.001) 하나는 거리의 제곱에 두는 여유이고,
+    // 하나는 길이의 제곱으로 본 "방향 없음"의 기준이다. 셋째는 길이(제곱이 아님)의 기준이다.
+    // 몸끼리 딱 붙은 자리를 겹친 것으로 보지 않게 하는, 거리의 제곱에 두는 여유다. 거리의 제곱은 성분마다 반올림하므로 조금 작게 나올 수 있다.
     private static readonly Fixed TouchTolerance = Fixed.FromRaw(4);
-    // 이보다 짧은 방향은 방향이 없는 것으로 본다(길이의 제곱 약 0.001). 거의 0인 벡터로 방향을 정하지 않게 한다.
+    // 길이의 제곱이 이보다 작은 벡터는 방향이 없는 것으로 본다. 거의 0인 벡터로 적의 이동 방향을 정하지 않게 한다.
+    // 이 기준을 넘는 벡터는 길이가 Raw 111(약 0.027)보다 길어, 정규화한 결과의 길이가 1에서 0.5% 넘게 벗어나지 않는다.
     private static readonly Fixed TinyLengthSquared = Fixed.FromRaw(4);
+    // 적끼리 밀어내는 방향을 구하는 가장 짧은 거리다. 길이는 Raw 단위로 반올림하므로, 아주 짧은 벡터를 그 길이로 나누면
+    // 길이가 1에서 크게 벗어난다(Raw (2, 4)는 길이 4로 나뉘어 길이 1.118이 된다). 1 이상이면 벗어나는 정도가 0.03% 아래다.
+    // 살아 있는 적끼리는 몸 충돌(CanOccupy) 때문에 반지름의 합보다 가까워지지 않으므로, 정상 진행에서는 이 기준에 걸리지 않는다.
+    private static readonly Fixed SeparationMinimum = Fixed.One;
     private static readonly int[] NeighborX = new int[] { 1, -1, 0, 0 };
     private static readonly int[] NeighborY = new int[] { 0, 0, 1, -1 };
 
@@ -695,8 +704,7 @@ public sealed partial class Match
 
     public bool Visible(FixedVector point)
     {
-        Fixed campVisionSquared = Fixed.FromInt(BattleMap.CampVision * BattleMap.CampVision);
-        if (FixedVector.DistanceSquared(BattleMap.Camp, point) <= campVisionSquared && Map.LineOfSight(BattleMap.Camp, point))
+        if (FixedVector.DistanceSquared(BattleMap.Camp, point) <= CampVisionSquared && Map.LineOfSight(BattleMap.Camp, point))
         {
             return true;
         }
