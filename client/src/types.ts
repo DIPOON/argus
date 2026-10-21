@@ -16,13 +16,16 @@ export interface CombatAction {
   aim: number; startedAt: number; contactAt: number; activeUntil: number; followupUntil: number; endsAt: number;
   range: number; halfWidth: number;
 }
+// x·y는 그리기용(소수 둘째 자리로 반올림)이고, rawX·rawY는 예측용 고정소수점 Raw(4096분의 1 단위 정수)다.
 export interface Player extends Position {
+  rawX: number; rawY: number;
   id: string; name: string; slots: Skill[]; state: 'waiting' | 'deploying' | 'alive';
   connected: boolean; hasDeployed: boolean; aim: number; hp: number; maxHp: number;
   mana: number; maxMana: number; busy: number; actions: CombatAction[];
   deploy: number; kills: number; deaths: number; ack: number; landingX: number; landingY: number;
 }
 export interface Enemy extends Position {
+  rawX: number; rawY: number;
   id: number; kind: 'grunt' | 'breaker' | 'warden'; name: string; radius: number;
   hp: number; maxHp: number; tiers: number[]; action: CombatAction | null;
 }

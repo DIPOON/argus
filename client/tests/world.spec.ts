@@ -9,9 +9,10 @@ interface TestWorld {
   draw(dt: number): void;
   canStand(position: Position, radius?: number): boolean;
   control: Control;
-  move(position: Position, dx: number, dy: number): Position;
   recordInput(seq: number, x: number, y: number, at?: number): void;
-  replay(from: Position, speed: number, now: number): Position;
+  holdLastInput(missed: number, at?: number): void;
+  // 서버 위치(Raw)에 확인받지 않은 입력을 하나에 한 틱씩 적용한 예측 위치(Raw)다.
+  forecast?: { previous: Position; tip: Position };
   pending: unknown[];
   mePosition(): Position | undefined;
   labelsById: Map<string, Text>;
@@ -75,7 +76,7 @@ function snapshot(): Snapshot {
     map: { width: 1920, height: 1440, cell: 48, columns: 40, rows: 30, campX: 300, campY: 730 },
     rules: { deploy: 5, speed: 180, playerRadius: 13, guardHalfAngle: Math.PI / 3, parryFollowupSeconds: .18, skills: [] },
     players: [{
-      id: 'pilot', name: 'Pilot', x: 400, y: 730, slots: ['strike', 'parry', 'grab', 'strike'],
+      id: 'pilot', name: 'Pilot', x: 400, y: 730, rawX: 400 * 4096, rawY: 730 * 4096, slots: ['strike', 'parry', 'grab', 'strike'],
       state: 'alive', connected: true, hasDeployed: true, aim: 0, hp: 6, maxHp: 6,
       mana: 12, maxMana: 24, busy: 0, actions: [], deploy: 0, kills: 0, deaths: 0,
       ack: 0, landingX: 400, landingY: 730,
@@ -85,7 +86,7 @@ function snapshot(): Snapshot {
 }
 
 function elite(id: number): Snapshot['enemies'][number] {
-  return { id, kind: 'breaker', name: '분쇄자', x: 460, y: 730, hp: 2, maxHp: 2, radius: 22,
+  return { id, kind: 'breaker', name: '분쇄자', x: 460, y: 730, rawX: 460 * 4096, rawY: 730 * 4096, hp: 2, maxHp: 2, radius: 22,
     tiers: [2, 1, 1], action: null };
 }
 
@@ -237,41 +238,119 @@ test('prediction blocks enemy bodies while allowing teammate overlap', async ({ 
   state.enemies = [elite(900)];
   const result = await page.evaluate(state => {
     const world = window.testWorld;
+    // 오른쪽 입력 20개(한 틱에 6씩, 120)를 보냈고 서버는 아직 하나도 처리하지 않았다.
     world.update(structuredClone(state));
-    const blocked = world.move(state.players[0], 200, 0);
+    for (let seq = 1; seq <= 20; seq++) world.recordInput(seq, 1, 0);
+    const blocked = world.forecast!.tip;
     state.enemies = [];
-    state.players.push({ ...state.players[0], id: 'ally', x: 430 });
+    state.players.push({ ...state.players[0], id: 'ally', x: 430, rawX: 430 * 4096 });
     world.update(structuredClone(state));
-    const through = world.move(state.players[0], 200, 0);
+    const through = world.forecast!.tip;
     return { blocked, through };
   }, state);
-  expect(result.blocked.x).toBeLessThanOrEqual(425);
-  expect(result.blocked.x).toBeGreaterThan(400);
-  expect(result.through.x).toBe(600);
+  // 반지름 22인 분쇄자(x = 460)와 대원(반지름 13)은 35보다 가까워질 수 없다. 3씩 걸어 424에서 멈춘다.
+  expect(result.blocked.x).toBe(424 * 4096);
+  // 동료는 통과하므로 입력 20개를 모두 간다.
+  expect(result.through.x).toBe(520 * 4096);
 });
 
 test('reconciliation replays unacknowledged input on top of the server position', async ({ page }) => {
   const state = snapshot();
   const result = await page.evaluate(state => {
     const world = window.testWorld;
-    const interval = 1000 / 30;
     world.update(structuredClone(state));
-    // 1/30초마다 오른쪽 입력 6개를 보냈고 서버는 아직 하나도 처리하지 않았다.
-    for (let seq = 1; seq <= 6; seq++) world.recordInput(seq, 1, 0, 1000 + (seq - 1) * interval);
-    const now = 1000 + 6 * interval;
-    const ahead = world.replay(state.players[0], 180, now);
+    // 오른쪽 입력 6개를 보냈고 서버는 아직 하나도 처리하지 않았다.
+    for (let seq = 1; seq <= 6; seq++) world.recordInput(seq, 1, 0);
+    const ahead = world.forecast!.tip;
     // 서버가 입력 4까지 처리했다는 스냅샷이 오면 그 이하는 버리고 새 서버 위치에서 다시 계산한다.
-    state.players[0] = { ...state.players[0], x: 424, ack: 4 };
+    state.players[0] = { ...state.players[0], x: 424, rawX: 424 * 4096, ack: 4 };
     world.update(structuredClone(state));
     const left = world.pending.length;
-    const after = world.replay(state.players[0], 180, now);
+    const after = world.forecast!.tip;
     return { ahead, left, after };
   }, state);
-  // 확인받지 않은 입력 0.2초 분량(180 × 0.2 = 36단위)만큼 서버 위치 400보다 앞이다.
-  expect(result.ahead.x).toBeCloseTo(436, 1);
+  // 입력 하나가 한 틱(180 / 30 = 6단위)이라 확인받지 않은 입력 6개만큼(36단위) 서버 위치 400보다 앞이다.
+  expect(result.ahead.x).toBe(436 * 4096);
   expect(result.left).toBe(2);
-  // 서버가 예측과 같은 곳에 있으면 확인이 와도 그리는 위치가 튀지 않는다.
-  expect(result.after.x).toBeCloseTo(436, 1);
+  // 서버가 예측과 같은 곳에 있으면 확인이 와도 예측 위치가 Raw까지 그대로다.
+  expect(result.after.x).toBe(436 * 4096);
+});
+
+test('ticks missed by a late timer keep the last input going, but only as long as the server does', async ({ page }) => {
+  const state = snapshot();
+  const result = await page.evaluate(state => {
+    const world = window.testWorld;
+    world.update(structuredClone(state));
+    world.recordInput(1, 1, 0);
+    // 타이머가 늦어 세 틱 동안 입력을 보내지 못했다. 서버는 그동안 마지막 입력을 계속 쓴다.
+    world.holdLastInput(3);
+    const held = world.forecast!.tip.x;
+    // 아주 오래 늦어도 서버는 받은 틱부터 10틱만 쓰고 멈춘다.
+    world.holdLastInput(100);
+    return { held, capped: world.forecast!.tip.x };
+  }, state);
+  expect(result.held).toBe((400 + 4 * 6) * 4096);
+  expect(result.capped).toBe((400 + 10 * 6) * 4096);
+});
+
+test('prediction pauses after dropping an unconfirmed input until the server confirms it', async ({ page }) => {
+  const state = snapshot();
+  const result = await page.evaluate(state => {
+    const world = window.testWorld;
+    world.update(structuredClone(state));
+    // 확인이 오지 않은 채 61개를 보내 가장 오래된 입력(1)을 버렸다. 서버가 그 입력을 이미 썼는지 모르므로 예측을 끈다.
+    for (let seq = 1; seq <= 61; seq++) world.recordInput(seq, 1, 0);
+    const paused = world.forecast === undefined;
+    // 서버가 입력 1까지 처리했다고 알려 오면 그 위치에서 남은 입력으로 다시 예측한다.
+    state.players[0] = { ...state.players[0], x: 406, rawX: 406 * 4096, ack: 1 };
+    world.update(structuredClone(state));
+    return { paused, resumed: world.forecast?.tip.x, left: world.pending.length };
+  }, state);
+  expect(result.paused).toBe(true);
+  expect(result.left).toBe(60);
+  expect(result.resumed).toBe((406 + 60 * 6) * 4096);
+});
+
+test('a new input sent before the last tick finished does not make the drawn position jump', async ({ page }) => {
+  const state = snapshot();
+  const result = await page.evaluate(state => {
+    const world = window.testWorld;
+    world.update(structuredClone(state));
+    world.draw(1 / 60);
+    const now = performance.now();
+    // 입력 1을 보낸 지 반 틱만 지났을 때 입력 2를 보낸다. 그리는 목표는 입력 1의 한 틱 중간(약 403)이다.
+    world.recordInput(1, 1, 0, now - 1000 / 60);
+    world.draw(0);
+    const before = world.mePosition()!.x;
+    world.recordInput(2, 1, 0, now);
+    world.draw(0);
+    return { before, after: world.mePosition()!.x };
+  }, state);
+  expect(result.before).toBeGreaterThan(402);
+  expect(result.before).toBeLessThan(404);
+  // 목표는 입력 1의 끝(406)으로 건너뛰지만, 그 차이를 보정 차이로 옮겨 그리는 위치는 이어진다.
+  expect(Math.abs(result.after - result.before)).toBeLessThan(.5);
+});
+
+test('a correction from the server eases in instead of jumping', async ({ page }) => {
+  const state = snapshot();
+  const result = await page.evaluate(state => {
+    const world = window.testWorld;
+    world.update(structuredClone(state));
+    world.draw(1 / 60);
+    const before = world.mePosition()!.x;
+    // 서버가 숨은 적에 막혀 예측(400)보다 12 뒤(388)에 있다고 알려 온다.
+    state.players[0] = { ...state.players[0], x: 388, rawX: 388 * 4096 };
+    world.update(structuredClone(state));
+    world.draw(1 / 60);
+    const next = world.mePosition()!.x;
+    for (let frame = 0; frame < 60; frame++) world.draw(1 / 60);
+    return { before, next, settled: world.mePosition()!.x };
+  }, state);
+  expect(result.before).toBe(400);
+  // 바로 388로 튀지 않고 조금만 다가간 뒤, 1초 안에 서버 위치에 닿는다.
+  expect(result.next).toBeGreaterThan(395);
+  expect(result.settled).toBeCloseTo(388, 1);
 });
 
 test('the drawn position follows the reconciled position instead of the lagging server position', async ({ page }) => {

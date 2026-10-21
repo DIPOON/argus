@@ -1,4 +1,6 @@
 import { Application, Container, Graphics, Text } from 'pixi.js';
+import { fromDouble, toDouble, type FixedVector } from './fixed';
+import { canStand, inputHoldTicks, stepPlayer, tickMilliseconds, type Body, type Terrain } from './movement';
 import { affinityNames, type Affinity, type CombatAction, type Control, type Position, type Snapshot } from './types';
 
 const colors = { floor: 0x141e20, lit: 0x253335, grid: 0x304044, wall: 0x657372, edge: 0x94a29a, lime: 0xdfff80, teal: 0x77cec2, red: 0xf28068, gold: 0xeabd73 };
@@ -12,6 +14,13 @@ const unitOutline = { color: 0x111a1a, width: 2.5 };
 // beginPath로 새 경로를 열면 시작점 없이 원호만 그려진다.
 const arcOnNewPath = (g: Graphics, x: number, y: number, radius: number, start: number, end: number) =>
   g.beginPath().arc(x, y, radius, start, end);
+
+// 확인받지 않은 입력을 이만큼(30Hz로 2초 분량)까지 보관한다. 확인이 오지 않는 이상한 상황에서도 끝없이 늘지 않게 한다.
+const maxPending = 60;
+
+// 보냈지만 서버가 아직 확인하지 않은 입력이다. ticks는 이 입력이 쓰일 것으로 보는 틱 수다. 보통 1이고, 다음 입력을
+// 제때 보내지 못하면(타이머가 늦게 깸) 서버처럼 이 입력을 그만큼 더 쓴 것으로 친다.
+type PendingInput = { seq: number; x: number; y: number; at: number; ticks: number };
 
 export class World {
   readonly app = new Application();
@@ -32,9 +41,23 @@ export class World {
   private interval = 100;
   private tiles = new Uint8Array();
   private revision = -1;
+  // 그리는 내 위치(월드 단위)다.
   private predicted?: Position;
   // 보냈지만 서버가 아직 확인하지 않은 내 입력. 서버 재조정에서 서버 위치 위에 다시 적용한다.
-  private pending: { seq: number; x: number; y: number; at: number }[] = [];
+  private pending: PendingInput[] = [];
+  // 서버가 확인한 마지막 입력 순번과, 보관 상한을 넘어 버린 마지막 입력 순번이다.
+  private ack = -1;
+  private droppedSeq = -1;
+  // 예측에 쓰는 맵과 대원을 막는 몸(시야 안의 살아 있는 적)이다. 좌표는 모두 Raw다.
+  private terrain?: Terrain;
+  private bodies: Body[] = [];
+  // 서버가 보낸 내 위치(Raw)와, 그 위에 남은 입력을 서버와 같은 계산으로 적용한 위치(Raw)다.
+  // tip은 입력을 모두 적용한 곳이고, previous는 마지막 입력 하나를 빼고 적용한 곳이다.
+  private base?: FixedVector;
+  private forecast?: { previous: FixedVector; tip: FixedVector };
+  // 서버 위치로 예측을 바로잡을 때 그림이 튀지 않게 남겨 두는 차이(월드 단위)다. 시간이 지나며 0으로 줄어든다.
+  private correction: Position = { x: 0, y: 0 };
+  private predicting = false;
   private oldState = '';
   private camera = { x: 960, y: 720, zoom: 1 };
   private averageFrame = 16.7;
@@ -59,6 +82,8 @@ export class World {
   }
 
   update(snapshot: Snapshot) {
+    const now = performance.now();
+    const before = this.target(now);
     const changedRoom = snapshot.room !== this.snapshot?.room;
     this.previous = changedRoom ? undefined : this.snapshot;
     this.interval = Math.max(50, Math.min(250, performance.now() - this.received));
@@ -69,15 +94,28 @@ export class World {
       this.tiles = Uint8Array.from(atob(snapshot.walls), c => c.charCodeAt(0));
       this.drawMap();
     }
+    this.terrain = { tiles: this.tiles, columns: snapshot.map.columns, rows: snapshot.map.rows, cell: snapshot.map.cell };
+    // 살아 있는 적만 대원을 막는다. 스냅샷에는 시야 안의 적만 오므로, 숨은 적이나 그 사이 움직인 적과의 차이는 서버 위치로 보정된다.
+    this.bodies = snapshot.enemies.filter(enemy => enemy.hp > 0)
+      .map(enemy => ({ x: enemy.rawX, y: enemy.rawY, radius: fromDouble(enemy.radius) }));
     const me = snapshot.players.find(p => p.id === snapshot.you);
-    if (me && (me.state !== this.oldState || changedRoom)) {
+    this.base = me ? { x: me.rawX, y: me.rawY } : undefined;
+    this.ack = me?.ack ?? -1;
+    const reset = me !== undefined && (me.state !== this.oldState || changedRoom);
+    if (me && reset) {
       this.predicted = { x: me.x, y: me.y };
       // 투입·사망·방 이동으로 위치가 새로 정해지면 그 전에 보낸 입력은 의미가 없다.
       this.pending = [];
+      this.droppedSeq = -1;
+      this.correction = { x: 0, y: 0 };
     }
     this.oldState = me?.state ?? '';
     // ack 이하의 입력은 서버가 이미 처리해 서버 위치에 반영되어 있다.
     if (me) this.pending = this.pending.filter(input => input.seq > me.ack);
+    // 서버 위치와 막는 몸이 새로 왔으니 남은 입력 전체를 다시 걷는다.
+    this.resimulate();
+    // 서버 위치가 예측과 다르면 그리는 목표가 바뀐다. 그 차이를 보정 차이로 옮겨 그림이 튀지 않게 하고 천천히 줄인다.
+    if (!reset) this.keepDrawn(before, now);
     this.light.clear();
     for (const polygon of snapshot.sight) this.light.poly(polygon).fill(colors.lit);
   }
@@ -91,59 +129,85 @@ export class World {
 
   // 보낸 입력을 서버가 확인할 때까지 보관한다. 시각은 화면 계산에만 쓰며 서버로 보내지 않는다.
   recordInput(seq: number, x: number, y: number, at = performance.now()) {
-    this.pending.push({ seq, x, y, at });
-    // 확인이 오지 않는 이상한 상황에서도 끝없이 늘지 않게 한다. 30Hz 기준 2초 분량이다.
-    if (this.pending.length > 60) this.pending.shift();
-  }
-
-  // 서버 재조정: 서버가 보낸 내 위치에서 출발해 서버가 아직 처리하지 않은 입력을 보낸 순서대로 다시 적용한다.
-  // 각 입력은 다음 입력을 보낼 때까지(마지막 입력은 지금까지) 유지된 시간만큼 움직인다.
-  // 서버는 입력이 0.35초 넘게 없으면 멈추므로 한 입력의 효과도 그만큼으로 자른다.
-  private replay(from: Position, speed: number, now: number): Position {
-    let position = { x: from.x, y: from.y };
-    for (let i = 0; i < this.pending.length; i++) {
-      const input = this.pending[i];
-      const until = i + 1 < this.pending.length ? this.pending[i + 1].at : now;
-      const seconds = Math.min(.35, Math.max(0, (until - input.at) / 1000));
-      position = this.move(position, input.x * speed * seconds, input.y * speed * seconds);
+    const before = this.target(at);
+    const input = { seq, x, y, at, ticks: 1 };
+    this.pending.push(input);
+    if (this.pending.length > maxPending) {
+      // 버리는 입력은 서버가 이미 처리했지만 아직 확인이 오지 않았을 수 있다. 빼고 다시 걸으면 그 틱만큼 뒤처지므로,
+      // 서버가 버린 입력까지 확인해 줄 때까지 예측을 끄고 서버 위치를 그린다.
+      this.droppedSeq = this.pending.shift()!.seq;
+      this.resimulate();
+    } else {
+      // 새 입력은 마지막 예측 위치에서 한 틱만 더 걸으면 된다.
+      this.advance(input, 1);
     }
-    return position;
+    // 직전 입력이 한 틱을 다 채우기 전에 새 입력이 오면 목표가 앞으로 건너뛴다. 그 차이도 보정 차이로 옮긴다.
+    this.keepDrawn(before, at);
   }
 
-  // 투입 위치 검사도 서버와 같은 대원 반지름을 쓴다.
+  // 타이머가 늦게 깨어 missed틱 동안 입력을 보내지 못했다. 서버는 그동안 마지막 입력을 계속 쓰므로 예측도 그만큼 더 쓴다.
+  // 서버처럼 입력 하나는 inputHoldTicks틱까지만 쓴다. 그 뒤에는 서버도 대원을 멈춘다.
+  holdLastInput(missed: number, at = performance.now()) {
+    const last = this.pending[this.pending.length - 1];
+    if (!last || missed <= 0) return;
+    const extra = Math.min(missed, inputHoldTicks - last.ticks);
+    if (extra <= 0) return;
+    const before = this.target(at);
+    last.ticks += extra;
+    this.advance(last, extra);
+    this.keepDrawn(before, at);
+  }
+
+  // 서버 재조정: 서버가 보낸 내 위치(Raw)에서 출발해, 서버가 아직 처리하지 않은 입력을 보낸 순서대로 다시 적용한다.
+  // 입력 하나는 보통 한 틱이다. 계산은 서버와 같은 고정소수점이라, 서버가 입력을 같은 틱에 받고 막는 몸이 그대로면
+  // 서버와 Raw까지 같은 곳에 이른다. 서버가 같은 틱에 입력 둘을 받거나(나중 것만 쓴다) 한 틱 동안 입력을 받지 못하면
+  // (앞 입력을 한 틱 더 쓴다) 그만큼 어긋나고, 다음 스냅샷에서 서버 위치로 바로잡힌다.
+  private resimulate() {
+    if (!this.snapshot || !this.base || !this.terrain || this.droppedSeq > this.ack) { this.forecast = undefined; return; }
+    this.forecast = { previous: this.base, tip: this.base };
+    for (const input of this.pending) this.advance(input, input.ticks);
+  }
+
+  // 마지막 예측 위치(tip)에서 input을 ticks틱 더 쓴다. previous는 마지막 한 틱 전의 위치로, 그리기 보간에 쓴다.
+  private advance(input: PendingInput, ticks: number) {
+    const s = this.snapshot;
+    if (!s || !this.terrain || !this.forecast) return;
+    const radius = fromDouble(s.rules.playerRadius);
+    let { previous, tip } = this.forecast;
+    for (let i = 0; i < ticks; i++) {
+      previous = tip;
+      tip = stepPlayer(this.terrain, this.bodies, tip, input.x, input.y, s.rules.speed, radius);
+    }
+    this.forecast = { previous, tip };
+  }
+
+  // 목표가 바뀐 만큼을 보정 차이로 옮겨, 그리는 위치가 바뀌기 전 자리에서 이어지게 한다.
+  private keepDrawn(before: Position | undefined, at: number) {
+    const after = this.target(at);
+    if (before && after) this.correct(before, after);
+  }
+
+  // 그릴 목표 위치(월드 단위)다. 마지막 입력은 보낸 뒤 한 틱 동안 나아가는 것으로 이어 그린다.
+  // 예측하지 않을 때(살아 있지 않거나 스냅샷이 끊겼을 때)는 서버 위치다.
+  private target(now: number): Position | undefined {
+    if (!this.base) return undefined;
+    if (!this.predicting || !this.forecast) return { x: toDouble(this.base.x), y: toDouble(this.base.y) };
+    const { previous, tip } = this.forecast;
+    const last = this.pending[this.pending.length - 1];
+    const progress = last ? Math.min(1, Math.max(0, (now - last.at) / tickMilliseconds)) : 1;
+    return { x: toDouble(previous.x + (tip.x - previous.x) * progress), y: toDouble(previous.y + (tip.y - previous.y) * progress) };
+  }
+
+  // 목표가 before에서 after로 바뀐 만큼을 보정 차이로 옮긴다. 차이가 아주 크면(순간 이동) 바로 따라간다.
+  private correct(before: Position, after: Position) {
+    this.correction = { x: this.correction.x + before.x - after.x, y: this.correction.y + before.y - after.y };
+    if (Math.hypot(this.correction.x, this.correction.y) > 100) this.correction = { x: 0, y: 0 };
+  }
+
+  // 투입 위치 검사도 서버와 같은 계산(BattleMap.CanStand)과 대원 반지름을 쓴다. 서버처럼 아주 먼 좌표는 바로 거절한다.
   canStand(p: Position, radius = this.snapshot?.rules.playerRadius ?? 13) {
-    const m = this.snapshot?.map;
-    if (!m || p.x < radius || p.y < radius || p.x > m.width - radius || p.y > m.height - radius) return false;
-    for (let y = Math.floor((p.y - radius) / m.cell); y <= Math.floor((p.y + radius) / m.cell); y++) {
-      for (let x = Math.floor((p.x - radius) / m.cell); x <= Math.floor((p.x + radius) / m.cell); x++) {
-        if (this.tiles[y * m.columns + x] === 0) continue;
-        const dx = p.x - Math.max(x * m.cell, Math.min((x + 1) * m.cell, p.x));
-        const dy = p.y - Math.max(y * m.cell, Math.min((y + 1) * m.cell, p.y));
-        if (dx * dx + dy * dy < radius * radius) return false;
-      }
-    }
-    return true;
-  }
-
-  private canMove(p: Position) {
-    const radius = this.snapshot?.rules.playerRadius ?? 13;
-    if (!this.canStand(p, radius)) return false;
-    // 공개된 적만 예측에 사용한다. 숨겨진 적과의 충돌은 서버 위치로 보정된다.
-    for (const enemy of this.snapshot?.enemies ?? []) {
-      if (enemy.hp > 0 && Math.hypot(p.x - enemy.x, p.y - enemy.y) < radius + enemy.radius) return false;
-    }
-    return true;
-  }
-
-  private move(p: Position, dx: number, dy: number): Position {
-    const next = { ...p };
-    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / 4));
-    dx /= steps; dy /= steps;
-    for (let i = 0; i < steps; i++) {
-      if (this.canMove({ x: next.x + dx, y: next.y })) next.x += dx;
-      if (this.canMove({ x: next.x, y: next.y + dy })) next.y += dy;
-    }
-    return next;
+    if (!this.terrain || !Number.isFinite(p.x) || !Number.isFinite(p.y) || Math.abs(p.x) > 1e6 || Math.abs(p.y) > 1e6) return false;
+    return canStand(this.terrain, { x: fromDouble(p.x), y: fromDouble(p.y) }, fromDouble(radius));
   }
 
   private drawAction(g: Graphics, p: Position, action: CombatAction, now: number, player: boolean) {
@@ -251,17 +315,23 @@ export class World {
     const overview = this.overview || me?.state !== 'alive' || s.phase === 'ended';
     const elapsed = Math.min(.2, (performance.now() - this.received) / 1000);
     if (me) {
-      let next = this.predicted ?? { x: me.x, y: me.y };
-      const speed = s.rules.speed;
-      const active = me.state === 'alive' && s.phase === 'active' && performance.now() - this.received < 500;
-      const dx = active ? this.control.x * speed : 0, dy = active ? this.control.y * speed : 0;
-      next = this.move(next, dx * dt, dy * dt);
       // 서버 위치는 왕복 지연만큼 과거 입력의 결과다. 그대로 따라가면 화면의 내 캐릭터가 입력보다 늦으므로
       // 확인받지 않은 입력을 다시 적용한 곳을 목표로 삼는다.
-      const target = active ? this.replay(me, speed, performance.now()) : { x: me.x, y: me.y };
-      const distance = Math.hypot(target.x - next.x, target.y - next.y);
-      const correction = distance > 100 ? 1 : Math.min(1, dt * 12);
-      this.predicted = { x: next.x + (target.x - next.x) * correction, y: next.y + (target.y - next.y) * correction };
+      const now = performance.now();
+      const active = me.state === 'alive' && s.phase === 'active' && now - this.received < 500;
+      if (active !== this.predicting) {
+        // 예측을 켜거나 끄면 목표가 바뀐다. 그 차이도 보정 차이로 옮겨 그림이 튀지 않게 한다.
+        const before = this.predicted;
+        this.predicting = active;
+        const after = this.target(now);
+        if (before && after) { this.correction = { x: 0, y: 0 }; this.correct(before, after); }
+      }
+      const target = this.target(now);
+      if (target) {
+        const keep = Math.max(0, 1 - dt * 12);
+        this.correction = { x: this.correction.x * keep, y: this.correction.y * keep };
+        this.predicted = { x: target.x + this.correction.x, y: target.y + this.correction.y };
+      }
     }
     const width = this.app.screen.width, height = this.app.screen.height;
     const zoom = overview ? Math.min((width - 70) / s.map.width, (height - 120) / s.map.height) : Math.min(1.15, Math.max(.65, Math.min(width / 1050, height / 740)));

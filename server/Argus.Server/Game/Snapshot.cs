@@ -71,6 +71,8 @@ public static class Snapshot
             entry.Id = enemy.Id;
             entry.X = Round(enemy.Position.X);
             entry.Y = Round(enemy.Position.Y);
+            entry.RawX = enemy.Position.X.Raw;
+            entry.RawY = enemy.Position.Y.Raw;
             entry.Kind = enemy.Definition.Id;
             entry.Name = enemy.Definition.Name;
             entry.Hp = enemy.Hp;
@@ -212,6 +214,8 @@ public static class Snapshot
         entry.HasDeployed = player.HasDeployed;
         entry.X = Round(player.Position.X);
         entry.Y = Round(player.Position.Y);
+        entry.RawX = player.Position.X.Raw;
+        entry.RawY = player.Position.Y.Raw;
         entry.Aim = player.Aim.ToRadians();
         entry.Hp = player.Hp;
         entry.MaxHp = player.MaxHp;

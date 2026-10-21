@@ -49,6 +49,9 @@ public sealed partial class Match
     private readonly Fixed _visionSquared;
     // 캠프 시야 반경의 제곱이다. 캠프 시야는 규칙이 아니라 맵에 정해져 있어 한 번만 구한다.
     private static readonly Fixed CampVisionSquared = Fixed.FromInt(BattleMap.CampVision * BattleMap.CampVision);
+    // 입력이 이만큼(0.35초, 11틱) 없으면 대원을 멈춘다. 끊긴 연결이 마지막 입력으로 계속 움직이지 않게 한다.
+    // 틱을 올린 뒤 비교하므로, 입력 하나는 받은 다음 틱부터 최대 10틱(InputTimeoutTicks - 1) 쓰인다. 클라이언트 예측도 같은 한도를 쓴다.
+    public static readonly long InputTimeoutTicks = Rules.ToTicks(0.35);
     // 투입 위치로 받을 수 있는 가장 큰 좌표 크기다. 맵(2000 미만)보다 훨씬 큰 값은 고정소수점으로 바꾸기 전에 거른다.
     private const double MaxCoordinate = 1_000_000;
     // 아래 세 기준은 뜻이 다르다. 앞의 둘은 값이 같지만(Raw 4, 약 0.001) 하나는 거리의 제곱에 두는 여유이고,
@@ -551,8 +554,8 @@ public sealed partial class Match
 
     private void UpdatePlayer(Player player)
     {
-        // 입력이 0.35초(11틱) 동안 없으면 멈춘다. 끊긴 연결이 마지막 입력으로 계속 움직이지 않게 한다.
-        if (Tick - player.LastInputTick >= Rules.ToTicks(0.35))
+        // 입력이 0.35초(11틱) 동안 없으면 멈춘다(InputTimeoutTicks).
+        if (Tick - player.LastInputTick >= InputTimeoutTicks)
         {
             player.Move = FixedVector.Zero;
             player.RequestedSlot = 0;
