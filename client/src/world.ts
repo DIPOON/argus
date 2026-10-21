@@ -1,6 +1,6 @@
 import { Application, Container, Graphics, Text } from 'pixi.js';
 import { fromDouble, toDouble, type FixedVector } from './fixed';
-import { canStand, stepPlayer, type Body, type Terrain } from './movement';
+import { canStand, inputHoldTicks, stepPlayer, tickMilliseconds, type Body, type Terrain } from './movement';
 import { affinityNames, type Affinity, type CombatAction, type Control, type Position, type Snapshot } from './types';
 
 const colors = { floor: 0x141e20, lit: 0x253335, grid: 0x304044, wall: 0x657372, edge: 0x94a29a, lime: 0xdfff80, teal: 0x77cec2, red: 0xf28068, gold: 0xeabd73 };
@@ -15,12 +15,12 @@ const unitOutline = { color: 0x111a1a, width: 2.5 };
 const arcOnNewPath = (g: Graphics, x: number, y: number, radius: number, start: number, end: number) =>
   g.beginPath().arc(x, y, radius, start, end);
 
-// 서버의 한 틱이다. 클라이언트는 입력을 한 틱에 하나씩 보내고, 예측도 입력 하나를 한 틱으로 친다.
-const tickMilliseconds = 1000 / 30;
+// 확인받지 않은 입력을 이만큼(30Hz로 2초 분량)까지 보관한다. 확인이 오지 않는 이상한 상황에서도 끝없이 늘지 않게 한다.
+const maxPending = 60;
 
-// 예측용 Raw 좌표다. rawX·rawY는 v3 안에서 추가된 값이라, 보내지 않는 이전 서버에서는 그리기용 좌표에서 바꾼다.
-// 그때는 소수 둘째 자리로 반올림된 값에서 출발하므로 서버와 Raw까지 같지는 않다.
-const raw = (exact: number | undefined, drawn: number) => exact ?? fromDouble(drawn);
+// 보냈지만 서버가 아직 확인하지 않은 입력이다. ticks는 이 입력이 쓰일 것으로 보는 틱 수다. 보통 1이고, 다음 입력을
+// 제때 보내지 못하면(타이머가 늦게 깸) 서버처럼 이 입력을 그만큼 더 쓴 것으로 친다.
+type PendingInput = { seq: number; x: number; y: number; at: number; ticks: number };
 
 export class World {
   readonly app = new Application();
@@ -43,8 +43,11 @@ export class World {
   private revision = -1;
   // 그리는 내 위치(월드 단위)다.
   private predicted?: Position;
-  // 보냈지만 서버가 아직 확인하지 않은 내 입력. 서버 재조정에서 서버 위치 위에 하나에 한 틱씩 다시 적용한다.
-  private pending: { seq: number; x: number; y: number; at: number }[] = [];
+  // 보냈지만 서버가 아직 확인하지 않은 내 입력. 서버 재조정에서 서버 위치 위에 다시 적용한다.
+  private pending: PendingInput[] = [];
+  // 서버가 확인한 마지막 입력 순번과, 보관 상한을 넘어 버린 마지막 입력 순번이다.
+  private ack = -1;
+  private droppedSeq = -1;
   // 예측에 쓰는 맵과 대원을 막는 몸(시야 안의 살아 있는 적)이다. 좌표는 모두 Raw다.
   private terrain?: Terrain;
   private bodies: Body[] = [];
@@ -94,23 +97,25 @@ export class World {
     this.terrain = { tiles: this.tiles, columns: snapshot.map.columns, rows: snapshot.map.rows, cell: snapshot.map.cell };
     // 살아 있는 적만 대원을 막는다. 스냅샷에는 시야 안의 적만 오므로, 숨은 적이나 그 사이 움직인 적과의 차이는 서버 위치로 보정된다.
     this.bodies = snapshot.enemies.filter(enemy => enemy.hp > 0)
-      .map(enemy => ({ x: raw(enemy.rawX, enemy.x), y: raw(enemy.rawY, enemy.y), radius: fromDouble(enemy.radius) }));
+      .map(enemy => ({ x: enemy.rawX, y: enemy.rawY, radius: fromDouble(enemy.radius) }));
     const me = snapshot.players.find(p => p.id === snapshot.you);
-    this.base = me ? { x: raw(me.rawX, me.x), y: raw(me.rawY, me.y) } : undefined;
+    this.base = me ? { x: me.rawX, y: me.rawY } : undefined;
+    this.ack = me?.ack ?? -1;
     const reset = me !== undefined && (me.state !== this.oldState || changedRoom);
     if (me && reset) {
       this.predicted = { x: me.x, y: me.y };
       // 투입·사망·방 이동으로 위치가 새로 정해지면 그 전에 보낸 입력은 의미가 없다.
       this.pending = [];
+      this.droppedSeq = -1;
       this.correction = { x: 0, y: 0 };
     }
     this.oldState = me?.state ?? '';
     // ack 이하의 입력은 서버가 이미 처리해 서버 위치에 반영되어 있다.
     if (me) this.pending = this.pending.filter(input => input.seq > me.ack);
+    // 서버 위치와 막는 몸이 새로 왔으니 남은 입력 전체를 다시 걷는다.
     this.resimulate();
     // 서버 위치가 예측과 다르면 그리는 목표가 바뀐다. 그 차이를 보정 차이로 옮겨 그림이 튀지 않게 하고 천천히 줄인다.
-    const after = this.target(now);
-    if (!reset && before && after) this.correct(before, after);
+    if (!reset) this.keepDrawn(before, now);
     this.light.clear();
     for (const polygon of snapshot.sight) this.light.poly(polygon).fill(colors.lit);
   }
@@ -124,26 +129,62 @@ export class World {
 
   // 보낸 입력을 서버가 확인할 때까지 보관한다. 시각은 화면 계산에만 쓰며 서버로 보내지 않는다.
   recordInput(seq: number, x: number, y: number, at = performance.now()) {
-    this.pending.push({ seq, x, y, at });
-    // 확인이 오지 않는 이상한 상황에서도 끝없이 늘지 않게 한다. 30Hz 기준 2초 분량이다.
-    if (this.pending.length > 60) this.pending.shift();
-    this.resimulate();
+    const before = this.target(at);
+    const input = { seq, x, y, at, ticks: 1 };
+    this.pending.push(input);
+    if (this.pending.length > maxPending) {
+      // 버리는 입력은 서버가 이미 처리했지만 아직 확인이 오지 않았을 수 있다. 빼고 다시 걸으면 그 틱만큼 뒤처지므로,
+      // 서버가 버린 입력까지 확인해 줄 때까지 예측을 끄고 서버 위치를 그린다.
+      this.droppedSeq = this.pending.shift()!.seq;
+      this.resimulate();
+    } else {
+      // 새 입력은 마지막 예측 위치에서 한 틱만 더 걸으면 된다.
+      this.advance(input, 1);
+    }
+    // 직전 입력이 한 틱을 다 채우기 전에 새 입력이 오면 목표가 앞으로 건너뛴다. 그 차이도 보정 차이로 옮긴다.
+    this.keepDrawn(before, at);
   }
 
-  // 서버 재조정: 서버가 보낸 내 위치(Raw)에서 출발해, 서버가 아직 처리하지 않은 입력을 보낸 순서대로 하나에 한 틱씩 다시 적용한다.
-  // 계산은 서버와 같은 고정소수점이라, 서버가 입력을 같은 틱에 받고 막는 몸이 그대로면 서버와 Raw까지 같은 곳에 이른다.
-  // 서버가 같은 틱에 입력 둘을 받거나(나중 것만 쓴다) 한 틱 동안 입력을 받지 못하면(앞 입력을 한 틱 더 쓴다) 그만큼 어긋나고,
-  // 다음 스냅샷에서 서버 위치로 바로잡힌다.
+  // 타이머가 늦게 깨어 missed틱 동안 입력을 보내지 못했다. 서버는 그동안 마지막 입력을 계속 쓰므로 예측도 그만큼 더 쓴다.
+  // 서버처럼 입력 하나는 inputHoldTicks틱까지만 쓴다. 그 뒤에는 서버도 대원을 멈춘다.
+  holdLastInput(missed: number, at = performance.now()) {
+    const last = this.pending[this.pending.length - 1];
+    if (!last || missed <= 0) return;
+    const extra = Math.min(missed, inputHoldTicks - last.ticks);
+    if (extra <= 0) return;
+    const before = this.target(at);
+    last.ticks += extra;
+    this.advance(last, extra);
+    this.keepDrawn(before, at);
+  }
+
+  // 서버 재조정: 서버가 보낸 내 위치(Raw)에서 출발해, 서버가 아직 처리하지 않은 입력을 보낸 순서대로 다시 적용한다.
+  // 입력 하나는 보통 한 틱이다. 계산은 서버와 같은 고정소수점이라, 서버가 입력을 같은 틱에 받고 막는 몸이 그대로면
+  // 서버와 Raw까지 같은 곳에 이른다. 서버가 같은 틱에 입력 둘을 받거나(나중 것만 쓴다) 한 틱 동안 입력을 받지 못하면
+  // (앞 입력을 한 틱 더 쓴다) 그만큼 어긋나고, 다음 스냅샷에서 서버 위치로 바로잡힌다.
   private resimulate() {
+    if (!this.snapshot || !this.base || !this.terrain || this.droppedSeq > this.ack) { this.forecast = undefined; return; }
+    this.forecast = { previous: this.base, tip: this.base };
+    for (const input of this.pending) this.advance(input, input.ticks);
+  }
+
+  // 마지막 예측 위치(tip)에서 input을 ticks틱 더 쓴다. previous는 마지막 한 틱 전의 위치로, 그리기 보간에 쓴다.
+  private advance(input: PendingInput, ticks: number) {
     const s = this.snapshot;
-    if (!s || !this.base || !this.terrain) { this.forecast = undefined; return; }
+    if (!s || !this.terrain || !this.forecast) return;
     const radius = fromDouble(s.rules.playerRadius);
-    let previous = this.base, tip = this.base;
-    for (const input of this.pending) {
+    let { previous, tip } = this.forecast;
+    for (let i = 0; i < ticks; i++) {
       previous = tip;
       tip = stepPlayer(this.terrain, this.bodies, tip, input.x, input.y, s.rules.speed, radius);
     }
     this.forecast = { previous, tip };
+  }
+
+  // 목표가 바뀐 만큼을 보정 차이로 옮겨, 그리는 위치가 바뀌기 전 자리에서 이어지게 한다.
+  private keepDrawn(before: Position | undefined, at: number) {
+    const after = this.target(at);
+    if (before && after) this.correct(before, after);
   }
 
   // 그릴 목표 위치(월드 단위)다. 마지막 입력은 보낸 뒤 한 틱 동안 나아가는 것으로 이어 그린다.

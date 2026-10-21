@@ -13,11 +13,16 @@ export interface Terrain { tiles: Uint8Array; columns: number; rows: number; cel
 // 대원을 막는 몸(살아 있는 적)이다. 좌표와 반지름 모두 Raw다.
 export interface Body { x: number; y: number; radius: number }
 
+// 서버의 틱 빈도다(Rules.TicksPerSecond). 클라이언트는 입력을 한 틱에 하나씩 보내고, 예측도 입력 하나를 한 틱으로 친다.
+// 입력 주기(main.ts)와 그리기 보간(world.ts)도 이 값을 쓴다. 하나만 달라도 예측의 전제가 깨진다.
+export const ticksPerSecond = 30;
+export const tickMilliseconds = 1000 / ticksPerSecond;
+// 새 입력이 없으면 서버는 마지막 입력을 계속 쓰다가, 받은 틱부터 이만큼 쓴 뒤 멈춘다(Match.InputTimeoutTicks - 1).
+export const inputHoldTicks = 10;
 // 몸끼리 딱 붙은 자리를 겹친 것으로 보지 않게 거리의 제곱에 두는 여유다(Match.TouchTolerance, Raw 4).
 const touchTolerance = 4;
 // 이동을 나누는 걸음의 길이다(MoveBody의 4단위).
 const stride = 4;
-const ticksPerSecond = 30;
 
 export function solid(terrain: Terrain, x: number, y: number): boolean {
   if (x < 0 || y < 0 || x >= terrain.columns || y >= terrain.rows) return true;

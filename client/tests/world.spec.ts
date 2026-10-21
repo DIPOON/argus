@@ -10,6 +10,7 @@ interface TestWorld {
   canStand(position: Position, radius?: number): boolean;
   control: Control;
   recordInput(seq: number, x: number, y: number, at?: number): void;
+  holdLastInput(missed: number, at?: number): void;
   // 서버 위치(Raw)에 확인받지 않은 입력을 하나에 한 틱씩 적용한 예측 위치(Raw)다.
   forecast?: { previous: Position; tip: Position };
   pending: unknown[];
@@ -273,6 +274,62 @@ test('reconciliation replays unacknowledged input on top of the server position'
   expect(result.left).toBe(2);
   // 서버가 예측과 같은 곳에 있으면 확인이 와도 예측 위치가 Raw까지 그대로다.
   expect(result.after.x).toBe(436 * 4096);
+});
+
+test('ticks missed by a late timer keep the last input going, but only as long as the server does', async ({ page }) => {
+  const state = snapshot();
+  const result = await page.evaluate(state => {
+    const world = window.testWorld;
+    world.update(structuredClone(state));
+    world.recordInput(1, 1, 0);
+    // 타이머가 늦어 세 틱 동안 입력을 보내지 못했다. 서버는 그동안 마지막 입력을 계속 쓴다.
+    world.holdLastInput(3);
+    const held = world.forecast!.tip.x;
+    // 아주 오래 늦어도 서버는 받은 틱부터 10틱만 쓰고 멈춘다.
+    world.holdLastInput(100);
+    return { held, capped: world.forecast!.tip.x };
+  }, state);
+  expect(result.held).toBe((400 + 4 * 6) * 4096);
+  expect(result.capped).toBe((400 + 10 * 6) * 4096);
+});
+
+test('prediction pauses after dropping an unconfirmed input until the server confirms it', async ({ page }) => {
+  const state = snapshot();
+  const result = await page.evaluate(state => {
+    const world = window.testWorld;
+    world.update(structuredClone(state));
+    // 확인이 오지 않은 채 61개를 보내 가장 오래된 입력(1)을 버렸다. 서버가 그 입력을 이미 썼는지 모르므로 예측을 끈다.
+    for (let seq = 1; seq <= 61; seq++) world.recordInput(seq, 1, 0);
+    const paused = world.forecast === undefined;
+    // 서버가 입력 1까지 처리했다고 알려 오면 그 위치에서 남은 입력으로 다시 예측한다.
+    state.players[0] = { ...state.players[0], x: 406, rawX: 406 * 4096, ack: 1 };
+    world.update(structuredClone(state));
+    return { paused, resumed: world.forecast?.tip.x, left: world.pending.length };
+  }, state);
+  expect(result.paused).toBe(true);
+  expect(result.left).toBe(60);
+  expect(result.resumed).toBe((406 + 60 * 6) * 4096);
+});
+
+test('a new input sent before the last tick finished does not make the drawn position jump', async ({ page }) => {
+  const state = snapshot();
+  const result = await page.evaluate(state => {
+    const world = window.testWorld;
+    world.update(structuredClone(state));
+    world.draw(1 / 60);
+    const now = performance.now();
+    // 입력 1을 보낸 지 반 틱만 지났을 때 입력 2를 보낸다. 그리는 목표는 입력 1의 한 틱 중간(약 403)이다.
+    world.recordInput(1, 1, 0, now - 1000 / 60);
+    world.draw(0);
+    const before = world.mePosition()!.x;
+    world.recordInput(2, 1, 0, now);
+    world.draw(0);
+    return { before, after: world.mePosition()!.x };
+  }, state);
+  expect(result.before).toBeGreaterThan(402);
+  expect(result.before).toBeLessThan(404);
+  // 목표는 입력 1의 끝(406)으로 건너뛰지만, 그 차이를 보정 차이로 옮겨 그리는 위치는 이어진다.
+  expect(Math.abs(result.after - result.before)).toBeLessThan(.5);
 });
 
 test('a correction from the server eases in instead of jumping', async ({ page }) => {

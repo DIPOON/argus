@@ -3,15 +3,17 @@ import { readFileSync } from 'node:fs';
 import {
   ceilingDivide, divide, divideInt, floorDivide, fromDouble, length, lengthSquared, multiply, normalize, roundedSqrt,
 } from '../src/fixed';
-import { stepPlayer, type Body, type Terrain } from '../src/movement';
+import { inputHoldTicks, stepPlayer, ticksPerSecond, type Body, type Terrain } from '../src/movement';
 
 // 서버(C#)가 계산해 적어 둔 대조 자료다. tests/Argus.Server.Tests의 ClientParityTests가 만들고, 서버 검사가 지금 계산과 같은지 본다.
 // 여기서는 클라이언트의 같은 계산이 Raw까지 같은 값을 내는지 본다. 화면이 필요 없어 브라우저 없이 돈다.
+// ticks의 한 줄은 그 틱 전에 보낸 이동 입력(없으면 null)과 그 틱을 진행한 뒤의 위치(Raw)다.
 interface Scenario {
   name: string; speed: number; radius: number; start: [number, number]; bodies: number[][];
-  ticks: [number, number, number, number][];
+  ticks: [number | null, number | null, number, number][];
 }
 interface Vectors {
+  ticksPerSecond: number; inputHoldTicks: number;
   multiply: number[][]; divide: number[][]; divideInt: number[][]; floorDivide: number[][]; ceilingDivide: number[][];
   sqrt: number[][]; fromDouble: number[][]; vectors: number[][]; throws: [string, number, number][];
   map: { cell: number; columns: number; rows: number; walls: string };
@@ -71,6 +73,11 @@ test('calculations the server refuses throw here too', () => {
   expect(vectors.throws.length).toBeGreaterThan(0);
 });
 
+test('the tick rate and how long one input is kept match the server', () => {
+  expect(ticksPerSecond).toBe(vectors.ticksPerSecond);
+  expect(inputHoldTicks).toBe(vectors.inputHoldTicks);
+});
+
 test('movement steps to the same raw position as the server, tick by tick', () => {
   const terrain: Terrain = {
     tiles: Uint8Array.from(Buffer.from(vectors.map.walls, 'base64')),
@@ -80,8 +87,14 @@ test('movement steps to the same raw position as the server, tick by tick', () =
   for (const scenario of vectors.scenarios) {
     const bodies: Body[] = scenario.bodies.map(([x, y, radius]) => ({ x, y, radius }));
     let position = { x: scenario.start[0], y: scenario.start[1] };
+    // 서버처럼 입력이 없는 틱에는 마지막 입력을 계속 쓰고, 받은 틱부터 inputHoldTicks틱을 쓴 뒤에는 멈춘다.
+    let current: [number, number] = [0, 0];
+    let held = 0;
     scenario.ticks.forEach(([moveX, moveY, x, y], tick) => {
-      position = stepPlayer(terrain, bodies, position, moveX, moveY, scenario.speed, scenario.radius);
+      if (moveX !== null && moveY !== null) { current = [moveX, moveY]; held = 0; }
+      held++;
+      const [stepX, stepY] = held <= inputHoldTicks ? current : [0, 0];
+      position = stepPlayer(terrain, bodies, position, stepX, stepY, scenario.speed, scenario.radius);
       if (position.x !== x || position.y !== y) found.push(`${scenario.name} ${tick}틱: (${position.x}, ${position.y}), 서버는 (${x}, ${y})`);
     });
   }

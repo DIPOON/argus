@@ -1,4 +1,5 @@
 import './style.css';
+import { tickMilliseconds } from './movement';
 import { World } from './world';
 import { skillNames, type Guest, type Player, type Snapshot, type SnapshotWire, type Skill } from './types';
 
@@ -450,15 +451,19 @@ function sendControl() {
 }
 // 입력은 서버의 틱과 같은 빠르기(초당 30번)로 보낸다. 클라이언트 예측이 보낸 입력 하나를 한 틱으로 치기 때문이다.
 // setInterval(…, 1000 / 30)은 브라우저가 33ms로 내려 초당 30.3번이 되고 예측이 조금씩 앞서므로, 보낼 시각을 1/30초씩 더해 정한다.
-// 창이 가려진 동안처럼 한 번 넘게 늦게 깨면 밀린 입력을 몰아 보내지 않고 지금부터 다시 센다.
-const inputInterval = 1000 / 30;
+// 타이머가 늦게 깨어 보낼 차례를 놓치면 밀린 입력을 몰아 보내지 않는다. 서버는 그동안 마지막 입력을 계속 쓰므로,
+// 예측도 마지막 입력을 놓친 틱만큼 더 쓴 것으로 치고(holdLastInput) 다음 차례부터 다시 1/30초 간격으로 보낸다.
 let nextInputAt = performance.now();
 function pumpInput() {
-  sendControl();
-  const now = performance.now();
-  nextInputAt += inputInterval;
-  if (nextInputAt <= now) nextInputAt = now + inputInterval;
-  window.setTimeout(pumpInput, nextInputAt - now);
+  const missed = Math.max(0, Math.floor((performance.now() - nextInputAt) / tickMilliseconds));
+  try {
+    if (missed > 0) world?.holdLastInput(missed);
+    sendControl();
+  } finally {
+    // 입력이나 예측에서 예외가 나도 다음 차례는 반드시 예약한다. 예약이 끊기면 새로고침할 때까지 입력이 나가지 않는다.
+    nextInputAt += (missed + 1) * tickMilliseconds;
+    window.setTimeout(pumpInput, Math.max(0, nextInputAt - performance.now()));
+  }
 }
 pumpInput();
 window.setInterval(() => send({ type: 'ping', sent: performance.now() }), 2000);

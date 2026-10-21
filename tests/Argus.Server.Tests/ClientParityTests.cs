@@ -71,6 +71,9 @@ internal static class ClientParityTests
         StringBuilder text = new StringBuilder();
         text.Append("{\n");
         text.Append("  \"note\": \"서버(C#)가 계산한 값이다. 손으로 고치지 말고 ").Append(Regenerate).Append("로 다시 만든다.\",\n");
+        // 클라이언트가 같은 값을 써야 하는 상수다. 틱 빈도와, 새 입력 없이 마지막 입력을 쓰는 최대 틱 수(받은 틱 포함)다.
+        text.Append("  \"ticksPerSecond\": ").Append(Number(Rules.TicksPerSecond)).Append(",\n");
+        text.Append("  \"inputHoldTicks\": ").Append(Number(Match.InputTimeoutTicks - 1)).Append(",\n");
         AppendRows(text, "multiply", MultiplyRows());
         AppendRows(text, "divide", DivideRows());
         AppendRows(text, "divideInt", DivideIntRows());
@@ -388,7 +391,7 @@ internal static class ClientParityTests
         double diagonal = 1 / Math.Sqrt(2);
         List<string> scenarios = new List<string>();
 
-        List<double[]> open = new List<double[]>();
+        List<double[]?> open = new List<double[]?>();
         AddInputs(open, 8, 1, 0);
         AddInputs(open, 8, diagonal, diagonal);
         AddInputs(open, 8, 0.6, -0.8);
@@ -400,12 +403,12 @@ internal static class ClientParityTests
         scenarios.Add(RunScenario("열린 땅에서 여러 방향", 180, FixedVector.FromInt(300, 730), new List<FixedVector>(), new List<EnemyDefinition>(), open));
 
         // 장애물 칸 (10, 10)·(10, 11)은 x 480~528, y 480~576이다. 왼쪽 위 꼭짓점을 대각선으로 스친 뒤 왼쪽 면을 따라 내려간다.
-        List<double[]> corner = new List<double[]>();
+        List<double[]?> corner = new List<double[]?>();
         AddInputs(corner, 16, diagonal, diagonal);
         AddInputs(corner, 8, 0, 1);
         scenarios.Add(RunScenario("벽 모서리를 스치고 벽 면을 따라 내려감", 180, FixedVector.FromInt(440, 452), new List<FixedVector>(), new List<EnemyDefinition>(), corner));
 
-        List<double[]> slide = new List<double[]>();
+        List<double[]?> slide = new List<double[]?>();
         AddInputs(slide, 12, 1, 0.25);
         AddInputs(slide, 8, 1, -0.25);
         scenarios.Add(RunScenario("벽 면에 비스듬히 밀며 미끄러짐", 180, FixedVector.FromInt(455, 530), new List<FixedVector>(), new List<EnemyDefinition>(), slide));
@@ -416,14 +419,14 @@ internal static class ClientParityTests
         kinds.Add(EnemyDefinition.Grunt);
         bodies.Add(FixedVector.FromInt(392, 690));
         kinds.Add(EnemyDefinition.Warden);
-        List<double[]> blocked = new List<double[]>();
+        List<double[]?> blocked = new List<double[]?>();
         AddInputs(blocked, 8, 1, 0);
         AddInputs(blocked, 8, diagonal, -diagonal);
         AddInputs(blocked, 8, 1, 0);
         AddInputs(blocked, 6, 0, 1);
         scenarios.Add(RunScenario("멈춘 적에 막히고 돌아감", 180, FixedVector.FromInt(300, 730), bodies, kinds, blocked));
 
-        List<double[]> uneven = new List<double[]>();
+        List<double[]?> uneven = new List<double[]?>();
         AddInputs(uneven, 8, 0.6, 0.8);
         AddInputs(uneven, 8, diagonal, diagonal);
         AddInputs(uneven, 8, 1, 0);
@@ -431,20 +434,29 @@ internal static class ClientParityTests
         AddInputs(uneven, 8, 0, -1);
         scenarios.Add(RunScenario("나누어떨어지지 않는 걸음(초당 200)", 200, FixedVector.FromInt(300, 730), new List<FixedVector>(), new List<EnemyDefinition>(), uneven));
 
-        List<double[]> edge = new List<double[]>();
+        List<double[]?> edge = new List<double[]?>();
         AddInputs(edge, 10, -1, 0.1);
         AddInputs(edge, 6, -diagonal, -diagonal);
         scenarios.Add(RunScenario("맵 가장자리 벽에 막힘", 180, FixedVector.FromInt(75, 730), new List<FixedVector>(), new List<EnemyDefinition>(), edge));
 
-        List<double[]> slow = new List<double[]>();
+        List<double[]?> slow = new List<double[]?>();
         AddInputs(slow, 10, 0.6, 0.8);
         AddInputs(slow, 10, -diagonal, diagonal);
         scenarios.Add(RunScenario("한 걸음으로 끝나는 이동(초당 90)", 90, FixedVector.FromInt(300, 730), new List<FixedVector>(), new List<EnemyDefinition>(), slow));
 
-        List<double[]> fast = new List<double[]>();
+        List<double[]?> fast = new List<double[]?>();
         AddInputs(fast, 10, diagonal, -diagonal);
         AddInputs(fast, 6, 1, 0);
         scenarios.Add(RunScenario("세 걸음으로 나누는 빠른 이동(초당 300)", 300, FixedVector.FromInt(420, 640), new List<FixedVector>(), new List<EnemyDefinition>(), fast));
+
+        // 입력이 끊기면 서버는 마지막 입력을 계속 쓰다가 받은 틱부터 10틱이 지나면 멈춘다. 짧은 끊김(2틱)과 그보다 긴 끊김(14틱)이다.
+        List<double[]?> gaps = new List<double[]?>();
+        AddInputs(gaps, 3, 1, 0);
+        AddGap(gaps, 2);
+        AddInputs(gaps, 3, diagonal, diagonal);
+        AddGap(gaps, 14);
+        AddInputs(gaps, 3, -1, 0);
+        scenarios.Add(RunScenario("입력이 끊겨도 마지막 입력을 10틱까지 씀", 180, FixedVector.FromInt(300, 730), new List<FixedVector>(), new List<EnemyDefinition>(), gaps));
 
         text.Append("  \"scenarios\": [\n");
         for (int i = 0; i < scenarios.Count; i++)
@@ -459,7 +471,7 @@ internal static class ClientParityTests
         text.Append("  ]\n");
     }
 
-    private static void AddInputs(List<double[]> inputs, int count, double moveX, double moveY)
+    private static void AddInputs(List<double[]?> inputs, int count, double moveX, double moveY)
     {
         for (int i = 0; i < count; i++)
         {
@@ -467,8 +479,17 @@ internal static class ClientParityTests
         }
     }
 
+    // 입력이 오지 않는 틱이다.
+    private static void AddGap(List<double[]?> inputs, int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            inputs.Add(null);
+        }
+    }
+
     private static string RunScenario(string name, double speed, FixedVector start, List<FixedVector> bodies, List<EnemyDefinition> kinds,
-        List<double[]> inputs)
+        List<double[]?> inputs)
     {
         Rules rules = new Rules { MaxEnemies = 0, PlayerSpeed = speed };
         Match match = new Match("PARITY", rules, 73);
@@ -505,15 +526,24 @@ internal static class ClientParityTests
             text.Append(Row(enemy.Position.X.Raw, enemy.Position.Y.Raw, enemy.Definition.Radius.Raw));
         }
         text.Append("],\n");
-        // 한 줄이 한 틱이다. 보낸 이동 입력과 그 틱을 진행한 뒤의 위치(Raw)를 적는다.
+        // 한 줄이 한 틱이다. 그 틱 전에 보낸 이동 입력(없으면 null)과 그 틱을 진행한 뒤의 위치(Raw)를 적는다.
         text.Append("      \"ticks\": [\n");
+        long sequence = 0;
         for (int i = 0; i < inputs.Count; i++)
         {
-            double moveX = inputs[i][0];
-            double moveY = inputs[i][1];
-            Check(match.Input(player, i, moveX, moveY, 0, 0), $"{name}: {i}번째 입력을 받지 않았습니다");
+            double[]? input = inputs[i];
+            text.Append("        [");
+            if (input == null)
+            {
+                text.Append("null, null, ");
+            }
+            else
+            {
+                Check(match.Input(player, sequence, input[0], input[1], 0, 0), $"{name}: {i}번째 틱의 입력을 받지 않았습니다");
+                sequence++;
+                text.Append(Number(input[0])).Append(", ").Append(Number(input[1])).Append(", ");
+            }
             match.Step();
-            text.Append("        [").Append(Number(moveX)).Append(", ").Append(Number(moveY)).Append(", ");
             text.Append(Number(player.Position.X.Raw)).Append(", ").Append(Number(player.Position.Y.Raw)).Append(']');
             if (i < inputs.Count - 1)
             {
