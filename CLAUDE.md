@@ -33,7 +33,8 @@ dotnet run --project tools/Argus.Replay -- server/Argus.Server/recordings/<기�
 dotnet run --project tools/Argus.Replay -- <기록> --until <틱> --snapshot <대원 id>
 dotnet run --project tools/Argus.Replay -- server/Argus.Server/recordings
 
-# 브라우저 검사 (서버가 5077에서 실행 중이어야 한다)
+# 브라우저 검사 (서버가 5077에서 실행 중이어야 한다). 임무 봇이 손으로 만든 맵을 고를 수 있게 서버를
+# Argus__Missions__AllowHandmade=true로 띄운다. 이 설정이 없으면 임무 봇의 방 만들기가 HTTP 403이다.
 cd client && npx playwright install --with-deps chromium && npm run test:e2e
 ```
 
@@ -45,7 +46,7 @@ cd client && npx playwright install --with-deps chromium && npm run test:e2e
 
 ### 검사 하나만 실행하기
 
-서버 검사는 xUnit이 아니라 `tests/Argus.Server.Tests/Program.cs`의 자체 콘솔 하네스다. 인자 없이 돌리면 `Main()`이 아홉 개의 `Register` 호출로 모든 검사를 등록한 뒤 순서대로 실행한다. 이름으로 고르는 필터는 없고, `-- determinism`을 주면 결정론 검사(`DeterminismTests`, `FixedTests`, `ClientParityTests`)만 돌린다. `-- vectors`는 검사 대신 클라이언트 예측 대조 자료를 다시 쓴다. 전체가 수 초면 끝나므로 보통 그대로 돌린다. 하나만 보려면 `Program.cs`의 `Register` 호출을 임시로 줄이거나 해당 `*Tests.cs`의 `Register`에서 `tests.Add` 줄을 임시로 주석 처리한다. **임시 수정을 되돌리고 전체를 다시 통과시킨 뒤 커밋한다.**
+서버 검사는 xUnit이 아니라 `tests/Argus.Server.Tests/Program.cs`의 자체 콘솔 하네스다. 인자 없이 돌리면 `Main()`이 열 개의 `Register` 호출로 모든 검사를 등록한 뒤 순서대로 실행한다. 이름으로 고르는 필터는 없고, `-- determinism`을 주면 결정론 검사(`DeterminismTests`, `FixedTests`, `ClientParityTests`, `GeneratorTests`)만 돌린다. `-- vectors`는 검사 대신 클라이언트 예측 대조 자료를 다시 쓴다. 전체가 수 초면 끝나므로 보통 그대로 돌린다. 하나만 보려면 `Program.cs`의 `Register` 호출을 임시로 줄이거나 해당 `*Tests.cs`의 `Register`에서 `tests.Add` 줄을 임시로 주석 처리한다. **임시 수정을 되돌리고 전체를 다시 통과시킨 뒤 커밋한다.**
 
 Playwright는 이름으로 고를 수 있다.
 
@@ -93,7 +94,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 
 ### Match — 한 방의 전체 상태
 
-`Match`는 `partial class`로 네 파일에 나뉜다. 어디를 고칠지 먼저 판단한다. 맵 크기와 임무 배치(처음 벽, 캠프, 탈출 지점, 시설, 보급, 처음 적 자리, 증원 타원)는 `Game/MissionLayout.cs`의 데이터이고, 방은 만들 때 받은 배치로 진행한다(`Match.Layout`, 맵은 `Match.Map`). 지금은 모든 방과 검사가 손으로 만든 40×30 맵(`MissionLayout.CreateHandmade`)을 쓴다. 생성기가 만든 배치도 받으므로 배치의 생성자가 검사한다. 모든 자리는 맵 안이어야 하고, 캠프와 탈출 지점은 대원이 설 수 있어야 하며, 시설·보급·처음 적 자리는 벽 칸이 아니어야 한다. 증원 타원은 반지름이 1 이상이고 맵 안에 들어가야 하며, 가장 큰 적이 설 수 있는 점이 하나는 있어야 한다. 목록은 읽기 전용이다. 맵 크기는 방마다의 값(`BattleMap.Columns`·`Rows`·`Width`·`Height`)이고 칸 크기(`BattleMap.Cell`, 48)와 캠프 시야(`BattleMap.CampVision`)만 상수다.
+`Match`는 `partial class`로 네 파일에 나뉜다. 어디를 고칠지 먼저 판단한다. 맵 크기와 임무 배치(처음 벽, 캠프, 탈출 지점, 시설, 보급, 처음 적 자리, 증원 타원)는 `Game/MissionLayout.cs`의 데이터이고, 방은 만들 때 받은 배치로 진행한다(`Match.Layout`, 맵은 `Match.Map`). 운영 방은 `MissionGenerator`가 방의 시드로 만든 맵을 쓴다(아래 "작전 생성"). 손으로 만든 40×30 맵(`MissionLayout.CreateHandmade`)은 검사가 쓰고, 설정 `Argus:Missions:AllowHandmade`가 켜진 서버에서는 방을 만들 때 `layout: "handmade"`로 고를 수 있다(브라우저 검사의 임무 봇). 그 밖에는 HTTP 403이다(`EntryFailure.LayoutUnavailable`). 생성기가 만든 배치도 받으므로 배치의 생성자가 검사한다. 모든 자리는 맵 안이어야 하고, 캠프와 탈출 지점은 대원이 설 수 있어야 하며, 시설·보급·처음 적 자리는 벽 칸이 아니어야 한다. 증원 타원은 반지름이 1 이상이고 맵 안에 들어가야 하며, 가장 큰 적이 설 수 있는 점이 하나는 있어야 한다. 목록은 읽기 전용이다. 맵 크기는 방마다의 값(`BattleMap.Columns`·`Rows`·`Width`·`Height`)이고 칸 크기(`BattleMap.Cell`, 48)와 캠프 시야(`BattleMap.CampVision`)만 상수다.
 
 | 파일 | 담당 |
 | --- | --- |
@@ -101,6 +102,15 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 | `Game/Match.Combat.cs` | 접촉 → 유효 대응 수집 → 완전 파훼 → 부분 대응·비김·패배 → 후속 반격, 시설·벽 파괴 |
 | `Game/Match.Movement.cs` | 몸 충돌, 적 생성, 흐름장(flow field) 경로, 적 조향과 예고 시작 |
 | `Game/Match.StateHash.cs` | 진행 상태 전체의 요약값(`StateHash`). 결정론 검사와 재현 확인에 쓴다 |
+
+**작전 생성**(`Game/MissionGenerator.cs`): 방의 시드로 맵 크기(가로 34~50칸, 세로 26~38칸)와 배치를 만든다. 정수 계산과 `SeededRandom`만 써서 어느 기계에서나 같은 맵이 나온다. 만드는 순서는 이렇다.
+1. 가장자리를 부술 수 없는 벽으로 두른다.
+2. 캠프를 한 변 가까이, 탈출 지점을 맞은편 변 가까이에 두고 둘레를 비운다. 캠프 둘레 4칸은 투입하고 바로 움직일 수 있게 비운다.
+3. 시설 셋을 캠프에서 11칸 넘게, 서로 9칸 넘게 떨어뜨리고, 7×7칸 부술 수 있는 벽으로 두른 뒤 출입구 둘을 낸다.
+4. 처음 적을 시설마다 5~7칸 떨어진 곳에, 보급을 캠프 옆과 들판(부목표 둘, 일반 둘)에 둔다.
+5. 장애물을 다른 벽과 닿지 않게 흩어 놓는다.
+6. 캠프에서 벽을 부수지 않고 모든 목표와 증원 타원 위의 점 60% 이상에 걸어서 갈 수 있는지 확인하고, 안 되면 처음부터 다시 만든다.
+`GeneratorTests`가 시드 300개로 이 조건을 따로 확인하고, 시드 1~5의 결과를 고정값(SHA-256)과 맞춘다. 결정론 묶음에도 들어 있어 Windows·macOS에서도 같은 맵인지 본다. **생성기를 바꾸면 이 고정값도 바뀌므로, 의도한 변경이면 새 값으로 고친다.**
 
 `Match.Step()`은 정확히 한 틱(`Rules.Step`)을 진행하며 진행할 시간을 받지 않는다. 지금 시각 `Now`(초)는 틱 번호 `Tick`에서 바로 구한다. 서버가 늦어지면 `StepRoom`이 `Step()`을 여러 번 부르므로 0.25초 적 공격 창이나 0.55초 방어 창, 몸 충돌을 통째로 건너뛰지 않는다. `CombatTests`의 `LongStep`이 가장 많이 밀린 경우(한 번에 8틱)를 검사한다. 판정을 추가할 때 이 가정을 깨지 않는다. 검사 도우미 `TestTools.Advance`도 정수 틱으로만 진행하며, 한 틱에 못 미치는 나머지는 한 틱으로 올려 센다.
 
@@ -147,7 +157,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 
 수치와 정의의 위치: `Game/Rules.cs`(기술 비용·유효 시간, `AllowEliteEnemies`, `EnemyWindupMultiplier`, 체력·마나·시야), `Game/SkillDefinition.cs`(`Affinity`, `EnemySkill`, `EnemyDefinition`의 Grunt/Breaker/Warden), `Game/Model.cs`(`Player`·`Enemy`·`PlayerAction`·`EnemyAction` 상태와 중복 판정 기록용 `HashSet`).
 
-첫 작전은 1티어 `Grunt`만 배치·생성한다. `Breaker`와 `Warden`은 정의만 남아 있고 `Rules.AllowEliteEnemies`를 켠 작전에서만 나온다. 처음 배치하는 자리와 종류는 작전 배치(`MissionLayout.InitialEnemySpots`의 `EnemySpot`)가 정한다. 엘리트를 끈 작전에서는 엘리트 자리(`EnemyDefinition.IsElite`, 2티어 기술이 있는 적)에도 병사를 둔다. 자리가 막혀 있으면 생성자가 예외를 낸다(`PlaceInitialEnemy`). `AddEnemy`는 막힌 자리를 아무 표시 없이 건너뛰므로, 처음 배치에 그대로 쓰면 적이 빠져도 알 수 없다. 증원(`SpawnEnemy`)은 막히면 다른 각도를 다시 뽑으므로 그대로 둔다.
+운영 방(생성 작전)은 `Rules.ForGeneratedMission`(엘리트 켬, 선딜 배율 1)을 쓰고, 처음 적은 시설마다 병사·분쇄자·철위병이다. 기본 규칙(`new Rules()`)은 손으로 만든 맵의 검사가 쓰는 튜토리얼 수준(병사만, 선딜 두 배)이다. 처음 배치하는 자리와 종류는 작전 배치(`MissionLayout.InitialEnemySpots`의 `EnemySpot`)가 정한다. 엘리트를 끈 작전에서는 엘리트 자리(`EnemyDefinition.IsElite`, 2티어 기술이 있는 적)에도 병사를 둔다. 자리가 막혀 있으면 생성자가 예외를 낸다(`PlaceInitialEnemy`). `AddEnemy`는 막힌 자리를 아무 표시 없이 건너뛰므로, 처음 배치에 그대로 쓰면 적이 빠져도 알 수 없다. 증원(`SpawnEnemy`)은 막히면 다른 각도를 다시 뽑으므로 그대로 둔다.
 
 ### 서버 권위와 시야 — 치트 방지 불변식
 
@@ -159,6 +169,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 - 맵 구조, 벽 파괴, 시설, 보급, 목표 진행은 공개 정보다.
 - 서드파티 클라이언트를 허용하므로 공식 클라이언트에서만 동작하는 장치로 규칙을 강제하지 않는다.
 - **보이지 않는 곳에서 일어나는 사건에 공개 순번을 쓰지 않는다.** 효과와 행동의 id는 `Match._nextId` 순번이다. 안개 속 생성처럼 숨은 사건이 같은 순번을 쓰면, 보이는 id 사이의 빈 번호로 그 횟수가 드러난다. 그래서 적 id는 `NewEnemyId`가 방의 시드에서 무작위로 뽑는다.
+- **맵 생성은 방의 시드에서 용도별 시드로 따로 뽑는다**(`SeededRandom.Derive(seed, "mission-layout")`). 같은 시드의 같은 순번을 진행 난수와 함께 쓰면, 공개되는 맵 모양이 숨은 적의 행동·생성 위치와 같은 수가 되어 맵만 보고 숨은 정보를 알 수 있다. 맵의 벽·캠프·시설·보급·탈출 지점은 공개 정보이고, 처음 적 자리와 증원 타원은 숨은 정보라 스냅샷에 담지 않는다.
 - **시드를 클라이언트에 보내지 않는다.** 시드를 알면 적이 고를 행동과 안개 속에서 생길 적의 위치를 미리 계산할 수 있다. 시드에서 뽑은 값(적 id 등)은 공개해도 된다. 출력으로 다음 값을 알 수 없는 생성기(`SeededRandom`)이기 때문이다.
 - **재현용 기록 파일을 서버 밖으로 내보내지 않는다.** 헤더에 방의 비밀 시드와 숨은 정보(처음 적 자리, 증원 타원)가 든 작전 배치가 들어 있어, 진행 중인 방의 기록을 보면 숨은 적의 행동과 생성 위치를 미리 알 수 있다. HTTP로 내려받는 경로를 만들지 않고, 기록 폴더는 git에서도 뺀다. 제보 내용은 기록에만 남고 다른 대원에게 가지 않는다. 예외는 CI 검사 방의 기록이다. 검사에서 쓰고 버리는 방이라, 실패를 분석하거나 다른 운영체제에서 재생하려고 CI 자료(아티팩트)로 올린다. 재생용으로 넘기는 자료는 14일 뒤 지워진다. 운영 기록에는 이 방식을 쓰지 않는다.
 - WebSocket 압축(permessage-deflate)을 켜 두었다. **서버가 보내는 메시지에 토큰 같은 비밀을 넣지 않는다.** 비밀이 플레이어 이름처럼 다른 사람이 정할 수 있는 값과 같은 압축 문맥에 들어가면 압축된 크기로 비밀을 추측할 수 있다(CRIME/BREACH). 지금은 숨겨진 적이 직렬화 전에 빠지고 토큰은 HTTP 응답으로만 나가므로 안전하다.
