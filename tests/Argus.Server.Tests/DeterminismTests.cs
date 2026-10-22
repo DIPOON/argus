@@ -171,7 +171,7 @@ internal static class DeterminismTests
                 Player player = squad[i];
                 if (player.State == "waiting")
                 {
-                    match.Deploy(player, BattleMap.Camp.X.ToDouble() + i * 30, BattleMap.Camp.Y.ToDouble());
+                    match.Deploy(player, match.Layout.Camp.X.ToDouble() + i * 30, match.Layout.Camp.Y.ToDouble());
                     continue;
                 }
                 double heading = tick * 0.05;
@@ -254,7 +254,7 @@ internal static class DeterminismTests
         Match match = new Match("BATCH1", new Rules(), 73);
         Player player = match.Join("p", "pilot")!;
         player.Connected = true;
-        Check(match.Deploy(player, BattleMap.Camp.X.ToDouble(), BattleMap.Camp.Y.ToDouble()));
+        Check(match.Deploy(player, match.Layout.Camp.X.ToDouble(), match.Layout.Camp.Y.ToDouble()));
         Advance(match, match.Rules.DeploySeconds + 0.01);
         Equal(player.State, "alive");
         player.Mana = player.MaxMana;
@@ -307,7 +307,7 @@ internal static class DeterminismTests
             {
                 match.Step();
             }
-            Check(match.Deploy(player, BattleMap.Camp.X.ToDouble(), BattleMap.Camp.Y.ToDouble()));
+            Check(match.Deploy(player, match.Layout.Camp.X.ToDouble(), match.Layout.Camp.Y.ToDouble()));
             int ticks = 0;
             while (player.State != "alive" && ticks < 200)
             {

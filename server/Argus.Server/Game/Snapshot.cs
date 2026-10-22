@@ -48,8 +48,8 @@ public static class Snapshot
         message.Pulse = match.Pulse;
         long nextPulseTick = Rules.ToTicks((match.Pulse + 1) * match.Rules.PulseSeconds);
         message.NextPulse = Seconds(nextPulseTick - match.ElapsedTicks);
-        message.Extraction.X = Round(BattleMap.Extraction.X);
-        message.Extraction.Y = Round(BattleMap.Extraction.Y);
+        message.Extraction.X = Round(match.Layout.Extraction.X);
+        message.Extraction.Y = Round(match.Layout.Extraction.Y);
         message.Extraction.Progress = Round(match.ExtractionProgress);
         message.Extraction.Duration = match.Rules.ExtractionSeconds;
         message.Extraction.Unlocked = match.ObjectivesComplete;
@@ -118,7 +118,7 @@ public static class Snapshot
             entry.Until = Seconds(effect.UntilTick);
             message.Effects.Add(entry);
         }
-        message.Sight.Add(CreateSightPolygon(match, BattleMap.Camp, Fixed.FromInt(BattleMap.CampVision)));
+        message.Sight.Add(CreateSightPolygon(match, match.Layout.Camp, Fixed.FromInt(BattleMap.CampVision)));
         for (int i = 0; i < match.Players.Count; i++)
         {
             if (match.Players[i].State == "alive")
@@ -188,18 +188,23 @@ public static class Snapshot
         }
         if (includeStatic)
         {
-            personal.Map = CreateMap();
+            personal.Map = CreateMap(match);
             personal.Rules = CreateRules(match);
         }
         return personal;
     }
 
-    // 맵의 크기와 칸 수는 정수 상수라 기본값 그대로 보내고, 고정소수점인 캠프 위치만 다른 좌표처럼 바꿔 담는다.
-    private static MapSnapshot CreateMap()
+    // 맵의 크기와 칸 수는 방마다 다르므로 그 방의 맵에서 담고, 고정소수점인 캠프 위치는 다른 좌표처럼 바꿔 담는다.
+    private static MapSnapshot CreateMap(Match match)
     {
         MapSnapshot map = new MapSnapshot();
-        map.CampX = Round(BattleMap.Camp.X);
-        map.CampY = Round(BattleMap.Camp.Y);
+        map.Width = match.Map.Width;
+        map.Height = match.Map.Height;
+        map.Cell = BattleMap.Cell;
+        map.Columns = match.Map.Columns;
+        map.Rows = match.Map.Rows;
+        map.CampX = Round(match.Layout.Camp.X);
+        map.CampY = Round(match.Layout.Camp.Y);
         return map;
     }
 

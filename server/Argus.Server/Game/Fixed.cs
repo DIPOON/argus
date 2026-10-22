@@ -13,7 +13,7 @@ namespace Argus.Server.Game;
 //
 // 브라우저(JavaScript)도 같은 계산을 할 수 있게, 값과 중간값(곱, 나눗셈 전의 수, 제곱의 합)을 모두 ±(2^53 - 1) 안으로 제한한다.
 // JavaScript의 수는 이 범위의 정수만 정확히 다루고, 넘으면 아래 자리를 소리 없이 잃는다. 그래서 서버에서 이 범위를 넘으면 예외를 낸다.
-// 맵 좌표(2000 미만)는 Raw로 2^23 미만이라, 좌표끼리 곱해도 2^46이고 제곱을 더해도 2^47이다.
+// 맵은 한 변이 128칸(6144) 이하라(MissionLayout.MaximumSize) 좌표는 Raw로 2^25 미만이고, 좌표끼리 곱해도 2^50, 제곱을 더해도 2^51이다.
 public readonly struct Fixed : IEquatable<Fixed>, IComparable<Fixed>
 {
     public const int FractionBits = 12;

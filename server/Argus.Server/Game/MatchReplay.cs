@@ -77,7 +77,13 @@ public static class MatchReplay
     public static ReplayResult Run(RecordingHeader header, IEnumerable<MatchRecord> records, long untilTick = long.MaxValue)
     {
         byte[] seed = Convert.FromHexString(header.Seed);
-        Match match = new Match(header.Room, header.Rules, seed);
+        // 기록한 방의 배치로 방을 만든다. 배치를 적지 않은 기록(형식 1)은 모두 손으로 만든 맵의 방이었다.
+        MissionLayout layout = MissionLayout.CreateHandmade();
+        if (header.Layout != null)
+        {
+            layout = header.Layout.ToLayout();
+        }
+        Match match = new Match(header.Room, header.Rules, seed, layout);
         ReplayResult result = new ReplayResult(match);
         foreach (MatchRecord record in records)
         {

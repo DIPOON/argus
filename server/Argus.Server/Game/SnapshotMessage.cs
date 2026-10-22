@@ -156,11 +156,11 @@ public sealed class ExtractionSnapshot
 
 public sealed class MapSnapshot
 {
-    public int Width { get; set; } = BattleMap.Width;
-    public int Height { get; set; } = BattleMap.Height;
-    public int Cell { get; set; } = BattleMap.Cell;
-    public int Columns { get; set; } = BattleMap.Columns;
-    public int Rows { get; set; } = BattleMap.Rows;
+    public int Width { get; set; }
+    public int Height { get; set; }
+    public int Cell { get; set; }
+    public int Columns { get; set; }
+    public int Rows { get; set; }
     public double CampX { get; set; }
     public double CampY { get; set; }
 }

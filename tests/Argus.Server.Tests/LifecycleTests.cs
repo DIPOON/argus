@@ -226,7 +226,7 @@ internal static class LifecycleTests
         Equal(f.Player.Mana, f.Player.MaxMana);
         Equal(ally.Mana, ally.MaxMana);
         f.Player.Mana = 4;
-        f.Player.Position = BattleMap.Camp;
+        f.Player.Position = f.Match.Layout.Camp;
         Advance(f.Match, 10);
         Equal(f.Player.Mana, 4);
         f.Player.Position = f.Match.Supplies[1].Position;
@@ -238,7 +238,7 @@ internal static class LifecycleTests
     private static void Extraction()
     {
         Fixture f = new Fixture();
-        f.Player.Position = BattleMap.Extraction;
+        f.Player.Position = f.Match.Layout.Extraction;
         Advance(f.Match, 21);
         Equal(f.Match.Phase, "active");
         for (int i = 0; i < f.Match.Facilities.Count; i++)
@@ -319,7 +319,7 @@ internal static class LifecycleTests
         // 투입 시간 같은 시험 설정은 바뀔 수 있으므로 기대값은 규칙에서 구하고, 항목은 순서가 아니라 내용으로 찾는다.
         Match match = new Match("WIRE01", new Rules { MaxEnemies = 0 }, 1);
         Player player = match.Join("p", "pilot")!;
-        Check(match.Deploy(player, BattleMap.Camp.X.ToDouble(), BattleMap.Camp.Y.ToDouble()));
+        Check(match.Deploy(player, match.Layout.Camp.X.ToDouble(), match.Layout.Camp.Y.ToDouble()));
         long landing = Rules.ToTicks(match.Rules.DeploySeconds);
         Advance(match, match.Rules.DeploySeconds);
         Equal(match.Tick, landing);
@@ -374,7 +374,7 @@ internal static class LifecycleTests
         // 그래서 서버가 반격이 끝나는 시각(followupUntil)을 보내고, 단계(phase)도 바로 그 틱에 바뀌어야 한다.
         Match match = new Match("WIRE02", new Rules { MaxEnemies = 0 }, 1);
         Player player = match.Join("p", "pilot")!;
-        Check(match.Deploy(player, BattleMap.Camp.X.ToDouble(), BattleMap.Camp.Y.ToDouble()));
+        Check(match.Deploy(player, match.Layout.Camp.X.ToDouble(), match.Layout.Camp.Y.ToDouble()));
         Advance(match, match.Rules.DeploySeconds);
         player.Mana = player.MaxMana;
         // 2번 슬롯은 받아치기다. 주변에 적이 없어도 빈 방어 뒤에 반격한다.
@@ -421,7 +421,7 @@ internal static class LifecycleTests
             f.Match.Facilities[i].Hp = 0;
         }
         // 구역 안에서는 한 틱에 반 틱 2개씩 찬다. 탈출이 끝나기 직전까지 채워 보낼 수 있는 값을 거의 다 본다.
-        f.Player.Position = BattleMap.Extraction;
+        f.Player.Position = f.Match.Layout.Extraction;
         long halfTicks = 0;
         long inside = Rules.ToTicks(f.Match.Rules.ExtractionSeconds) - 10;
         for (long i = 0; i < inside; i++)
@@ -431,7 +431,7 @@ internal static class LifecycleTests
             Equal(SentHalfTicks(f.Match, f.Player), halfTicks);
         }
         // 구역을 비우면 한 틱에 반 틱 1개씩 줄어 홀수도 나온다. 홀수 반 틱은 30을 곱해도 정수가 되지 않는다.
-        f.Player.Position = BattleMap.Camp;
+        f.Player.Position = f.Match.Layout.Camp;
         for (int i = 0; i < 25; i++)
         {
             f.Match.Step();
@@ -482,11 +482,11 @@ internal static class LifecycleTests
             Equal(supply.GetProperty("x").GetDouble(), f.Match.Supplies[0].Position.X.ToDouble());
             Equal(supply.GetProperty("y").GetDouble(), f.Match.Supplies[0].Position.Y.ToDouble());
             JsonElement extraction = root.GetProperty("extraction");
-            Equal(extraction.GetProperty("x").GetDouble(), BattleMap.Extraction.X.ToDouble());
-            Equal(extraction.GetProperty("y").GetDouble(), BattleMap.Extraction.Y.ToDouble());
+            Equal(extraction.GetProperty("x").GetDouble(), f.Match.Layout.Extraction.X.ToDouble());
+            Equal(extraction.GetProperty("y").GetDouble(), f.Match.Layout.Extraction.Y.ToDouble());
             JsonElement map = root.GetProperty("map");
-            Equal(map.GetProperty("campX").GetDouble(), BattleMap.Camp.X.ToDouble());
-            Equal(map.GetProperty("campY").GetDouble(), BattleMap.Camp.Y.ToDouble());
+            Equal(map.GetProperty("campX").GetDouble(), f.Match.Layout.Camp.X.ToDouble());
+            Equal(map.GetProperty("campY").GetDouble(), f.Match.Layout.Camp.Y.ToDouble());
             JsonElement rules = root.GetProperty("rules");
             Equal(rules.GetProperty("playerRadius").GetDouble(), Rules.PlayerRadius.ToDouble());
             JsonElement seen = root.GetProperty("enemies")[0];
@@ -775,7 +775,7 @@ internal static class LifecycleTests
         match.Enemies.Clear();
         Player player = match.Join("p", "pilot")!;
         player.Connected = true;
-        Check(match.Deploy(player, BattleMap.Camp.X.ToDouble(), BattleMap.Camp.Y.ToDouble()));
+        Check(match.Deploy(player, match.Layout.Camp.X.ToDouble(), match.Layout.Camp.Y.ToDouble()));
         Advance(match, rules.DeploySeconds + 0.01);
         player.Mana = player.MaxMana;
         long sequence = 1;
@@ -837,7 +837,7 @@ internal static class LifecycleTests
         Check(Carries(lean, "mapRevision"));
         peer.MarkSent(lean);
         // 벽이 부서져 판 번호가 바뀌면 벽만 다시 보낸다. 장애물 타일 (19, 11)의 체력은 3이다.
-        Check(room.Match.Map.Damage(11 * BattleMap.Columns + 19, 3));
+        Check(room.Match.Map.Damage(11 * room.Match.Map.Columns + 19, 3));
         lock (room.Gate)
         {
             RoomHost.PublishSnapshots(room);
@@ -865,7 +865,7 @@ internal static class LifecycleTests
         using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
         Guest guest = host.Create(new EntryRequest("pilot"))!;
         (Room room, Player player, Peer peer) = host.Attach(guest.Room, guest.Token)!.Value;
-        Check(room.Match.Deploy(player, BattleMap.Camp.X.ToDouble(), BattleMap.Camp.Y.ToDouble()));
+        Check(room.Match.Deploy(player, room.Match.Layout.Camp.X.ToDouble(), room.Match.Layout.Camp.Y.ToDouble()));
         Advance(room.Match, room.Match.Rules.DeploySeconds + 0.1);
         room.Match.Enemies.Clear();
         // 행동 목록이 빈 적이 대원 곁에 있다. 행동을 고를 때마다 예외가 나므로 매 틱 진행이 실패한다.
@@ -905,7 +905,7 @@ internal static class LifecycleTests
             }
         }
         // 캠프도 막는다.
-        Enemy guard = new Enemy(id + 1, BattleMap.Camp, still);
+        Enemy guard = new Enemy(id + 1, f.Match.Layout.Camp, still);
         guard.NextActionTick = long.MaxValue;
         f.Match.Enemies.Add(guard);
         Check(f.Match.Deploy(late, landing.X.ToDouble(), landing.Y.ToDouble()));
