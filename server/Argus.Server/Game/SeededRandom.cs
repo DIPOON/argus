@@ -38,6 +38,19 @@ public sealed class SeededRandom
         return SHA256.HashData(bytes);
     }
 
+    // 용도마다 따로 쓸 시드를 방의 시드에서 만든다. 방의 시드를 키로 용도 이름의 HMAC-SHA256을 계산한다.
+    // 같은 시드의 같은 순번을 두 곳에서 쓰면 두 곳의 수가 같아진다. 예를 들어 공개되는 맵 모양을 진행 난수와 같은 순번으로 뽑으면,
+    // 맵만 보고 숨은 적의 행동이나 생성 위치를 알아낼 수 있다. 만든 시드도 방의 시드처럼 클라이언트에 보내지 않는다.
+    public static byte[] Derive(byte[] seed, string purpose)
+    {
+        if (seed.Length != SeedLength)
+        {
+            throw new ArgumentException($"시드는 {SeedLength}바이트여야 합니다.", nameof(seed));
+        }
+        byte[] label = System.Text.Encoding.UTF8.GetBytes(purpose);
+        return HMACSHA256.HashData(seed, label);
+    }
+
     // 지금까지 뽑은 양이다. 같은 시드로 같은 만큼 뽑았으면 같은 값이다. 상태 요약에 쓴다.
     public long Position
     {

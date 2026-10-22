@@ -281,13 +281,18 @@ public sealed class Guest
 
 public sealed class EntryRequest
 {
+    // 검사가 손으로 만든 맵의 방을 만들 때만 쓰는 값이다. 서버 설정(Argus:Missions:AllowHandmade)이 켜져 있어야 받는다.
+    public const string HandmadeLayout = "handmade";
     public string? Name { get; }
     public string[]? Slots { get; }
+    // 방을 만들 때 고르는 맵이다. 비어 있으면 생성 작전이다. 참가할 때는 쓰지 않는다.
+    public string? Layout { get; }
 
-    public EntryRequest(string? name, string[]? slots = null)
+    public EntryRequest(string? name, string[]? slots = null, string? layout = null)
     {
         Name = name;
         Slots = slots;
+        Layout = layout;
     }
 
     public bool Valid
@@ -310,7 +315,9 @@ public enum EntryFailure
     // 이 주소가 만든 방이 이미 상한만큼 있다.
     AddressFull,
     // 방이 없거나, 가득 찼거나, 끝났다. 방을 만든 직후 참가에 실패한 경우도 여기에 든다.
-    Unavailable
+    Unavailable,
+    // 이 서버에서 고를 수 없는 맵을 골랐다. 손으로 만든 맵은 서버 설정이 허락할 때만 고를 수 있다.
+    LayoutUnavailable
 }
 
 public sealed class RoomHost : BackgroundService
@@ -320,6 +327,8 @@ public sealed class RoomHost : BackgroundService
     private readonly ILogger<RoomHost> _logger;
     // 방마다 기록 파일을 만드는 곳이다. 검사처럼 기록하지 않을 때는 null이다.
     private readonly RecordingStore? _recordings;
+    // 방을 만들 때 손으로 만든 맵을 고를 수 있는지다. 화면 흐름과 임무 봇처럼 정해진 맵이 필요한 검사만 켠다.
+    private readonly bool _allowHandmade;
     private long _connection;
     // 연속해서 이만큼 진행에 실패한 방은 닫는다. 30번이면 약 1초다.
     private const int MaxRoomFailures = 30;
@@ -334,10 +343,22 @@ public sealed class RoomHost : BackgroundService
     private const int MaxReportsPerRoom = 20;
     private const int MaxReportLength = 200;
 
-    public RoomHost(ILogger<RoomHost> logger, RecordingStore? recordings = null)
+    public RoomHost(ILogger<RoomHost> logger, RecordingStore? recordings = null, bool allowHandmade = false)
     {
         _logger = logger;
         _recordings = recordings;
+        _allowHandmade = allowHandmade;
+    }
+
+    // 운영 방은 방의 시드로 만든 생성 작전이고, 엘리트가 나오고 준비 동작이 기본 길이다(Rules.ForGeneratedMission).
+    // 손으로 만든 맵은 검사가 고를 때만 쓰고, 그 맵의 검사가 맞춰 둔 기본 규칙(병사만, 준비 동작 두 배)을 쓴다.
+    private static Match CreateMatch(string code, byte[] seed, bool handmade)
+    {
+        if (handmade)
+        {
+            return new Match(code, new Rules(), seed);
+        }
+        return new Match(code, Rules.ForGeneratedMission(), seed, MissionGenerator.Generate(seed));
     }
 
     // 주소별 상한을 적용하지 않고 만든다. 검사처럼 접속 주소가 없을 때 쓴다.
@@ -356,6 +377,17 @@ public sealed class RoomHost : BackgroundService
         {
             failure = EntryFailure.InvalidRequest;
             return null;
+        }
+        // 운영 방은 모두 생성 작전이다. 손으로 만든 맵은 서버 설정이 허락할 때 검사가 고를 수 있고, 다른 값은 받지 않는다.
+        bool handmade = false;
+        if (request.Layout != null)
+        {
+            if (request.Layout != EntryRequest.HandmadeLayout || !_allowHandmade)
+            {
+                failure = EntryFailure.LayoutUnavailable;
+                return null;
+            }
+            handmade = true;
         }
 
         Room room;
@@ -384,7 +416,7 @@ public sealed class RoomHost : BackgroundService
                 string code = new string(letters);
                 // 방마다 비밀 시드를 새로 만든다. 시드는 기록 파일에만 적고 클라이언트에는 보내지 않는다.
                 seed = RandomNumberGenerator.GetBytes(SeededRandom.SeedLength);
-                room = new Room(new Match(code, new Rules(), seed), address);
+                room = new Room(CreateMatch(code, seed, handmade), address);
             } while (!_rooms.TryAdd(room.Match.Code, room));
         }
 

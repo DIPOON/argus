@@ -15,7 +15,7 @@ internal static class Program
     {
         WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
         builder.Services.AddSingleton<RecordingStore>(CreateRecordingStore);
-        builder.Services.AddSingleton<RoomHost>();
+        builder.Services.AddSingleton<RoomHost>(CreateRoomHost);
         builder.Services.AddHostedService(GetRoomHost);
         builder.Services.AddRateLimiter(ConfigureRateLimiter);
         builder.WebHost.ConfigureKestrel(ConfigureKestrel);
@@ -55,6 +55,17 @@ internal static class Program
         int maxFiles = configuration.GetValue("Argus:Recordings:MaxFiles", 200);
         ILogger<RecordingStore> logger = services.GetRequiredService<ILogger<RecordingStore>>();
         return new RecordingStore(folder, maxFiles, logger);
+    }
+
+    // 방을 진행하는 곳이다. 설정 Argus:Missions:AllowHandmade가 켜져 있으면 방을 만들 때 손으로 만든 맵을 고를 수 있다.
+    // 정해진 맵이 필요한 검사(브라우저 검사의 임무 봇)만 쓴다. 운영에서는 끈다(기본값).
+    private static RoomHost CreateRoomHost(IServiceProvider services)
+    {
+        IConfiguration configuration = services.GetRequiredService<IConfiguration>();
+        ILogger<RoomHost> logger = services.GetRequiredService<ILogger<RoomHost>>();
+        RecordingStore recordings = services.GetRequiredService<RecordingStore>();
+        bool allowHandmade = configuration.GetValue("Argus:Missions:AllowHandmade", false);
+        return new RoomHost(logger, recordings, allowHandmade);
     }
 
     private static void ConfigureKestrel(KestrelServerOptions options)
@@ -130,6 +141,10 @@ internal static class Program
         if (failure == EntryFailure.ServerFull)
         {
             return Results.Json(new { error = "서버의 작전 공간이 가득 찼습니다." }, statusCode: 503);
+        }
+        if (failure == EntryFailure.LayoutUnavailable)
+        {
+            return Results.Json(new { error = "이 서버에서는 고를 수 없는 맵입니다." }, statusCode: 403);
         }
         return Results.Json(new { error = "방이 없거나, 가득 찼거나, 종료된 작전입니다." }, statusCode: 409);
     }

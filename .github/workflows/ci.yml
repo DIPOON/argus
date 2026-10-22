@@ -70,6 +70,8 @@ jobs:
           npm --prefix client run test:e2e
         env:
           ARGUS_URL: http://127.0.0.1:5077
+          # 운영 방은 생성 맵이다. 임무 봇처럼 정해진 맵이 필요한 검사만 손으로 만든 맵을 고를 수 있게 한다.
+          Argus__Missions__AllowHandmade: "true"
       - name: 브라우저 검사가 남긴 기록을 모두 재생
         run: |
           # 서버를 정상 종료해 방마다 기록을 끝 줄과 함께 닫는다. 백그라운드로 띄운 프로세스는 SIGINT를 무시하므로 SIGTERM을 보낸다.

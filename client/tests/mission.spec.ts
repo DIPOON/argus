@@ -67,7 +67,8 @@ function counterSlot(enemy: Enemy, snapshot: Snapshot, player: Player) {
 }
 
 test('a squad counters enemies and completes the mission using only public gameplay commands', async ({ request }, testInfo) => {
-  const first = await request.post('/api/rooms', { data: { name: 'Squad 1' } });
+  // 봇은 손으로 만든 맵의 지형에 맞춰 짰으므로 그 맵을 고른다. 서버 설정 Argus:Missions:AllowHandmade가 켜져 있어야 한다.
+  const first = await request.post('/api/rooms', { data: { name: 'Squad 1', layout: 'handmade' } });
   expect(first.ok()).toBeTruthy();
   const guests: Guest[] = [await first.json()];
   for (let i = 1; i < 4; i++) {

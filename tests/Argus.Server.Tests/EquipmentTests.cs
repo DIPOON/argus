@@ -29,7 +29,8 @@ internal static class EquipmentTests
         Check(!room.Match.SetLoadout(player, invalid));
         Equal(player.Slots[0], "strike");
         room.Match.Enemies.Clear();
-        room.Match.Deploy(player, 300, 730);
+        // 방마다 맵이 다르므로 그 방의 캠프에 투입한다.
+        Check(room.Match.Deploy(player, room.Match.Layout.Camp.X.ToDouble(), room.Match.Layout.Camp.Y.ToDouble()));
         Check(!room.Match.SetLoadout(player, valid));
         Advance(room.Match, 5.1);
         Check(!room.Match.SetLoadout(player, valid));

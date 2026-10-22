@@ -24,12 +24,14 @@ internal static class Program
             FixedTests.Register(tests);
             ClientParityTests.Register(tests);
             LayoutTests.Register(tests);
+            GeneratorTests.Register(tests);
         }
         else if (args.Length == 1 && args[0] == "determinism")
         {
             DeterminismTests.Register(tests);
             FixedTests.Register(tests);
             ClientParityTests.Register(tests);
+            GeneratorTests.Register(tests);
         }
         else
         {

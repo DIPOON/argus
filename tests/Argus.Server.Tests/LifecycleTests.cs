@@ -38,6 +38,7 @@ internal static class LifecycleTests
         tests.Add(new TestCase("A room with nobody left is released soon instead of holding a slot for fifteen minutes", EmptyRoomExpiry));
         tests.Add(new TestCase("One address cannot hold more than a few rooms at once", RoomsPerAddress));
         tests.Add(new TestCase("Room creation and joining report why they failed so the HTTP layer can answer accurately", EntryFailures));
+        tests.Add(new TestCase("Rooms are generated missions with elites, and the handmade map only when the server allows it", RoomLayouts));
         tests.Add(new TestCase("Limits count an IPv6 /64 as one address and leave local and private networks out of the room cap", AddressGrouping));
         tests.Add(new TestCase("Hidden spawns do not advance the id sequence that player actions reveal", HiddenIdGaps));
         tests.Add(new TestCase("Walls, rules and map are resent until delivered and walls again after they change", StaticParts));
@@ -717,6 +718,37 @@ internal static class LifecycleTests
         }
     }
 
+    private static void RoomLayouts()
+    {
+        // 운영 방은 방의 시드로 만든 생성 작전이고, 엘리트가 나오고 적의 준비 동작은 기본 길이다.
+        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        Guest guest = host.Create(new EntryRequest("pilot"))!;
+        (Room room, Player player, Peer peer) = host.Attach(guest.Room, guest.Token)!.Value;
+        Check(room.Match.Layout.Columns >= MissionGenerator.MinimumColumns && room.Match.Layout.Columns <= MissionGenerator.MaximumColumns,
+            $"생성 맵이 아닙니다({room.Match.Layout.Columns}칸)");
+        Check(room.Match.Rules.AllowEliteEnemies, "생성 작전에 엘리트가 나오지 않습니다");
+        Equal(room.Match.Rules.EnemyWindupMultiplier, 1.0);
+        host.Detach(room, player, peer);
+
+        // 손으로 만든 맵은 서버 설정이 허락하지 않으면 고를 수 없다. 모르는 맵 이름도 받지 않는다.
+        EntryFailure failure;
+        Check(host.Create(new EntryRequest("pilot", null, EntryRequest.HandmadeLayout), null, out failure) == null);
+        Equal(failure, EntryFailure.LayoutUnavailable);
+        using RoomHost allowing = new RoomHost(NullLogger<RoomHost>.Instance, null, true);
+        Check(allowing.Create(new EntryRequest("pilot", null, "dungeon"), null, out failure) == null);
+        Equal(failure, EntryFailure.LayoutUnavailable);
+
+        // 허락하면 손으로 만든 맵에 그 맵의 검사가 맞춰 둔 기본 규칙(병사만, 준비 동작 두 배)이다.
+        Guest handmade = allowing.Create(new EntryRequest("pilot", null, EntryRequest.HandmadeLayout))!;
+        (Room fixedRoom, Player fixedPlayer, Peer fixedPeer) = allowing.Attach(handmade.Room, handmade.Token)!.Value;
+        MissionLayout reference = MissionLayout.CreateHandmade();
+        Equal(fixedRoom.Match.Layout.Columns, reference.Columns);
+        Equal(fixedRoom.Match.Layout.Camp, reference.Camp);
+        Check(!fixedRoom.Match.Rules.AllowEliteEnemies, "손으로 만든 맵의 방에 엘리트가 나옵니다");
+        Equal(fixedRoom.Match.Rules.EnemyWindupMultiplier, 2.0);
+        allowing.Detach(fixedRoom, fixedPlayer, fixedPeer);
+    }
+
     private static void EntryFailures()
     {
         // 장비 검증과 실패 이유는 RoomHost가 정한다. HTTP 처리는 이 값으로 상태 코드만 고른다.
@@ -836,8 +868,10 @@ internal static class LifecycleTests
         Check(!Carries(lean, "walls") && !Carries(lean, "rules") && !Carries(lean, "map"), "보낸 정보를 또 보냅니다");
         Check(Carries(lean, "mapRevision"));
         peer.MarkSent(lean);
-        // 벽이 부서져 판 번호가 바뀌면 벽만 다시 보낸다. 장애물 타일 (19, 11)의 체력은 3이다.
-        Check(room.Match.Map.Damage(11 * room.Match.Map.Columns + 19, 3));
+        // 벽이 부서져 판 번호가 바뀌면 벽만 다시 보낸다. 방마다 맵이 다르므로 부술 수 있는 벽(체력 3)을 하나 찾아 부순다.
+        int breakable = Array.IndexOf(room.Match.Map.Tiles, (byte)1);
+        Check(breakable >= 0, "부술 수 있는 벽이 없습니다");
+        Check(room.Match.Map.Damage(breakable, 3));
         lock (room.Gate)
         {
             RoomHost.PublishSnapshots(room);
