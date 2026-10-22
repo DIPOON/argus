@@ -108,6 +108,15 @@ internal sealed class TestSeeds
         int number = Interlocked.Increment(ref _last);
         return SeededRandom.SeedFromNumber(number);
     }
+
+    // 지금까지 내준 시드 수다. RoomHost는 맵을 만들 때마다 시드를 하나 받으므로, 거절한 요청이 맵을 만들지 않았는지 볼 때 쓴다.
+    public int Issued
+    {
+        get
+        {
+            return _last;
+        }
+    }
 }
 
 internal static class TestTools
@@ -116,9 +125,13 @@ internal static class TestTools
 
     // 시드를 정해 둔 RoomHost다. 운영 서버는 방마다 무작위 시드로 맵을 만들지만, 검사가 무작위 맵에서 돌면
     // 실행마다 결과가 달라지고 실패한 맵을 다시 볼 수 없다. 검사의 RoomHost는 모두 이것으로 만든다.
-    public static RoomHost NewHost(RecordingStore? recordings = null, bool allowHandmade = false)
+    // seeds를 넘기면 내준 시드 수를 검사가 볼 수 있다.
+    public static RoomHost NewHost(RecordingStore? recordings = null, bool allowHandmade = false, TestSeeds? seeds = null)
     {
-        TestSeeds seeds = new TestSeeds();
+        if (seeds == null)
+        {
+            seeds = new TestSeeds();
+        }
         return new RoomHost(NullLogger<RoomHost>.Instance, recordings, allowHandmade, seeds.Next);
     }
 

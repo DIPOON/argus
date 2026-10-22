@@ -329,6 +329,8 @@ public sealed class RoomHost : BackgroundService
     private long _connection;
     // 연속해서 이만큼 진행에 실패한 방은 닫는다. 30번이면 약 1초다.
     private const int MaxRoomFailures = 30;
+    // 서버 전체에 동시에 둘 수 있는 방 수다.
+    public const int MaxRooms = 32;
     // 한 주소가 동시에 가질 수 있는 방 수다. 방을 만들고 접속을 붙잡아 두는 방법으로 몇 개 주소만으로
     // 방 32개 상한을 채우지 못하게 한다. 끝난 방도 마지막 대원이 나간 뒤 약 2분(재접속 유예) 동안 남으므로
     // 혼자 여러 판을 연달아 해도 걸리지 않을 만큼은 둔다.
@@ -403,6 +405,14 @@ public sealed class RoomHost : BackgroundService
             handmade = true;
         }
 
+        // 상한에 걸릴 요청은 맵을 만들기 전에 거른다. 맵 생성은 최악 십수 밀리초라, 거절할 요청마다 만들고 버리지 않게 한다.
+        // 잠금 밖에서 본 값이라 그사이 다른 요청이 방을 만들 수 있으므로, 잠금 안에서 한 번 더 본다.
+        failure = RoomLimit(address);
+        if (failure != EntryFailure.None)
+        {
+            return null;
+        }
+
         // 운영 방은 방의 시드로 만든 생성 작전이고, 엘리트가 나오고 준비 동작이 기본 길이다(Rules.ForGeneratedMission).
         // 손으로 만든 맵은 검사가 고를 때만 쓰고, 그 맵의 검사가 맞춰 둔 기본 규칙(병사만, 준비 동작 두 배)을 쓴다.
         byte[] seed = _seeds();
@@ -422,14 +432,9 @@ public sealed class RoomHost : BackgroundService
         Room room = new Room(new Match(NewCode(), rules, seed, layout), address);
         lock (_createGate)
         {
-            if (_rooms.Count >= 32)
+            failure = RoomLimit(address);
+            if (failure != EntryFailure.None)
             {
-                failure = EntryFailure.ServerFull;
-                return null;
-            }
-            if (address != null && CountRooms(address) >= MaxRoomsPerAddress)
-            {
-                failure = EntryFailure.AddressFull;
                 return null;
             }
             // 방 코드가 이미 쓰이고 있으면 코드만 새로 뽑아 Match를 다시 만든다. 맵은 다시 만들지 않는다.
@@ -463,6 +468,20 @@ public sealed class RoomHost : BackgroundService
             }
         }
         return guest;
+    }
+
+    // 방을 하나 더 만들면 상한을 넘는지 본다. 넘지 않으면 EntryFailure.None이다. address가 null이면 주소별 상한은 보지 않는다.
+    private EntryFailure RoomLimit(string? address)
+    {
+        if (_rooms.Count >= MaxRooms)
+        {
+            return EntryFailure.ServerFull;
+        }
+        if (address != null && CountRooms(address) >= MaxRoomsPerAddress)
+        {
+            return EntryFailure.AddressFull;
+        }
+        return EntryFailure.None;
     }
 
     // 이 주소가 만든 방 가운데 아직 남아 있는 방의 수다.

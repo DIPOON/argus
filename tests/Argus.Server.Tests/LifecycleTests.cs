@@ -36,6 +36,7 @@ internal static class LifecycleTests
         tests.Add(new TestCase("A long session keeps its room for the full retention time after the last disconnect", RoomRetention));
         tests.Add(new TestCase("A room with nobody left is released soon instead of holding a slot for fifteen minutes", EmptyRoomExpiry));
         tests.Add(new TestCase("One address cannot hold more than a few rooms at once", RoomsPerAddress));
+        tests.Add(new TestCase("A full server refuses new rooms before generating their maps", ServerFull));
         tests.Add(new TestCase("Room creation and joining report why they failed so the HTTP layer can answer accurately", EntryFailures));
         tests.Add(new TestCase("Rooms are generated missions with elites, and the handmade map only when the server allows it", RoomLayouts));
         tests.Add(new TestCase("Limits count an IPv6 /64 as one address and leave local and private networks out of the room cap", AddressGrouping));
@@ -692,7 +693,8 @@ internal static class LifecycleTests
 
     private static void RoomsPerAddress()
     {
-        using RoomHost host = NewHost();
+        TestSeeds seeds = new TestSeeds();
+        using RoomHost host = NewHost(null, false, seeds);
         // 한 주소에서 만든 방은 동시에 상한만큼만 둔다. 방을 만들고 접속을 붙잡아 두는 방법으로
         // 몇 개 주소만으로 방 32개 상한을 채우지 못하게 한다.
         for (int i = 0; i < RoomHost.MaxRoomsPerAddress; i++)
@@ -705,6 +707,8 @@ internal static class LifecycleTests
         Guest? extra = host.Create(new EntryRequest("a"), "203.0.113.1", out capped);
         Check(extra == null, "한 주소에서 상한보다 많은 방을 만들었습니다");
         Equal(capped, EntryFailure.AddressFull);
+        // 상한에 걸린 요청은 맵을 만들기 전에 거절한다. 맵을 만들 때 쓰는 시드를 받지 않았다.
+        Equal(seeds.Issued, RoomHost.MaxRoomsPerAddress);
         // 다른 주소는 따로 센다.
         EntryFailure otherFailure;
         Guest? other = host.Create(new EntryRequest("b"), "203.0.113.2", out otherFailure);
@@ -716,6 +720,22 @@ internal static class LifecycleTests
             Guest? guest = host.Create(new EntryRequest("c"), null, out local);
             Check(guest != null && local == EntryFailure.None, "상한에서 뺀 주소의 방 생성이 막혔습니다");
         }
+    }
+
+    private static void ServerFull()
+    {
+        TestSeeds seeds = new TestSeeds();
+        using RoomHost host = NewHost(null, false, seeds);
+        // 주소별 상한에서 뺀 접속(주소 null)으로 서버의 방을 상한까지 채운다.
+        for (int i = 0; i < RoomHost.MaxRooms; i++)
+        {
+            Check(host.Create(new EntryRequest("pilot")) != null, $"{i + 1}번째 방을 만들지 못했습니다");
+        }
+        EntryFailure failure;
+        Check(host.Create(new EntryRequest("late"), null, out failure) == null, "서버의 방 상한보다 많은 방을 만들었습니다");
+        Equal(failure, EntryFailure.ServerFull);
+        // 거절한 요청은 맵을 만들기 전에 걸렀다. 맵을 만들 때 쓰는 시드를 받지 않았다.
+        Equal(seeds.Issued, RoomHost.MaxRooms);
     }
 
     private static void RoomLayouts()
