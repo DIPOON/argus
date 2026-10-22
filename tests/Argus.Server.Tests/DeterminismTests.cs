@@ -1,6 +1,5 @@
 using Argus.Server.Game;
 using Argus.Server.Networking;
-using Microsoft.Extensions.Logging.Abstractions;
 using static TestTools;
 
 internal static class DeterminismTests
@@ -263,7 +262,7 @@ internal static class DeterminismTests
 
     private static void TickBatching()
     {
-        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        using RoomHost host = NewHost();
         Room single = StartRoom();
         Room batched = StartRoom();
         // 한 번에 1·2·3·6틱을 진행하면 합이 12틱이다. 입력은 두 방 모두 12틱마다 같은 틱에 넣는다.

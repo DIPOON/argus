@@ -1,6 +1,5 @@
 using Argus.Server.Game;
 using Argus.Server.Networking;
-using Microsoft.Extensions.Logging.Abstractions;
 using static TestTools;
 
 internal static class EquipmentTests
@@ -15,7 +14,7 @@ internal static class EquipmentTests
 
     private static void Slots()
     {
-        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        using RoomHost host = NewHost();
         string[] invalid = new string[] { "grab", "parry", "grab", "strike" };
         Check(host.Create(new EntryRequest("bad", invalid)) == null);
         Check(!Rules.ValidSlots(new string[] { "strike", "parry", "grab", "turret" }));
@@ -29,7 +28,8 @@ internal static class EquipmentTests
         Check(!room.Match.SetLoadout(player, invalid));
         Equal(player.Slots[0], "strike");
         room.Match.Enemies.Clear();
-        room.Match.Deploy(player, 300, 730);
+        // 방마다 맵이 다르므로 그 방의 캠프에 투입한다.
+        Check(room.Match.Deploy(player, room.Match.Layout.Camp.X.ToDouble(), room.Match.Layout.Camp.Y.ToDouble()));
         Check(!room.Match.SetLoadout(player, valid));
         Advance(room.Match, 5.1);
         Check(!room.Match.SetLoadout(player, valid));

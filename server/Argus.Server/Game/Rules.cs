@@ -21,6 +21,13 @@ public sealed class Rules
         return (double)ticks / TicksPerSecond;
     }
     public const int MaxPlayers = 4;
+
+    // 운영 방(생성 작전)의 규칙이다. 엘리트가 나오고 적의 준비 동작은 기본 길이(1배)다.
+    // 기본 규칙(new Rules())은 손으로 만든 맵의 검사가 쓰는 튜토리얼 수준(병사만, 준비 동작 두 배)이다.
+    public static Rules ForGeneratedMission()
+    {
+        return new Rules { AllowEliteEnemies = true, EnemyWindupMultiplier = 1 };
+    }
     // 대원 몸의 반지름이다. 판정에 쓰는 고정소수점 값이고, 스냅샷의 규칙에는 실수로 바꿔 보낸다.
     public static readonly Fixed PlayerRadius = Fixed.FromInt(13);
     public double DeploySeconds { get; init; } = 5;

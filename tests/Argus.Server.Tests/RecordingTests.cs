@@ -222,7 +222,7 @@ internal static class RecordingTests
         try
         {
             RecordingStore store = new RecordingStore(folder, 200, NullLogger<RecordingStore>.Instance);
-            using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance, store);
+            using RoomHost host = NewHost(store);
             Guest guest = host.Create(new EntryRequest("pilot", new string[] { "strike", "parry", "grab", "grab" }))!;
             (Room room, Player player, Peer peer) = host.Attach(guest.Room, guest.Token)!.Value;
             lock (room.Gate)
@@ -394,7 +394,7 @@ internal static class RecordingTests
         try
         {
             RecordingStore store = new RecordingStore(folder, 200, NullLogger<RecordingStore>.Instance);
-            using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance, store);
+            using RoomHost host = NewHost(store);
             // HTTP로 방만 만들고 접속하지 않은 방과, 접속한 방이다.
             Guest drifter = host.Create(new EntryRequest("drifter"))!;
             Guest pilot = host.Create(new EntryRequest("pilot"))!;
@@ -429,7 +429,7 @@ internal static class RecordingTests
             match.Recorder = file;
             Player player = match.Join("p", "pilot")!;
             match.Connect(player);
-            using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+            using RoomHost host = NewHost();
             // 남기지 못할 제보를 받았다고 답하면, 제보가 남았다고 믿은 사람이 그 기록을 찾지 못한다.
             Check(host.Report(room, player, "", out string failure) == null, "기록이 실패한 방이 제보를 받았습니다");
             Check(failure.Contains("기록을 남기지 못하고"), $"거절한 이유가 맞지 않습니다: {failure}");
@@ -578,7 +578,7 @@ internal static class RecordingTests
 
     private static void CleanTexts()
     {
-        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        using RoomHost host = NewHost();
         // 이름은 16단위까지다. 15글자 뒤의 이모지(2단위)는 반만 들어갈 수 없으므로 통째로 뺀다.
         string[] requested = new string[] { "ABCDEFGHIJKLMNO\U0001F600", "가\u0007나", "A\uD800B", "  \u0001  " };
         string[] expected = new string[] { "ABCDEFGHIJKLMNO", "가나", "AB", "대원" };
@@ -594,7 +594,7 @@ internal static class RecordingTests
         try
         {
             RecordingStore store = new RecordingStore(folder, 200, NullLogger<RecordingStore>.Instance);
-            using RoomHost recorded = new RoomHost(NullLogger<RoomHost>.Instance, store);
+            using RoomHost recorded = NewHost(store);
             Guest guest = recorded.Create(new EntryRequest("pilot"))!;
             (Room room, Player player, Peer peer) = recorded.Attach(guest.Room, guest.Token)!.Value;
             lock (room.Gate)

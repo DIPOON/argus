@@ -317,7 +317,14 @@ test('wire protocol rejects forged state, invalid slots, replay and stolen ident
   expect(await new Promise<number>(resolve => bad.addEventListener('close', event => resolve(event.code)))).toBe(1008);
   const ws = new WebSocket(url);
   let snapshot: Snapshot | undefined;
-  ws.addEventListener('message', event => { const message = JSON.parse(String(event.data)); if (message.type === 'snapshot') snapshot = message; });
+  // 방마다 맵이 다르므로 첫 스냅샷의 맵 정보에서 캠프 자리를 얻어 그곳에 투입한다.
+  let camp = { x: 0, y: 0 };
+  ws.addEventListener('message', event => {
+    const message = JSON.parse(String(event.data));
+    if (message.type !== 'snapshot') return;
+    snapshot = message;
+    if (message.map) camp = { x: message.map.campX, y: message.map.campY };
+  });
   await new Promise<void>(resolve => ws.addEventListener('open', () => resolve()));
   const send = (value: object) => ws.send(JSON.stringify(value));
   let replacement: WebSocket | undefined;
@@ -325,12 +332,13 @@ test('wire protocol rejects forged state, invalid slots, replay and stolen ident
   try {
     send({ type: 'hello', room: guest.room, token: guest.token });
     await expect.poll(() => snapshot?.phase).toBe('staging');
-    send({ type: 'deploy', x: 300, y: 730 });
+    expect(camp.x).toBeGreaterThan(0);
+    send({ type: 'deploy', ...camp });
     const self = () => snapshot?.players.find(p => p.id === guest.id);
     await expect.poll(() => self()?.state, { timeout: 8000 }).toBe('alive');
     send({ type: 'input', seq: 0, moveX: 0, moveY: 0, aim: 0, slot: 0, x: 1300, y: 1200, hp: 999, mana: 999, damage: 999 });
     await expect.poll(() => self()?.ack).toBe(0);
-    expect(self()!.x).toBe(300); expect(self()!.mana).toBe(0); expect(self()!.hp).toBe(6);
+    expect(self()!.x).toBe(camp.x); expect(self()!.mana).toBe(0); expect(self()!.hp).toBe(6);
     send({ type: 'input', seq: 1, moveX: 100, moveY: 0, aim: 0, slot: 0 });
     send({ type: 'input', seq: 1, moveX: 0, moveY: 0, aim: 0, slot: 9 });
     send({ type: 'input', seq: 1, moveX: 0, moveY: 0, aim: 0, slot: 2.5 });
@@ -340,7 +348,7 @@ test('wire protocol rejects forged state, invalid slots, replay and stolen ident
     send({ type: 'deploy', x: 1000, y: 700 });
     send({ type: 'input', seq: 2, moveX: 0, moveY: 0, aim: 0, slot: 1 });
     await expect.poll(() => self()?.ack).toBe(2);
-    expect(self()!.x).toBe(300); expect(self()!.slots[3]).toBe('strike'); expect(self()!.mana).toBe(0);
+    expect(self()!.x).toBe(camp.x); expect(self()!.slots[3]).toBe('strike'); expect(self()!.mana).toBe(0);
     expect(self()!.actions).toHaveLength(0);
     const joins = [];
     for (let i = 0; i < 4; i++) joins.push(await request.post(`/api/rooms/${guest.room}/join`, { data: { name: 'guest' } }));
@@ -349,7 +357,7 @@ test('wire protocol rejects forged state, invalid slots, replay and stolen ident
     newcomer = new WebSocket(url);
     newcomer.addEventListener('open', () => newcomer!.send(JSON.stringify({ type: 'hello', room: late.room, token: late.token })));
     await expect.poll(() => snapshot?.players.find(p => p.id === late.id)?.connected).toBe(true);
-    newcomer.send(JSON.stringify({ type: 'deploy', x: 300, y: 730 }));
+    newcomer.send(JSON.stringify({ type: 'deploy', ...camp }));
     await expect.poll(() => snapshot?.players.find(p => p.id === late.id)?.state, { timeout: 8000 }).toBe('alive');
     expect(snapshot!.players.find(p => p.id === late.id)!.mana).toBe(0);
     const replaced = new Promise<number>(resolve => ws.addEventListener('close', event => resolve(event.code)));
