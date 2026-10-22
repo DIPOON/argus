@@ -216,13 +216,7 @@ public sealed class Room
     // 대원마다 내용을 덧붙인 마지막 제보의 틱이다. 제보 하나에 내용은 한 번만 덧붙인다.
     public Dictionary<string, long> NotedTicks { get; } = new Dictionary<string, long>();
 
-    // 방마다 비밀 시드를 새로 만든다. 시드는 서버 밖으로 보내지 않는다.
-    public Room(string code, string? address)
-        : this(new Match(code, new Rules(), RandomNumberGenerator.GetBytes(SeededRandom.SeedLength)), address)
-    {
-    }
-
-    // 검사와 재현용이다. 시드를 정해 만든 Match로 방을 만든다.
+    // RoomHost가 비밀 시드로 만든 Match를 받는다. 검사는 시드를 정해 만든 Match를 넘긴다.
     public Room(Match match, string? address)
     {
         Match = match;
@@ -329,6 +323,9 @@ public sealed class RoomHost : BackgroundService
     private readonly RecordingStore? _recordings;
     // 방을 만들 때 손으로 만든 맵을 고를 수 있는지다. 화면 흐름과 임무 봇처럼 정해진 맵이 필요한 검사만 켠다.
     private readonly bool _allowHandmade;
+    // 방마다 쓸 비밀 시드를 만든다. 운영 서버는 넘기지 않아 방마다 RandomNumberGenerator로 새로 만든다(NewSeed).
+    // 검사는 정해 둔 시드를 차례로 내주는 함수를 넘긴다. 무작위 시드면 방마다 맵이 달라져 검사 결과가 실행마다 바뀌고 실패를 다시 볼 수 없다.
+    private readonly Func<byte[]> _seeds;
     private long _connection;
     // 연속해서 이만큼 진행에 실패한 방은 닫는다. 30번이면 약 1초다.
     private const int MaxRoomFailures = 30;
@@ -343,22 +340,38 @@ public sealed class RoomHost : BackgroundService
     private const int MaxReportsPerRoom = 20;
     private const int MaxReportLength = 200;
 
-    public RoomHost(ILogger<RoomHost> logger, RecordingStore? recordings = null, bool allowHandmade = false)
+    public RoomHost(ILogger<RoomHost> logger, RecordingStore? recordings = null, bool allowHandmade = false, Func<byte[]>? seeds = null)
     {
         _logger = logger;
         _recordings = recordings;
         _allowHandmade = allowHandmade;
+        if (seeds == null)
+        {
+            _seeds = NewSeed;
+        }
+        else
+        {
+            _seeds = seeds;
+        }
     }
 
-    // 운영 방은 방의 시드로 만든 생성 작전이고, 엘리트가 나오고 준비 동작이 기본 길이다(Rules.ForGeneratedMission).
-    // 손으로 만든 맵은 검사가 고를 때만 쓰고, 그 맵의 검사가 맞춰 둔 기본 규칙(병사만, 준비 동작 두 배)을 쓴다.
-    private static Match CreateMatch(string code, byte[] seed, bool handmade)
+    // 방마다 비밀 시드를 새로 만든다. 시드는 기록 파일에만 적고 클라이언트에는 보내지 않는다.
+    private static byte[] NewSeed()
     {
-        if (handmade)
+        return RandomNumberGenerator.GetBytes(SeededRandom.SeedLength);
+    }
+
+    // 방 코드는 헷갈리기 쉬운 글자(I, O, 0, 1)를 뺀 32글자 가운데 여섯 개다.
+    private static string NewCode()
+    {
+        byte[] bytes = RandomNumberGenerator.GetBytes(6);
+        const string alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        char[] letters = new char[bytes.Length];
+        for (int i = 0; i < bytes.Length; i++)
         {
-            return new Match(code, new Rules(), seed);
+            letters[i] = alphabet[bytes[i] % alphabet.Length];
         }
-        return new Match(code, Rules.ForGeneratedMission(), seed, MissionGenerator.Generate(seed));
+        return new string(letters);
     }
 
     // 주소별 상한을 적용하지 않고 만든다. 검사처럼 접속 주소가 없을 때 쓴다.
@@ -390,8 +403,23 @@ public sealed class RoomHost : BackgroundService
             handmade = true;
         }
 
-        Room room;
-        byte[] seed;
+        // 운영 방은 방의 시드로 만든 생성 작전이고, 엘리트가 나오고 준비 동작이 기본 길이다(Rules.ForGeneratedMission).
+        // 손으로 만든 맵은 검사가 고를 때만 쓰고, 그 맵의 검사가 맞춰 둔 기본 규칙(병사만, 준비 동작 두 배)을 쓴다.
+        byte[] seed = _seeds();
+        Rules rules;
+        MissionLayout layout;
+        if (handmade)
+        {
+            rules = new Rules();
+            layout = MissionLayout.CreateHandmade();
+        }
+        else
+        {
+            rules = Rules.ForGeneratedMission();
+            layout = MissionGenerator.Generate(seed);
+        }
+        // 맵과 Match는 생성 잠금 밖에서 만든다. 잠금 안에서 만들면 모든 방 만들기가 다른 방의 맵 생성을 기다린다.
+        Room room = new Room(new Match(NewCode(), rules, seed, layout), address);
         lock (_createGate)
         {
             if (_rooms.Count >= 32)
@@ -404,20 +432,11 @@ public sealed class RoomHost : BackgroundService
                 failure = EntryFailure.AddressFull;
                 return null;
             }
-            do
+            // 방 코드가 이미 쓰이고 있으면 코드만 새로 뽑아 Match를 다시 만든다. 맵은 다시 만들지 않는다.
+            while (!_rooms.TryAdd(room.Match.Code, room))
             {
-                byte[] bytes = RandomNumberGenerator.GetBytes(6);
-                const string alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-                char[] letters = new char[bytes.Length];
-                for (int i = 0; i < bytes.Length; i++)
-                {
-                    letters[i] = alphabet[bytes[i] % alphabet.Length];
-                }
-                string code = new string(letters);
-                // 방마다 비밀 시드를 새로 만든다. 시드는 기록 파일에만 적고 클라이언트에는 보내지 않는다.
-                seed = RandomNumberGenerator.GetBytes(SeededRandom.SeedLength);
-                room = new Room(CreateMatch(code, seed, handmade), address);
-            } while (!_rooms.TryAdd(room.Match.Code, room));
+                room = new Room(new Match(NewCode(), rules, seed, layout), address);
+            }
         }
 
         // 기록 파일은 첫 참가보다 먼저 연다. 파일을 만드는 일이라 생성 잠금 밖에서 하고,

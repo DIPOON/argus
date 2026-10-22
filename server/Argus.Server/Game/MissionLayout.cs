@@ -101,8 +101,9 @@ public sealed class MissionLayout
         Validate();
     }
 
-    // 자리가 모두 맵 안인지, 대원이 서야 하는 곳(캠프, 탈출 지점)에 설 수 있는지, 다른 자리가 벽 칸이 아닌지 본다.
-    // 처음 적은 생성자가 몸 크기까지 다시 확인한다(Match.PlaceInitialEnemy).
+    // 자리가 모두 맵 안인지, 대원이 서야 하는 곳(캠프, 탈출 지점)에 설 수 있는지, 시설과 보급이 벽 칸이 아닌지 본다.
+    // 처음 적은 몸 크기만큼 설 수 있고 서로 겹치지 않는지까지 본다. 그래서 검사를 통과한 배치로는 언제나 방을 만들 수 있다.
+    // Match 생성자도 처음 적을 둘 때 다시 확인한다(Match.PlaceInitialEnemy).
     private void Validate()
     {
         BattleMap map = new BattleMap(this);
@@ -116,10 +117,7 @@ public sealed class MissionLayout
         {
             RequireOpen(map, Supplies[i].Position, nameof(Supplies), $"보급 {i + 1}");
         }
-        for (int i = 0; i < InitialEnemySpots.Count; i++)
-        {
-            RequireOpen(map, InitialEnemySpots[i].Position, nameof(InitialEnemySpots), $"처음 적 자리 {i + 1}");
-        }
+        ValidateEnemySpots(map);
         ValidateRing(map);
     }
 
@@ -148,6 +146,32 @@ public sealed class MissionLayout
         if (map.Solid(x, y))
         {
             throw new ArgumentException($"{label} {position}가 벽 칸 안입니다", name);
+        }
+    }
+
+    // 처음 적은 그 종류의 몸 반지름만큼 벽에 닿지 않고 설 수 있어야 하고, 두 적의 거리는 반지름의 합 이상이어야 한다.
+    // 엘리트를 끈 작전에서는 엘리트 자리에 몸이 가장 작은 병사를 두므로, 정해 둔 종류로 확인하면 충분하다.
+    private void ValidateEnemySpots(BattleMap map)
+    {
+        for (int i = 0; i < InitialEnemySpots.Count; i++)
+        {
+            EnemySpot spot = InitialEnemySpots[i];
+            RequireInside(map, spot.Position, nameof(InitialEnemySpots), $"처음 적 자리 {i + 1}");
+            if (!map.CanStand(spot.Position, spot.Kind.Radius))
+            {
+                throw new ArgumentException($"처음 적 자리 {i + 1} {spot.Position}에 {spot.Kind.Id}의 몸(반지름 {spot.Kind.Radius})이 들어가지 않습니다",
+                    nameof(InitialEnemySpots));
+            }
+            for (int j = 0; j < i; j++)
+            {
+                EnemySpot other = InitialEnemySpots[j];
+                Fixed minimum = spot.Kind.Radius + other.Kind.Radius;
+                if (FixedVector.DistanceSquared(spot.Position, other.Position) < minimum * minimum)
+                {
+                    throw new ArgumentException($"처음 적 자리 {j + 1} {other.Position}과 {i + 1} {spot.Position}의 몸이 겹칩니다",
+                        nameof(InitialEnemySpots));
+                }
+            }
         }
     }
 

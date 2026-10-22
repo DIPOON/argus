@@ -8,9 +8,11 @@ namespace Argus.Server.Game;
 // 1. 크기를 정하고 가장자리를 부술 수 없는 벽으로 두른다.
 // 2. 캠프를 한 변 가까이에, 탈출 지점을 맞은편 변 가까이에 두고 둘레를 비워 둔다.
 // 3. 시설 세 곳을 캠프에서 멀리, 서로 떨어지게 두고 부술 수 있는 벽으로 두른 뒤 출입구 두 개를 낸다.
-// 4. 처음 적을 시설 근처에, 보급을 캠프 옆과 들판에 둔다. 자리마다 둘레 한 칸을 비워 둔다.
+// 4. 처음 적을 시설 근처에, 보급을 캠프 옆과 들판에 둔다. 자리 칸은 비워 둔 칸(시설 울타리와 그 바깥 통로, 캠프·탈출 지점 둘레,
+//    앞서 둔 자리의 둘레)을 피하고, 자리마다 둘레 한 칸을 비워 둔다. 그래서 적끼리, 적과 보급이 같은 칸이나 이웃 칸에 놓이지 않고
+//    울타리 안에도 놓이지 않는다.
 // 5. 남은 땅에 부술 수 있는 장애물을 서로, 그리고 다른 벽과 닿지 않게 흩어 놓는다. 그래서 통로가 막히지 않는다.
-// 6. 캠프에서 모든 목표와 증원 타원 대부분에 걸어서 갈 수 있는지 확인한다. 안 되면 처음부터 다시 만든다.
+// 6. 캠프에서 모든 목표와 증원 타원 대부분에 걸어서 갈 수 있는지 확인한다. 안 되면 크기부터 다시 뽑아 처음부터 다시 만든다.
 public static class MissionGenerator
 {
     public const int MinimumColumns = 34;
@@ -34,9 +36,9 @@ public static class MissionGenerator
     private const int EnemyFromCamp = 8;
     // 증원 타원은 가장자리에서 3칸 안쪽을 지난다.
     private const int RingInset = 3;
-    // 자리 하나를 찾을 때의 시도 횟수와, 배치 전체를 처음부터 다시 만드는 횟수다.
+    // 자리 하나를 찾을 때의 시도 횟수와, 배치 전체를 처음부터 다시 만드는 최대 횟수다.
     private const int PlacementTries = 400;
-    private const int LayoutAttempts = 80;
+    public const int LayoutAttempts = 80;
     // 증원 타원 위에서 고르게 살펴보는 점의 수와, 그중 캠프에서 걸어서 갈 수 있어야 하는 비율(%)이다.
     private const int RingSamples = 64;
     private const int RingReachablePercent = 60;
@@ -45,18 +47,27 @@ public static class MissionGenerator
 
     public static MissionLayout Generate(byte[] roomSeed)
     {
+        int attempts;
+        return Generate(roomSeed, out attempts);
+    }
+
+    // attempts에는 배치를 처음부터 만든 횟수(1 이상)를 담는다. 다시 만드는 일이 드문지 검사가 확인할 때 쓴다.
+    public static MissionLayout Generate(byte[] roomSeed, out int attempts)
+    {
         SeededRandom random = new SeededRandom(SeededRandom.Derive(roomSeed, "mission-layout"));
-        int columns = random.NextInt(MinimumColumns, MaximumColumns + 1);
-        int rows = random.NextInt(MinimumRows, MaximumRows + 1);
-        for (int attempt = 0; attempt < LayoutAttempts; attempt++)
+        for (int attempt = 1; attempt <= LayoutAttempts; attempt++)
         {
+            // 크기도 시도마다 새로 뽑는다. 조건을 채우기 어려운 크기를 뽑아도 그 크기로만 거듭 실패하지 않는다.
+            int columns = random.NextInt(MinimumColumns, MaximumColumns + 1);
+            int rows = random.NextInt(MinimumRows, MaximumRows + 1);
             MissionLayout? layout = TryGenerate(random, columns, rows);
             if (layout != null)
             {
+                attempts = attempt;
                 return layout;
             }
         }
-        throw new InvalidOperationException($"{columns}×{rows} 작전 배치를 {LayoutAttempts}번 시도해도 만들지 못했습니다");
+        throw new InvalidOperationException($"작전 배치를 {LayoutAttempts}번 시도해도 만들지 못했습니다");
     }
 
     // 칸 좌표다.
@@ -185,7 +196,13 @@ public static class MissionGenerator
             return true;
         }
 
-        // 상자 안의 칸이 모두 맵 안이고 벽이 아니면 참이다. 비워 둘 칸이어도 된다(그 자리에 무엇을 두는 경우).
+        // 칸 하나가 맵 안쪽이고, 벽도 비워 둘 칸도 아니면 참이다. 처음 적과 보급의 자리 칸이 다른 자리와 겹치지 않게 고를 때 쓴다.
+        public bool CellFree(int x, int y)
+        {
+            return BoxFree(x, y, x, y);
+        }
+
+        // 상자 안의 칸이 모두 맵 안이고 벽이 아니면 참이다. 비워 둘 칸이어도 된다(자리의 둘레가 시설 바깥 통로에 걸치는 경우 등).
         public bool BoxOpen(int x0, int y0, int x1, int y1)
         {
             for (int y = y0; y <= y1; y++)
@@ -389,6 +406,8 @@ public static class MissionGenerator
     }
 
     // 시설을 지키는 처음 적의 자리다. 시설 가운데에서 5~7칸, 캠프에서 8칸 넘게 떨어지고 둘레 3×3칸에 벽이 없어야 한다.
+    // 자리 칸은 비워 둘 칸이 아니어야 한다. 그래서 다른 시설의 울타리 안이나 앞서 둔 적의 칸·이웃 칸에 놓이지 않는다.
+    // 비워 둘 칸을 보지 않으면, 시설 둘이 가까울 때 두 시설의 적이 같은 칸에 놓여 Match가 처음 적을 두지 못한다.
     private static Cell? PlaceGuard(SeededRandom random, Draft draft, Cell camp, Cell facility)
     {
         for (int t = 0; t < PlacementTries; t++)
@@ -401,7 +420,11 @@ public static class MissionGenerator
             {
                 continue;
             }
-            if (candidate.DistanceSquared(camp) <= EnemyFromCamp * EnemyFromCamp || !draft.BoxOpen(x - 1, y - 1, x + 1, y + 1))
+            if (candidate.DistanceSquared(camp) <= EnemyFromCamp * EnemyFromCamp)
+            {
+                continue;
+            }
+            if (!draft.CellFree(x, y) || !draft.BoxOpen(x - 1, y - 1, x + 1, y + 1))
             {
                 continue;
             }
@@ -411,6 +434,7 @@ public static class MissionGenerator
     }
 
     // 들판의 보급 자리다. 부목표는 캠프에서 7칸, 일반 보급은 5칸 넘게 떨어지고, 다른 보급과 5칸 넘게 떨어지며 둘레 3×3칸에 벽이 없어야 한다.
+    // 자리 칸은 처음 적처럼 비워 둘 칸이 아니어야 한다. 그래서 시설 울타리 안이나 처음 적의 칸·이웃 칸에 놓이지 않는다.
     private static Cell? PlaceSupply(SeededRandom random, Draft draft, Cell camp, List<Cell> placed, bool objective)
     {
         int fromCamp = 5;
@@ -423,7 +447,11 @@ public static class MissionGenerator
             int x = random.NextInt(2, draft.Columns - 2);
             int y = random.NextInt(2, draft.Rows - 2);
             Cell candidate = new Cell(x, y);
-            if (candidate.DistanceSquared(camp) <= fromCamp * fromCamp || !draft.BoxOpen(x - 1, y - 1, x + 1, y + 1))
+            if (candidate.DistanceSquared(camp) <= fromCamp * fromCamp)
+            {
+                continue;
+            }
+            if (!draft.CellFree(x, y) || !draft.BoxOpen(x - 1, y - 1, x + 1, y + 1))
             {
                 continue;
             }

@@ -13,6 +13,7 @@ internal static class LayoutTests
         tests.Add(new TestCase("A layout rejects map sizes out of range, a wrong tile count and unknown wall kinds", LayoutLimits));
         tests.Add(new TestCase("A layout rejects spots outside the map or in walls and a reinforcement ring nobody can stand on", LayoutSpots));
         tests.Add(new TestCase("Each initial enemy spot names its kind, and elite spots hold grunts when elites are off", SpotKinds));
+        tests.Add(new TestCase("A layout rejects initial enemies whose bodies touch a wall or overlap, so every accepted layout starts a room", EnemyBodies));
     }
 
     // 가장자리만 부술 수 없는 벽인 빈 맵이다.
@@ -243,6 +244,43 @@ internal static class LayoutTests
         Check(EnemyDefinition.Breaker.IsElite && EnemyDefinition.Warden.IsElite && !EnemyDefinition.Grunt.IsElite, "엘리트 판정이 틀립니다");
         Equal(EnemyDefinition.FromId("warden"), EnemyDefinition.Warden);
         Throws<ArgumentException>(() => EnemyDefinition.FromId("dragon"));
+    }
+
+    // 작은 빈 맵(10×10, 480×480)의 가운데에 캠프·탈출 지점·시설·보급을 두고 처음 적만 바꿔 본다.
+    private static MissionLayout WithEnemies(EnemySpot[] enemies)
+    {
+        int size = 10;
+        FixedVector middle = FixedVector.FromInt(240, 240);
+        FixedVector[] facilities = new FixedVector[] { middle };
+        SupplySpot[] supplies = new SupplySpot[] { new SupplySpot(middle, false) };
+        SpawnRing ring = new SpawnRing(middle, 120, 120);
+        return new MissionLayout(size, size, BorderTiles(size, size), middle, middle, facilities, supplies, enemies, ring);
+    }
+
+    private static void EnemyBodies()
+    {
+        // 처음 적은 그 종류의 몸이 벽에 닿지 않고 들어가야 한다. 가장자리 벽의 안쪽 면은 x = 48이라,
+        // x = 70에 선 병사(반지름 13)는 들어가고 철위병(반지름 24)은 벽에 걸린다.
+        FixedVector nearWall = FixedVector.FromInt(70, 240);
+        WithEnemies(new EnemySpot[] { new EnemySpot(nearWall, EnemyDefinition.Grunt) });
+        ArgumentException wall = Caught<ArgumentException>(() => WithEnemies(new EnemySpot[] { new EnemySpot(nearWall, EnemyDefinition.Warden) }));
+        Equal(wall.ParamName, "InitialEnemySpots");
+
+        // 두 적의 몸은 겹치지 않아야 한다. 분쇄자(22)와 철위병(24)은 가운데끼리 46 떨어지면 맞닿기만 하므로 받고, 45면 거절한다.
+        FixedVector middle = FixedVector.FromInt(240, 240);
+        EnemySpot breaker = new EnemySpot(middle, EnemyDefinition.Breaker);
+        EnemySpot touching = new EnemySpot(middle + FixedVector.FromInt(46, 0), EnemyDefinition.Warden);
+        EnemySpot overlapping = new EnemySpot(middle + FixedVector.FromInt(45, 0), EnemyDefinition.Warden);
+        MissionLayout accepted = WithEnemies(new EnemySpot[] { breaker, touching });
+        ArgumentException overlap = Caught<ArgumentException>(() => WithEnemies(new EnemySpot[] { breaker, overlapping }));
+        Equal(overlap.ParamName, "InitialEnemySpots");
+        // 같은 자리의 두 적도 거절한다. 생성기가 가까운 두 시설의 적을 같은 칸에 두던 결함이 이 경우였다.
+        EnemySpot grunt = new EnemySpot(middle, EnemyDefinition.Grunt);
+        Throws<ArgumentException>(() => WithEnemies(new EnemySpot[] { grunt, grunt }));
+
+        // 받은 배치로는 방을 만들 수 있다. Match가 맞닿은 두 적을 모두 둔다.
+        Match match = new Match("BODY01", new Rules { AllowEliteEnemies = true }, SeededRandom.SeedFromNumber(1), accepted);
+        Equal(match.Enemies.Count, 2);
     }
 
     // action이 TException을 내면 그 예외를 돌려준다. 예외의 내용(매개변수 이름 등)까지 볼 때 쓴다.

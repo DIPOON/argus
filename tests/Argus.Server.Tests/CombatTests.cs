@@ -1,6 +1,5 @@
 using Argus.Server.Game;
 using Argus.Server.Networking;
-using Microsoft.Extensions.Logging.Abstractions;
 using static TestTools;
 
 internal static class CombatTests
@@ -709,7 +708,7 @@ internal static class CombatTests
     {
         // 서버가 가장 많이 밀렸을 때처럼 한 번에 최대 틱 수를 진행한다. 한 틱씩 따로 진행하므로
         // 0.25초 공격 창 안에서 방어가 판정된다.
-        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        using RoomHost host = NewHost();
         Fixture f = new Fixture();
         Room room = new Room(f.Match, null);
         Enemy enemy = Threat(f, "strike");

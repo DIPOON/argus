@@ -1,6 +1,5 @@
 using Argus.Server.Game;
 using Argus.Server.Networking;
-using Microsoft.Extensions.Logging.Abstractions;
 using static TestTools;
 
 internal static class EquipmentTests
@@ -15,7 +14,7 @@ internal static class EquipmentTests
 
     private static void Slots()
     {
-        using RoomHost host = new RoomHost(NullLogger<RoomHost>.Instance);
+        using RoomHost host = NewHost();
         string[] invalid = new string[] { "grab", "parry", "grab", "strike" };
         Check(host.Create(new EntryRequest("bad", invalid)) == null);
         Check(!Rules.ValidSlots(new string[] { "strike", "parry", "grab", "turret" }));

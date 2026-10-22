@@ -9,11 +9,12 @@ using static TestTools;
 // 연결 확인은 생성기의 확인을 믿지 않고 여기서 따로 한다.
 internal static class GeneratorTests
 {
-    private const int SeedCount = 300;
+    private const int SeedCount = 1000;
 
     public static void Register(List<TestCase> tests)
     {
         tests.Add(new TestCase("Generated maps for many seeds keep their size range, objectives, a clear camp and walkable routes to every goal", ManySeeds));
+        tests.Add(new TestCase("Every generated map starts a room, keeps enemies and supplies apart and out of enclosures, and rarely regenerates", RoomsAndSpots));
         tests.Add(new TestCase("The same seed generates the same map and different seeds generate different maps", SameSeedSameMap));
         tests.Add(new TestCase("Map generation draws from its own stream so the public map does not repeat the room's random numbers", OwnStream));
         tests.Add(new TestCase("A room plays on generated maps: deploy at the camp, walk, and reinforcements arrive", PlaysOnGeneratedMaps));
@@ -68,6 +69,14 @@ internal static class GeneratorTests
     private static bool Reached(MissionLayout layout, bool[] reached, FixedVector point)
     {
         return reached[CellOf(point.Y) * layout.Columns + CellOf(point.X)];
+    }
+
+    // 두 자리가 떨어진 칸 수다. 가로와 세로로 떨어진 칸 수 가운데 큰 쪽이다.
+    private static int CellGap(FixedVector a, FixedVector b)
+    {
+        int dx = Math.Abs(CellOf(a.X) - CellOf(b.X));
+        int dy = Math.Abs(CellOf(a.Y) - CellOf(b.Y));
+        return Math.Max(dx, dy);
     }
 
     private static void ManySeeds()
@@ -140,8 +149,53 @@ internal static class GeneratorTests
             }
             Check(reachable * 100 >= 64 * 60, $"{name}: 증원 타원 위의 점에 {reachable}/64개만 갈 수 있습니다");
         }
-        // 크기가 여러 가지로 나온다.
-        Check(sizes.Count >= 100, $"{SeedCount}개 시드에서 맵 크기가 {sizes.Count}가지뿐입니다");
+        // 크기가 여러 가지로 나온다. 크기는 가로 17가지 × 세로 13가지다.
+        Check(sizes.Count >= 200, $"{SeedCount}개 시드에서 맵 크기가 {sizes.Count}가지뿐입니다");
+    }
+
+    private static void RoomsAndSpots()
+    {
+        int mostAttempts = 0;
+        for (int seed = 1; seed <= SeedCount; seed++)
+        {
+            byte[] bytes = SeededRandom.SeedFromNumber(seed);
+            int attempts;
+            MissionLayout layout = MissionGenerator.Generate(bytes, out attempts);
+            mostAttempts = Math.Max(mostAttempts, attempts);
+            string name = $"시드 {seed}({layout.Columns}×{layout.Rows})";
+
+            // 이 배치로 운영 방을 만들 수 있다. 처음 적이 벽이나 다른 적과 겹치면 Match 생성자가 예외를 낸다(PlaceInitialEnemy).
+            Match match = new Match("GEN" + seed, Rules.ForGeneratedMission(), bytes, layout);
+            Equal(match.Enemies.Count, layout.InitialEnemySpots.Count);
+
+            // 처음 적과 보급은 시설 울타리(가운데에서 3칸 안) 안에 놓이지 않고, 서로 같은 칸이나 이웃 칸에 놓이지 않는다.
+            List<FixedVector> spots = new List<FixedVector>();
+            List<string> labels = new List<string>();
+            for (int i = 0; i < layout.InitialEnemySpots.Count; i++)
+            {
+                spots.Add(layout.InitialEnemySpots[i].Position);
+                labels.Add($"처음 적 {i + 1}");
+            }
+            for (int i = 0; i < layout.Supplies.Count; i++)
+            {
+                spots.Add(layout.Supplies[i].Position);
+                labels.Add($"보급 {i + 1}");
+            }
+            for (int i = 0; i < spots.Count; i++)
+            {
+                for (int f = 0; f < layout.Facilities.Count; f++)
+                {
+                    Check(CellGap(spots[i], layout.Facilities[f]) > 3, $"{name}: {labels[i]}의 자리가 시설 {f + 1}의 울타리 안입니다");
+                }
+                for (int j = 0; j < i; j++)
+                {
+                    Check(CellGap(spots[i], spots[j]) >= 2, $"{name}: {labels[j]}의 자리와 {labels[i]}의 자리가 같은 칸이거나 이웃 칸입니다");
+                }
+            }
+        }
+        // 배치를 처음부터 다시 만드는 일은 드물다(시드 10만 개 가운데 99.5%가 한 번에 만들어졌다). 가장 많이 다시 만든 시드도
+        // 최대 횟수의 1/8 안이어야 한다. 생성기를 고쳐 조건을 채우기 어려워지면, 운영에서 최대 횟수를 다 써 방을 못 만들기 훨씬 전에 여기서 알아챈다.
+        Check(mostAttempts * 8 <= MissionGenerator.LayoutAttempts, $"배치를 한 시드에서 {mostAttempts}번까지 만들었습니다");
     }
 
     // 배치를 기록과 같은 모양의 JSON으로 적는다. 두 배치가 같은지 비교할 때 쓴다.
@@ -221,7 +275,7 @@ internal static class GeneratorTests
 
     // 시드 1~5로 만든 배치 전체를 SHA-256으로 요약한 값이다. 생성기를 바꾸면 이 값도 바뀌므로, 의도한 변경이면 새 값으로 고친다.
     // 결정론 묶음에도 들어 있어 CI가 Windows·macOS에서도 같은 맵이 나오는지 확인한다.
-    private const string ExpectedChecksum = "656438A18466235F31638F1F6864F6B5B406FB09BADFA0616E060C06415112F9";
+    private const string ExpectedChecksum = "231633F893106C2318E4819D87BC175B2CCD7ACF7A3A00872BDB0D4786F83D8A";
 
     private static void FixedChecksums()
     {

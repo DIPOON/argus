@@ -1,4 +1,7 @@
 using Argus.Server.Game;
+using Argus.Server.Networking;
+using Argus.Server.Recording;
+using Microsoft.Extensions.Logging.Abstractions;
 
 internal static class Program
 {
@@ -94,9 +97,30 @@ internal sealed class Fixture
     }
 }
 
+// 검사용 RoomHost가 방마다 쓰는 시드다. 정수 1, 2, 3, …으로 만든 시드를 만든 순서대로 내준다.
+// 그래서 검사를 몇 번 돌려도 같은 순서로 만든 방은 같은 맵과 같은 적으로 시작한다.
+internal sealed class TestSeeds
+{
+    private int _last;
+
+    public byte[] Next()
+    {
+        int number = Interlocked.Increment(ref _last);
+        return SeededRandom.SeedFromNumber(number);
+    }
+}
+
 internal static class TestTools
 {
     private static int _id = 20000;
+
+    // 시드를 정해 둔 RoomHost다. 운영 서버는 방마다 무작위 시드로 맵을 만들지만, 검사가 무작위 맵에서 돌면
+    // 실행마다 결과가 달라지고 실패한 맵을 다시 볼 수 없다. 검사의 RoomHost는 모두 이것으로 만든다.
+    public static RoomHost NewHost(RecordingStore? recordings = null, bool allowHandmade = false)
+    {
+        TestSeeds seeds = new TestSeeds();
+        return new RoomHost(NullLogger<RoomHost>.Instance, recordings, allowHandmade, seeds.Next);
+    }
 
     // 운영 서버처럼 정수 틱으로만 진행한다. 한 틱에 못 미치는 나머지는 한 틱으로 올려 센다(Rules.ToTicks).
     // 그래서 실제로 진행한 시간은 seconds 이상이고, 그보다 한 틱 미만으로 길다.
