@@ -108,6 +108,15 @@ internal sealed class TestSeeds
         int number = Interlocked.Increment(ref _last);
         return SeededRandom.SeedFromNumber(number);
     }
+
+    // 지금까지 내준 시드 수다. RoomHost는 맵을 만들 때마다 시드를 하나 받으므로, 거절한 요청이 맵을 만들지 않았는지 볼 때 쓴다.
+    public int Issued
+    {
+        get
+        {
+            return Volatile.Read(ref _last);
+        }
+    }
 }
 
 internal static class TestTools
@@ -116,10 +125,15 @@ internal static class TestTools
 
     // 시드를 정해 둔 RoomHost다. 운영 서버는 방마다 무작위 시드로 맵을 만들지만, 검사가 무작위 맵에서 돌면
     // 실행마다 결과가 달라지고 실패한 맵을 다시 볼 수 없다. 검사의 RoomHost는 모두 이것으로 만든다.
-    public static RoomHost NewHost(RecordingStore? recordings = null, bool allowHandmade = false)
+    // seeds를 넘기면 검사가 시드를 내주는 방식을 정할 수 있다(내준 시드 수 세기, 맵을 만드는 도중에 끼어들기 등).
+    public static RoomHost NewHost(RecordingStore? recordings = null, bool allowHandmade = false, Func<byte[]>? seeds = null)
     {
-        TestSeeds seeds = new TestSeeds();
-        return new RoomHost(NullLogger<RoomHost>.Instance, recordings, allowHandmade, seeds.Next);
+        if (seeds == null)
+        {
+            TestSeeds numbered = new TestSeeds();
+            seeds = numbered.Next;
+        }
+        return new RoomHost(NullLogger<RoomHost>.Instance, recordings, allowHandmade, seeds);
     }
 
     // 운영 서버처럼 정수 틱으로만 진행한다. 한 틱에 못 미치는 나머지는 한 틱으로 올려 센다(Rules.ToTicks).
