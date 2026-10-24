@@ -329,12 +329,18 @@ public sealed class RoomHost : BackgroundService
     private long _connection;
     // 연속해서 이만큼 진행에 실패한 방은 닫는다. 30번이면 약 1초다.
     private const int MaxRoomFailures = 30;
+    // 서버 전체에 동시에 둘 수 있는 방 수다.
+    public const int MaxRooms = 32;
     // 한 주소가 동시에 가질 수 있는 방 수다. 방을 만들고 접속을 붙잡아 두는 방법으로 몇 개 주소만으로
     // 방 32개 상한을 채우지 못하게 한다. 끝난 방도 마지막 대원이 나간 뒤 약 2분(재접속 유예) 동안 남으므로
     // 혼자 여러 판을 연달아 해도 걸리지 않을 만큼은 둔다.
     public const int MaxRoomsPerAddress = 4;
-    // 방 수 확인과 추가가 따로 일어나면 동시 요청으로 상한을 넘을 수 있으므로 함께 잠근다.
+    // 방 수 확인과 자리 예약, 방 등록이 따로 일어나면 동시 요청으로 상한을 넘을 수 있으므로 함께 잠근다.
     private readonly object _createGate = new object();
+    // 맵을 만들고 있는 방의 수다. 서버 전체와 주소별로 센다. 상한은 등록된 방과 이 수를 합쳐 본다(Reserve).
+    // 생성 잠금 안에서만 읽고 바꾼다.
+    private int _reserved;
+    private readonly Dictionary<string, int> _reservedByAddress = new Dictionary<string, int>();
     // 버그 제보는 대원마다 이 간격에 한 번, 방마다 이 수까지만 받는다. 내용은 이 길이까지만 남긴다.
     private const double ReportIntervalSeconds = 5;
     private const int MaxReportsPerRoom = 20;
@@ -403,39 +409,61 @@ public sealed class RoomHost : BackgroundService
             handmade = true;
         }
 
-        // 운영 방은 방의 시드로 만든 생성 작전이고, 엘리트가 나오고 준비 동작이 기본 길이다(Rules.ForGeneratedMission).
-        // 손으로 만든 맵은 검사가 고를 때만 쓰고, 그 맵의 검사가 맞춰 둔 기본 규칙(병사만, 준비 동작 두 배)을 쓴다.
-        byte[] seed = _seeds();
-        Rules rules;
-        MissionLayout layout;
-        if (handmade)
-        {
-            rules = new Rules();
-            layout = MissionLayout.CreateHandmade();
-        }
-        else
-        {
-            rules = Rules.ForGeneratedMission();
-            layout = MissionGenerator.Generate(seed);
-        }
-        // 맵과 Match는 생성 잠금 밖에서 만든다. 잠금 안에서 만들면 모든 방 만들기가 다른 방의 맵 생성을 기다린다.
-        Room room = new Room(new Match(NewCode(), rules, seed, layout), address);
+        // 맵을 만들기 전에 생성 잠금 안에서 자리를 예약한다. 상한은 등록된 방과 맵을 만들고 있는 방을 합쳐 세므로,
+        // 동시에 들어온 요청도 상한을 넘는 만큼은 맵을 만들기 전에 거절된다. 맵 생성은 최악 십수 밀리초라 거절할 요청마다
+        // 만들고 버리지 않게 한다. 예약한 자리는 늘 비어 있으므로 방을 등록할 때 상한을 다시 보지 않는다.
         lock (_createGate)
         {
-            if (_rooms.Count >= 32)
+            failure = Reserve(address);
+            if (failure != EntryFailure.None)
             {
-                failure = EntryFailure.ServerFull;
                 return null;
             }
-            if (address != null && CountRooms(address) >= MaxRoomsPerAddress)
+        }
+
+        byte[] seed;
+        Room room;
+        bool registered = false;
+        try
+        {
+            // 운영 방은 방의 시드로 만든 생성 작전이고, 엘리트가 나오고 준비 동작이 기본 길이다(Rules.ForGeneratedMission).
+            // 손으로 만든 맵은 검사가 고를 때만 쓰고, 그 맵의 검사가 맞춰 둔 기본 규칙(병사만, 준비 동작 두 배)을 쓴다.
+            seed = _seeds();
+            Rules rules;
+            MissionLayout layout;
+            if (handmade)
             {
-                failure = EntryFailure.AddressFull;
-                return null;
+                rules = new Rules();
+                layout = MissionLayout.CreateHandmade();
             }
-            // 방 코드가 이미 쓰이고 있으면 코드만 새로 뽑아 Match를 다시 만든다. 맵은 다시 만들지 않는다.
-            while (!_rooms.TryAdd(room.Match.Code, room))
+            else
             {
-                room = new Room(new Match(NewCode(), rules, seed, layout), address);
+                rules = Rules.ForGeneratedMission();
+                layout = MissionGenerator.Generate(seed);
+            }
+            // 맵과 Match는 생성 잠금 밖에서 만든다. 잠금 안에서 만들면 모든 방 만들기가 다른 방의 맵 생성을 기다린다.
+            room = new Room(new Match(NewCode(), rules, seed, layout), address);
+            lock (_createGate)
+            {
+                // 방 코드가 이미 쓰이고 있으면 코드만 새로 뽑아 Match를 다시 만든다. 맵은 다시 만들지 않는다.
+                while (!_rooms.TryAdd(room.Match.Code, room))
+                {
+                    room = new Room(new Match(NewCode(), rules, seed, layout), address);
+                }
+                // 등록한 방은 이제 등록된 방으로 센다. 같은 잠금 안에서 예약을 풀어야 한 방을 두 번 세는 틈이 없다.
+                Release(address);
+                registered = true;
+            }
+        }
+        finally
+        {
+            // 맵이나 Match를 만들다 예외가 나면 방을 등록하지 못했으므로 예약만 푼다.
+            if (!registered)
+            {
+                lock (_createGate)
+                {
+                    Release(address);
+                }
             }
         }
 
@@ -463,6 +491,47 @@ public sealed class RoomHost : BackgroundService
             }
         }
         return guest;
+    }
+
+    // 방 하나를 만들 자리를 예약한다. 생성 잠금 안에서 부른다. 상한을 넘으면 예약하지 않고 이유를 돌려준다.
+    // 상한은 등록된 방과 맵을 만들고 있는 방(예약)을 합쳐 센다. address가 null이면 주소별 상한은 보지 않는다.
+    private EntryFailure Reserve(string? address)
+    {
+        if (_rooms.Count + _reserved >= MaxRooms)
+        {
+            return EntryFailure.ServerFull;
+        }
+        if (address != null)
+        {
+            int reservedHere;
+            _reservedByAddress.TryGetValue(address, out reservedHere);
+            if (CountRooms(address) + reservedHere >= MaxRoomsPerAddress)
+            {
+                return EntryFailure.AddressFull;
+            }
+            _reservedByAddress[address] = reservedHere + 1;
+        }
+        _reserved++;
+        return EntryFailure.None;
+    }
+
+    // 예약을 푼다. 방을 등록했거나 만들다 실패했을 때 생성 잠금 안에서 부른다.
+    private void Release(string? address)
+    {
+        _reserved--;
+        if (address == null)
+        {
+            return;
+        }
+        int reservedHere = _reservedByAddress[address];
+        if (reservedHere <= 1)
+        {
+            _reservedByAddress.Remove(address);
+        }
+        else
+        {
+            _reservedByAddress[address] = reservedHere - 1;
+        }
     }
 
     // 이 주소가 만든 방 가운데 아직 남아 있는 방의 수다.
