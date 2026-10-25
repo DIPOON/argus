@@ -12,6 +12,7 @@ internal static class EncounterTests
         tests.Add(new TestCase("An enemy whose body clips a wall corner on an open sight line still reaches the player", CornerSlip));
         tests.Add(new TestCase("The flow field has no heading inside its own source cell", FlowSource));
         tests.Add(new TestCase("An enemy touching a wall walks straight along it instead of zigzagging", WallHug));
+        tests.Add(new TestCase("Every enemy body is narrower than a cell and walks through a one-cell gap from any side", NarrowGap));
     }
 
     private static void InitialPlacement()
@@ -160,6 +161,71 @@ internal static class EncounterTests
         f.Match.Enemies.Add(enemy);
         Advance(f.Match, 2);
         Check(enemy.Position.X > Fixed.FromInt(1560), "모서리에 걸려 멈췄습니다");
+    }
+
+    // 칸 가운데의 좌표다.
+    private static FixedVector CellCenter(int x, int y)
+    {
+        return FixedVector.FromInt(x * BattleMap.Cell + BattleMap.Cell / 2, y * BattleMap.Cell + BattleMap.Cell / 2);
+    }
+
+    private static void NarrowGap()
+    {
+        EnemyDefinition[] kinds = new EnemyDefinition[] { EnemyDefinition.Grunt, EnemyDefinition.Breaker, EnemyDefinition.Warden };
+        // 적의 몸 지름은 한 칸보다 작아야 한다. 지름이 한 칸과 같으면(반지름 24) 적이 따라가는 칸 가운데 줄이 벽 모서리에 딱 붙어,
+        // 반올림으로 조금만 벗어나도 모서리에 걸린 채 멈춘다. 그 몸은 한 칸 틈도 한가운데로 와야만 지나간다.
+        for (int k = 0; k < kinds.Length; k++)
+        {
+            Check(kinds[k].Radius * 2 < Fixed.FromInt(BattleMap.Cell), $"{kinds[k].Name}의 몸 지름이 한 칸 이상입니다");
+        }
+
+        // 20×13 맵의 x = 10 열을 벽으로 막고 y = 6 한 칸만 연다. 대원은 오른쪽 캠프(15, 6)에 서 있다.
+        // 왼쪽 여러 칸에서 출발한 적이 30초 안에 틈을 지나 벽 오른쪽으로 넘어와야 한다. 틈에 비스듬히 다가가는 출발점이 많다.
+        int columns = 20;
+        int rows = 13;
+        byte[] tiles = LayoutTests.BorderTiles(columns, rows);
+        for (int y = 1; y < rows - 1; y++)
+        {
+            if (y != 6)
+            {
+                tiles[y * columns + 10] = 2;
+            }
+        }
+        FixedVector camp = CellCenter(15, 6);
+        FixedVector[] facilities = new FixedVector[] { CellCenter(16, 2) };
+        SupplySpot[] supplies = new SupplySpot[] { new SupplySpot(CellCenter(17, 3), false) };
+        SpawnRing ring = new SpawnRing(CellCenter(4, 6), 96, 96);
+        MissionLayout layout = new MissionLayout(columns, rows, tiles, camp, CellCenter(17, 10), facilities, supplies, new EnemySpot[0], ring);
+        int[] startX = new int[] { 4, 4, 4, 7, 8, 2, 9 };
+        int[] startY = new int[] { 6, 2, 10, 3, 9, 1, 11 };
+        for (int k = 0; k < kinds.Length; k++)
+        {
+            for (int s = 0; s < startX.Length; s++)
+            {
+                // 증원이 생기지 않게 적 수 상한을 1로 둔다. 검사할 적은 상한을 거치지 않고 직접 넣는다.
+                Rules rules = new Rules { AllowEliteEnemies = true, MaxEnemies = 1 };
+                Match match = new Match("GAP001", rules, SeededRandom.SeedFromNumber(1), layout);
+                Player player = match.Join("p", "pilot")!;
+                player.Connected = true;
+                Check(match.Deploy(player, camp.X.ToDouble(), camp.Y.ToDouble()));
+                Advance(match, rules.DeploySeconds + 0.01);
+                // 행동 없이 이동만 본다.
+                Enemy enemy = new Enemy(30050, CellCenter(startX[s], startY[s]), kinds[k]);
+                enemy.NextActionTick = long.MaxValue;
+                match.Enemies.Add(enemy);
+                bool passed = false;
+                for (long tick = 0; tick < Rules.ToTicks(30); tick++)
+                {
+                    match.Step();
+                    if (enemy.Position.X > Fixed.FromInt(11 * BattleMap.Cell))
+                    {
+                        passed = true;
+                        break;
+                    }
+                }
+                Check(passed, $"({startX[s]}, {startY[s]})에서 출발한 {kinds[k].Name}: 한 칸 틈을 지나지 못하고 {enemy.Position}에 멈췄습니다");
+            }
+        }
     }
 
     private static void FlowSource()

@@ -260,17 +260,17 @@ internal static class LayoutTests
     private static void EnemyBodies()
     {
         // 처음 적은 그 종류의 몸이 벽에 닿지 않고 들어가야 한다. 가장자리 벽의 안쪽 면은 x = 48이라,
-        // x = 70에 선 병사(반지름 13)는 들어가고 철위병(반지름 24)은 벽에 걸린다.
+        // x = 70에 선 병사(반지름 13)는 들어가고 철위병(반지름 23)은 벽에 걸린다.
         FixedVector nearWall = FixedVector.FromInt(70, 240);
         WithEnemies(new EnemySpot[] { new EnemySpot(nearWall, EnemyDefinition.Grunt) });
         ArgumentException wall = Caught<ArgumentException>(() => WithEnemies(new EnemySpot[] { new EnemySpot(nearWall, EnemyDefinition.Warden) }));
         Equal(wall.ParamName, "InitialEnemySpots");
 
-        // 두 적의 몸은 겹치지 않아야 한다. 분쇄자(22)와 철위병(24)은 가운데끼리 46 떨어지면 맞닿기만 하므로 받고, 45면 거절한다.
+        // 두 적의 몸은 겹치지 않아야 한다. 분쇄자(22)와 철위병(23)은 가운데끼리 45 떨어지면 맞닿기만 하므로 받고, 44면 거절한다.
         FixedVector middle = FixedVector.FromInt(240, 240);
         EnemySpot breaker = new EnemySpot(middle, EnemyDefinition.Breaker);
-        EnemySpot touching = new EnemySpot(middle + FixedVector.FromInt(46, 0), EnemyDefinition.Warden);
-        EnemySpot overlapping = new EnemySpot(middle + FixedVector.FromInt(45, 0), EnemyDefinition.Warden);
+        EnemySpot touching = new EnemySpot(middle + FixedVector.FromInt(45, 0), EnemyDefinition.Warden);
+        EnemySpot overlapping = new EnemySpot(middle + FixedVector.FromInt(44, 0), EnemyDefinition.Warden);
         MissionLayout accepted = WithEnemies(new EnemySpot[] { breaker, touching });
         ArgumentException overlap = Caught<ArgumentException>(() => WithEnemies(new EnemySpot[] { breaker, overlapping }));
         Equal(overlap.ParamName, "InitialEnemySpots");

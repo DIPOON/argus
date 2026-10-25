@@ -10,6 +10,8 @@ using static TestTools;
 internal static class GeneratorTests
 {
     private const int SeedCount = 1000;
+    // 적이 캠프까지 오는지 끝까지 따라가 보는 시드의 수다. 한 시드에 처음 적 자리 셋을 모두 본다.
+    private const int ChaseSeedCount = 50;
 
     public static void Register(List<TestCase> tests)
     {
@@ -18,6 +20,7 @@ internal static class GeneratorTests
         tests.Add(new TestCase("The same seed generates the same map and different seeds generate different maps", SameSeedSameMap));
         tests.Add(new TestCase("Map generation draws from its own stream so the public map does not repeat the room's random numbers", OwnStream));
         tests.Add(new TestCase("A room plays on generated maps: deploy at the camp, walk, and reinforcements arrive", PlaysOnGeneratedMaps));
+        tests.Add(new TestCase("On generated maps the largest enemy reaches a player at the camp from every initial spot", EnemiesReachCamp));
         tests.Add(new TestCase("Generated maps match fixed checksums so every machine generates the same maps", FixedChecksums));
     }
 
@@ -269,6 +272,51 @@ internal static class GeneratorTests
                 JsonElement map = json.RootElement.GetProperty("map");
                 Equal(map.GetProperty("columns").GetInt32(), layout.Columns);
                 Equal(map.GetProperty("rows").GetInt32(), layout.Rows);
+            }
+        }
+    }
+
+    private static void EnemiesReachCamp()
+    {
+        // 몸이 가장 큰 적으로 본다. 이 몸이 지나가는 곳은 작은 적도 지나간다.
+        EnemyDefinition[] kinds = new EnemyDefinition[] { EnemyDefinition.Grunt, EnemyDefinition.Breaker, EnemyDefinition.Warden };
+        EnemyDefinition largest = kinds[0];
+        for (int k = 1; k < kinds.Length; k++)
+        {
+            if (kinds[k].Radius > largest.Radius)
+            {
+                largest = kinds[k];
+            }
+        }
+        for (int seed = 1; seed <= ChaseSeedCount; seed++)
+        {
+            byte[] bytes = SeededRandom.SeedFromNumber(seed);
+            MissionLayout layout = MissionGenerator.Generate(bytes);
+            for (int s = 0; s < layout.InitialEnemySpots.Count; s++)
+            {
+                // 증원이 생기지 않게 적 수 상한을 1로 두고, 처음 적을 치운 뒤 검사할 적만 직접 넣는다. 행동 없이 이동만 본다.
+                Rules rules = new Rules { AllowEliteEnemies = true, EnemyWindupMultiplier = 1, MaxEnemies = 1 };
+                Match match = new Match("CHASE" + seed, rules, bytes, layout);
+                Player player = match.Join("p", "pilot")!;
+                player.Connected = true;
+                Check(match.Deploy(player, layout.Camp.X.ToDouble(), layout.Camp.Y.ToDouble()));
+                Advance(match, rules.DeploySeconds + 0.01);
+                match.Enemies.Clear();
+                Enemy enemy = new Enemy(30060, layout.InitialEnemySpots[s].Position, largest);
+                enemy.NextActionTick = long.MaxValue;
+                match.Enemies.Add(enemy);
+                // 캠프에 서 있는 대원에게 공격을 고르는 거리(75) 안까지 90초 안에 와야 한다.
+                bool reached = false;
+                for (long tick = 0; tick < Rules.ToTicks(90); tick++)
+                {
+                    match.Step();
+                    if (FixedVector.DistanceSquared(enemy.Position, player.Position) < Fixed.FromInt(75 * 75))
+                    {
+                        reached = true;
+                        break;
+                    }
+                }
+                Check(reached, $"시드 {seed}: 처음 적 자리 {s + 1}에서 출발한 {largest.Name}: 캠프의 대원에게 오지 못하고 {enemy.Position}에 멈췄습니다");
             }
         }
     }

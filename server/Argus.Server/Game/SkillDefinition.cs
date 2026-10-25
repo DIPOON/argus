@@ -155,7 +155,9 @@ public sealed class EnemyDefinition
         });
 
     // 철위병은 타격과 방어를 강화한다. 부분 파훼로 체력 1까지 깎을 수 있다.
-    public static readonly EnemyDefinition Warden = new EnemyDefinition("warden", "철위병", Fixed.FromInt(24), 2, 76,
+    // 몸 반지름은 칸의 절반(24)보다 작게 둔다. 반지름이 24면 적이 따라가는 칸 가운데 줄이 벽 모서리에 딱 붙어,
+    // 반올림으로 조금만 벗어나도 모서리에 걸린 채 멈춘다(EncounterTests의 NarrowGap).
+    public static readonly EnemyDefinition Warden = new EnemyDefinition("warden", "철위병", Fixed.FromInt(23), 2, 76,
         new EnemySkill[]
         {
             new EnemySkill("strike", 2, 1, 1.1, 82, 24),
