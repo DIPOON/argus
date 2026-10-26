@@ -187,7 +187,7 @@ public sealed class MissionLayout
         FixedVector reach = FixedVector.FromInt(ring.RadiusX, ring.RadiusY);
         RequireInside(map, ring.Center - reach, nameof(Reinforcements), "증원 타원의 왼쪽 위");
         RequireInside(map, ring.Center + reach, nameof(Reinforcements), "증원 타원의 오른쪽 아래");
-        Fixed largest = Fixed.Max(EnemyDefinition.Grunt.Radius, Fixed.Max(EnemyDefinition.Breaker.Radius, EnemyDefinition.Warden.Radius));
+        Fixed largest = EnemyDefinition.LargestRadius;
         for (int i = 0; i < RingSamples; i++)
         {
             FixedVector direction = Angle.FromFraction(i, RingSamples).Direction();
@@ -289,7 +289,7 @@ public sealed class MissionLayout
             new SupplySpot(FixedVector.FromInt(815, 985), false),
             new SupplySpot(FixedVector.FromInt(1080, 740), false)
         };
-        // 셋 모두 가장 가까운 벽에서 60 넘게 떨어진 빈 땅이라, 가장 큰 적(철위병, 반지름 24)도 넉넉히 들어간다.
+        // 셋 모두 가장 가까운 벽에서 60 넘게 떨어진 빈 땅이라, 가장 큰 적(철위병, 반지름 23)도 넉넉히 들어간다.
         // (970, 640)은 시설 1 아래 장애물의 남쪽이다. 엘리트를 켠 작전에서는 뒤의 둘이 분쇄자와 철위병이다.
         EnemySpot[] initialEnemySpots = new EnemySpot[]
         {
