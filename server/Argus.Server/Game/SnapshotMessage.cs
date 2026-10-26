@@ -8,14 +8,12 @@ namespace Argus.Server.Game;
 public sealed class SnapshotMessage
 {
     public string Type { get; set; } = "snapshot";
-    public int Version { get; set; } = 3;
+    public int Version { get; set; } = 4;
     public string Room { get; set; } = "";
     public double Now { get; set; }
     public double Elapsed { get; set; }
     public string Phase { get; set; } = "";
     public string? Result { get; set; }
-    public int Pulse { get; set; }
-    public double NextPulse { get; set; }
     public ExtractionSnapshot Extraction { get; set; } = new ExtractionSnapshot();
     public int MapRevision { get; set; }
     public List<PlayerSnapshot> Players { get; set; } = new List<PlayerSnapshot>();
@@ -142,6 +140,8 @@ public sealed class SupplySnapshot
     public double Y { get; set; }
     public bool Objective { get; set; }
     public bool Collected { get; set; }
+    // 남은 횟수다. 캠프 상자처럼 횟수 제한이 없으면 null이고, 0이면 다 쓴 상자다.
+    public int? Uses { get; set; }
     public double Cooldown { get; set; }
 }
 

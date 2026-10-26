@@ -83,7 +83,7 @@ test('a squad counters enemies and completes the mission using only public gamep
     ws.addEventListener('message', event => {
       const value = JSON.parse(String(event.data));
       if (value.type !== 'snapshot') return;
-      // 벽·규칙·맵은 바뀌거나 처음일 때만 온다(protocol v3). 빠진 값은 이전 스냅샷에서 이어 쓴다.
+      // 벽·규칙·맵은 바뀌거나 처음일 때만 온다(protocol v3부터). 빠진 값은 이전 스냅샷에서 이어 쓴다.
       const previous = client.snapshot;
       client.snapshot = { ...value, walls: value.walls ?? previous?.walls, rules: value.rules ?? previous?.rules, map: value.map ?? previous?.map };
     });
@@ -97,8 +97,10 @@ test('a squad counters enemies and completes the mission using only public gamep
   const effects = new Set<string>();
   try {
     await expect.poll(() => clients.every(client => client.snapshot)).toBe(true);
-    // 캠프 밖 임의 투입도 허용된다. 보급 상자에서 각자 마나를 채운 뒤 함께 움직인다.
-    const landing = { x: 1080, y: 740 };
+    // 캠프 상자 자리에 투입해 각자 마나를 채운 뒤 함께 움직인다. 들판 상자는 상자마다 두 번만 채워 넷이 한 상자로 채울 수 없고,
+    // 캠프 상자는 횟수 제한이 없어(uses가 null) 다시 투입할 때도 채운다.
+    const campSupply = clients[0].snapshot!.supplies.find(supply => supply.uses === null)!;
+    const landing = { x: campSupply.x, y: campSupply.y };
     for (const client of clients) client.ws.send(JSON.stringify({ type: 'deploy', ...landing }));
     await expect.poll(() => clients[0].snapshot?.players.filter(player => player.state === 'alive').length, { timeout: 8000 }).toBe(4);
     expect(clients[0].snapshot!.players.every(player => player.mana === 24)).toBe(true);

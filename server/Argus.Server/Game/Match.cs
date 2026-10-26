@@ -21,7 +21,6 @@ public sealed partial class Match
     public long? EndedTick { get; private set; }
     public string Phase { get; private set; } = "staging";
     public string? Result { get; private set; }
-    public int Pulse { get; private set; }
     // 대원이 방에서 빠질 때마다 늘어난다. 방 관리 쪽이 토큰 정리가 필요한지 알 때 쓴다.
     public int Departures { get; private set; }
     // 진행을 다시 돌릴 수 있도록 바깥 요청을 적는 곳이다. 없으면 적지 않는다.
@@ -98,9 +97,16 @@ public sealed partial class Match
         {
             Facilities.Add(new Facility(i + 1, layout.Facilities[i]));
         }
+        // 들판 상자는 정해진 횟수만 쓰고, 캠프 상자는 횟수 제한이 없다. 부목표 상자는 한 번 회수하면 사라진다.
         for (int i = 0; i < layout.Supplies.Count; i++)
         {
-            Supplies.Add(new Supply(i + 1, layout.Supplies[i].Position, layout.Supplies[i].Objective));
+            SupplySpot spot = layout.Supplies[i];
+            int? uses = null;
+            if (spot.Kind == SupplyKind.Field)
+            {
+                uses = rules.FieldSupplyUses;
+            }
+            Supplies.Add(new Supply(i + 1, spot.Position, spot.Kind, uses));
         }
         // 처음 배치하는 적이다. 자리와 종류는 배치(Layout.InitialEnemySpots)가 정한다.
         // 엘리트를 끈 작전에서는 엘리트 자리에도 병사를 둔다.
@@ -375,25 +381,6 @@ public sealed partial class Match
         {
             return;
         }
-        while (ElapsedTicks >= Rules.ToTicks((Pulse + 1) * Rules.PulseSeconds))
-        {
-            Pulse++;
-            // 회차마다 두 배가 된다(2, 4, 8, …). 거듭제곱 함수 대신 곱해서 구해 어느 기계에서나 같다.
-            double damage = Rules.PulseDamage;
-            for (int doubling = 1; doubling < Pulse; doubling++)
-            {
-                damage *= 2;
-            }
-            for (int i = 0; i < Players.Count; i++)
-            {
-                Hurt(Players[i], damage);
-            }
-            Note($"전역 충격 {Pulse}회 · {damage:0} 피해");
-            if (CheckWipe())
-            {
-                return;
-            }
-        }
         for (int i = 0; i < Players.Count; i++)
         {
             if (Players[i].State == "alive")
@@ -601,8 +588,8 @@ public sealed partial class Match
         for (int i = 0; i < Supplies.Count; i++)
         {
             Supply supply = Supplies[i];
-            // 거리는 제곱끼리 비교한다(35² = 1225).
-            if (supply.Collected || supply.ReadyTick(player) > Tick ||
+            // 거리는 제곱끼리 비교한다(35² = 1225). 다 쓴 상자(남은 횟수 0)는 더 채우지 않는다.
+            if (supply.Collected || supply.UsesLeft == 0 || supply.ReadyTick(player) > Tick ||
                 FixedVector.DistanceSquared(player.Position, supply.Position) > Fixed.FromInt(35 * 35) ||
                 !Map.LineOfSight(player.Position, supply.Position))
             {
@@ -619,6 +606,11 @@ public sealed partial class Match
             }
             player.Hp = player.MaxHp;
             player.Mana = player.MaxMana;
+            // 횟수가 있는 상자는 한 번 썼다. 쓴 사람만 채우므로 곁에 선 동료는 따로 한 번을 쓴다.
+            if (supply.UsesLeft != null)
+            {
+                supply.UsesLeft = supply.UsesLeft - 1;
+            }
             // 난입자와 겹쳐 선 동료가 다른 사람의 보급 사용 때문에 기다리지 않게 한다.
             supply.ReadyTicks[player.Id] = Tick + Rules.ToTicks(Rules.SupplyCooldown);
             Effect(player.Position, "heal", 0.5);
@@ -710,7 +702,9 @@ public sealed partial class Match
         Effect(facility.Position, "hit", 0.4);
         if (facility.Hp == 0)
         {
-            Note("적 시설 파괴");
+            // 부순 시설 자리에 보급 상자가 생긴다. 시설 파괴는 공개 정보이므로 보급 번호는 이어 붙인다.
+            Supplies.Add(new Supply(Supplies.Count + 1, facility.Position, SupplyKind.Field, Rules.FacilitySupplyUses));
+            Note("적 시설 파괴 · 그 자리에 보급 상자");
             if (ObjectivesComplete)
             {
                 Note("주목표 완료 · 탈출 지점을 확보하세요");

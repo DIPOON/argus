@@ -184,7 +184,7 @@ internal static class EncounterTests
             }
         }
         FixedVector[] facilities = new FixedVector[] { CellCenter(16, 2) };
-        SupplySpot[] supplies = new SupplySpot[] { new SupplySpot(CellCenter(17, 3), false) };
+        SupplySpot[] supplies = new SupplySpot[] { new SupplySpot(CellCenter(17, 3), SupplyKind.Field) };
         SpawnRing ring = new SpawnRing(CellCenter(4, 6), 96, 96);
         return new MissionLayout(columns, rows, tiles, CellCenter(15, 6), CellCenter(17, 10), facilities, supplies, new EnemySpot[0], ring);
     }

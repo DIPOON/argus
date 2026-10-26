@@ -38,6 +38,7 @@ public sealed class LayoutRecord
             SupplyRecord supply = new SupplyRecord();
             supply.X = layout.Supplies[i].Position.X.Raw;
             supply.Y = layout.Supplies[i].Position.Y.Raw;
+            supply.Kind = SupplyRecord.KindName(layout.Supplies[i].Kind);
             supply.Objective = layout.Supplies[i].Objective;
             record.Supplies.Add(supply);
         }
@@ -67,7 +68,7 @@ public sealed class LayoutRecord
         for (int i = 0; i < Supplies.Count; i++)
         {
             FixedVector position = new FixedVector(Fixed.FromRaw(Supplies[i].X), Fixed.FromRaw(Supplies[i].Y));
-            supplies[i] = new SupplySpot(position, Supplies[i].Objective);
+            supplies[i] = new SupplySpot(position, Supplies[i].ToKind());
         }
         EnemySpot[] enemies = new EnemySpot[InitialEnemies.Count];
         for (int i = 0; i < InitialEnemies.Count; i++)
@@ -103,7 +104,50 @@ public sealed class SupplyRecord
 {
     public long X { get; set; }
     public long Y { get; set; }
+    // 보급 종류(camp·field·objective)다. 형식 3부터 적는다.
+    public string Kind { get; set; } = "";
+    // 부목표인지다. 종류가 없던 형식 2의 기록은 이것만 있다.
     public bool Objective { get; set; }
+
+    public static string KindName(SupplyKind kind)
+    {
+        if (kind == SupplyKind.Camp)
+        {
+            return "camp";
+        }
+        if (kind == SupplyKind.Objective)
+        {
+            return "objective";
+        }
+        return "field";
+    }
+
+    // 적어 둔 종류로 되돌린다. 형식 2의 기록에는 종류가 없으므로 부목표 여부만 본다. 그때는 캠프 상자도 들판 상자로 읽히지만,
+    // 코드 버전이 다른 기록은 재생해도 같은 결과가 나오지 않으므로 읽다가 멈추지만 않게 한다.
+    public SupplyKind ToKind()
+    {
+        if (Kind == "camp")
+        {
+            return SupplyKind.Camp;
+        }
+        if (Kind == "objective")
+        {
+            return SupplyKind.Objective;
+        }
+        if (Kind == "field")
+        {
+            return SupplyKind.Field;
+        }
+        if (Kind.Length > 0)
+        {
+            throw new ArgumentException($"보급 종류 {Kind}를 모릅니다", nameof(Kind));
+        }
+        if (Objective)
+        {
+            return SupplyKind.Objective;
+        }
+        return SupplyKind.Field;
+    }
 }
 
 public sealed class EnemySpotRecord

@@ -19,7 +19,8 @@ internal static class LifecycleTests
         tests.Add(new TestCase("Stale input and disconnect stop movement and further casts", InputExpiry));
         tests.Add(new TestCase("Solo death and all-dead squads fail before pending deployment", Wipe));
         tests.Add(new TestCase("Respawn and late join wait equally, with full health and zero mana", Respawn));
-        tests.Add(new TestCase("Mission pulses hit camp and late joins and eventually guarantee a wipe", Pulses));
+        tests.Add(new TestCase("Time alone never hurts anyone: there is no global shock", NoGlobalShock));
+        tests.Add(new TestCase("Field boxes run out after their uses, the camp box never does, and a destroyed facility leaves a box", FiniteSupplies));
         tests.Add(new TestCase("Supplies replenish HP/mana independently for each teammate without passive recovery", Supplies));
         tests.Add(new TestCase("Facilities must be destroyed before extraction can finish", Extraction));
         tests.Add(new TestCase("Guest tokens, replacement and reconnect preserve identity and resources", Reconnect));
@@ -198,23 +199,102 @@ internal static class LifecycleTests
         Near(f.Player.Hp, f.Player.MaxHp);
     }
 
-    private static void Pulses()
+    private static void NoGlobalShock()
     {
-        Fixture f = new Fixture(new Rules { MaxEnemies = 0, PulseSeconds = 10 });
-        Equal(new Rules().PulseSeconds, 600d);
-        Advance(f.Match, 7);
+        // 예전에는 600초마다 전역 충격이 2 → 4 → 8… 피해를 줬다. 이제 작전 시간은 보급이 떨어지는 것으로만 제한한다.
+        // 예전 충격 두 번(600초, 1200초)이 지나도록 적 없이 기다려도 아무도 다치지 않고 작전이 이어진다.
+        Fixture f = new Fixture(new Rules { MaxEnemies = 0 });
         Player late = Ally(f, "late");
-        Advance(f.Match, 3.1);
-        Near(f.Player.Hp, 4);
-        Near(late.Hp, 4);
-        f.Player.Hp = 6;
-        late.Hp = 6;
-        Advance(f.Match, 10);
-        Near(f.Player.Hp, 2);
-        f.Player.Hp = 6;
-        late.Hp = 6;
-        Advance(f.Match, 10);
-        Equal(f.Match.Result, "failure");
+        Advance(f.Match, 21 * 60);
+        Near(f.Player.Hp, f.Player.MaxHp);
+        Near(late.Hp, late.MaxHp);
+        Equal(f.Match.Phase, "active");
+    }
+
+    private static void FiniteSupplies()
+    {
+        Fixture f = new Fixture();
+        Player ally = Ally(f, "ally");
+        Player third = Ally(f, "third");
+        Player[] squad = new Player[] { f.Player, ally, third };
+        // 손으로 만든 맵의 보급은 캠프(1번), 부목표(2·3번), 들판(4·5번) 순서다.
+        Supply camp = f.Match.Supplies[0];
+        Supply field = f.Match.Supplies[3];
+        Equal(camp.Kind, SupplyKind.Camp);
+        Equal(field.Kind, SupplyKind.Field);
+        Check(camp.UsesLeft == null, "캠프 상자에 횟수 제한이 있습니다");
+        Equal(field.UsesLeft, (int?)f.Match.Rules.FieldSupplyUses);
+
+        // 들판 상자는 쓴 사람만 채우고 한 번에 하나씩 줄어든다. 세 대원이 함께 서면 횟수(2)만큼만 채운다.
+        for (int i = 0; i < squad.Length; i++)
+        {
+            squad[i].Mana = 0;
+            squad[i].Position = field.Position;
+        }
+        f.Match.Step();
+        Equal(f.Player.Mana, f.Player.MaxMana);
+        Equal(ally.Mana, ally.MaxMana);
+        Equal(third.Mana, 0);
+        Equal(field.UsesLeft, (int?)0);
+        // 다 쓴 상자는 대기 시간이 지나도 다시 채우지 않는다.
+        Advance(f.Match, f.Match.Rules.SupplyCooldown + 0.1);
+        Equal(third.Mana, 0);
+
+        // 캠프 상자는 횟수 제한이 없다. 대기 시간이 지날 때마다 몇 번이고 모두를 채운다.
+        for (int round = 0; round < 4; round++)
+        {
+            for (int i = 0; i < squad.Length; i++)
+            {
+                squad[i].Mana = 0;
+                squad[i].Position = camp.Position;
+            }
+            f.Match.Step();
+            for (int i = 0; i < squad.Length; i++)
+            {
+                Equal(squad[i].Mana, squad[i].MaxMana);
+            }
+            Advance(f.Match, f.Match.Rules.SupplyCooldown + 0.1);
+        }
+        Check(camp.UsesLeft == null, "캠프 상자의 횟수가 줄었습니다");
+
+        // 시설을 부수면 그 자리에 횟수가 있는 보급 상자가 생긴다. 시설 파괴는 공개 정보라 보급 번호를 이어 붙인다.
+        Facility facility = f.Match.Facilities[0];
+        int before = f.Match.Supplies.Count;
+        f.Player.Position = facility.Position - FixedVector.FromInt(55, 0);
+        for (int i = 0; i < 100; i++)
+        {
+            f.Match.Input(f.Player, i, 0, 0, 0, 1);
+            f.Match.Step();
+        }
+        Near(facility.Hp, 0);
+        Equal(f.Match.Supplies.Count, before + 1);
+        Supply left = f.Match.Supplies[before];
+        Equal(left.Id, before + 1);
+        Equal(left.Position, facility.Position);
+        Equal(left.Kind, SupplyKind.Field);
+        Equal(left.UsesLeft, (int?)f.Match.Rules.FacilitySupplyUses);
+        // 그 상자도 쓴 사람만 채운다. 곁에 있어도 상자 근처(35)에 들지 않은 동료는 채우지 않는다.
+        ally.Mana = 0;
+        third.Mana = 0;
+        ally.Position = left.Position;
+        third.Position = left.Position + FixedVector.FromInt(60, 0);
+        f.Match.Step();
+        Equal(ally.Mana, ally.MaxMana);
+        Equal(third.Mana, 0);
+        Equal(left.UsesLeft, (int?)(f.Match.Rules.FacilitySupplyUses - 1));
+
+        // 스냅샷은 보급마다 남은 횟수를 보낸다. 캠프 상자는 횟수 제한이 없어 null이다. 전역 충격 필드는 없다.
+        byte[] snapshot = Snapshot.Create(f.Match, f.Player, RoomHost.Json);
+        using (JsonDocument json = JsonDocument.Parse(snapshot))
+        {
+            JsonElement root = json.RootElement;
+            Equal(root.GetProperty("version").GetInt32(), 4);
+            Check(!root.TryGetProperty("pulse", out JsonElement _) && !root.TryGetProperty("nextPulse", out JsonElement _), "전역 충격 필드가 남아 있습니다");
+            JsonElement supplies = root.GetProperty("supplies");
+            Equal(supplies[0].GetProperty("uses").ValueKind, JsonValueKind.Null);
+            Equal(supplies[3].GetProperty("uses").GetInt32(), 0);
+            Equal(supplies[before].GetProperty("uses").GetInt32(), f.Match.Rules.FacilitySupplyUses - 1);
+        }
     }
 
     private static void Supplies()
@@ -306,7 +386,7 @@ internal static class LifecycleTests
         f.Match.Effects.Add(new Effect(9003, FixedVector.FromInt(1300, 1100), "break", f.Match.Tick + Rules.ToTicks(1)));
         string serialized = Encoding.UTF8.GetString(Snapshot.Create(f.Match, f.Player, RoomHost.Json));
         using JsonDocument json = JsonDocument.Parse(serialized);
-        Equal(json.RootElement.GetProperty("version").GetInt32(), 3);
+        Equal(json.RootElement.GetProperty("version").GetInt32(), 4);
         Equal(json.RootElement.GetProperty("enemies").GetArrayLength(), 1);
         Check(!serialized.Contains("9001") && !serialized.Contains("9002") && !serialized.Contains("9003"));
         Player ally = Ally(f, "scout");

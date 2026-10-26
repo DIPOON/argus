@@ -45,9 +45,6 @@ public static class Snapshot
         message.Elapsed = Seconds(match.ElapsedTicks);
         message.Phase = match.Phase;
         message.Result = match.Result;
-        message.Pulse = match.Pulse;
-        long nextPulseTick = Rules.ToTicks((match.Pulse + 1) * match.Rules.PulseSeconds);
-        message.NextPulse = Seconds(nextPulseTick - match.ElapsedTicks);
         message.Extraction.X = Round(match.Layout.Extraction.X);
         message.Extraction.Y = Round(match.Layout.Extraction.Y);
         message.Extraction.Progress = Round(match.ExtractionProgress);
@@ -178,6 +175,7 @@ public static class Snapshot
             entry.Y = Round(supply.Position.Y);
             entry.Objective = supply.Objective;
             entry.Collected = supply.Collected;
+            entry.Uses = supply.UsesLeft;
             // 보급 대기 시간은 대원마다 다르다.
             entry.Cooldown = Seconds(Math.Max(0, supply.ReadyTick(recipient) - match.Tick));
             personal.Supplies.Add(entry);

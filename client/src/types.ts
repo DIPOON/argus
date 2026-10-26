@@ -32,17 +32,18 @@ export interface Enemy extends Position {
 export interface Snapshot {
   type: 'snapshot'; version: number; room: string; you: string; now: number; elapsed: number;
   phase: 'staging' | 'active' | 'ended'; result: 'success' | 'failure' | null;
-  pulse: number; nextPulse: number; walls: string; mapRevision: number;
+  walls: string; mapRevision: number;
   extraction: Position & { progress: number; duration: number; unlocked: boolean };
   map: { width: number; height: number; cell: number; columns: number; rows: number; campX: number; campY: number };
   rules: { deploy: number; speed: number; playerRadius: number; guardHalfAngle: number; parryFollowupSeconds: number; skills: SkillDefinition[] };
   players: Player[]; enemies: Enemy[];
   facilities: (Position & { id: number; hp: number; maxHp: number })[];
-  supplies: (Position & { id: number; objective: boolean; collected: boolean; cooldown: number })[];
+  // uses는 남은 횟수다. 캠프 상자처럼 횟수 제한이 없으면 null, 다 쓴 상자는 0이다.
+  supplies: (Position & { id: number; objective: boolean; collected: boolean; uses: number | null; cooldown: number })[];
   effects: (Position & { id: number; kind: string; until: number })[];
   sight: number[][]; notices: { id: number; at: number; text: string }[];
 }
-// 서버가 보내는 그대로의 스냅샷. 벽은 바뀔 때만, 규칙과 맵은 접속 직후에만 담긴다(protocol v3).
+// 서버가 보내는 그대로의 스냅샷. 벽은 바뀔 때만, 규칙과 맵은 접속 직후에만 담긴다(protocol v3부터).
 export type SnapshotWire = Omit<Snapshot, 'walls' | 'rules' | 'map'> & Partial<Pick<Snapshot, 'walls' | 'rules' | 'map'>>;
 export interface Guest { room: string; id: string; token: string }
 export interface Control { x: number; y: number; aim: number; slot: number }

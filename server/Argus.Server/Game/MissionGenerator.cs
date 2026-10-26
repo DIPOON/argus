@@ -258,7 +258,7 @@ public static class MissionGenerator
         // 보급: 캠프 옆(손으로 만든 맵처럼 캠프에서 (70, 40))에 하나, 들판에 부목표 둘과 일반 둘이다.
         FixedVector campCenter = camp.Center();
         List<SupplySpot> supplies = new List<SupplySpot>();
-        supplies.Add(new SupplySpot(campCenter + FixedVector.FromInt(70, 40), false));
+        supplies.Add(new SupplySpot(campCenter + FixedVector.FromInt(70, 40), SupplyKind.Camp));
         List<Cell> fieldSupplies = new List<Cell>();
         for (int i = 0; i < 4; i++)
         {
@@ -270,7 +270,12 @@ public static class MissionGenerator
             }
             fieldSupplies.Add(spot.Value);
             draft.ReserveBox(spot.Value.X - 1, spot.Value.Y - 1, spot.Value.X + 1, spot.Value.Y + 1);
-            supplies.Add(new SupplySpot(spot.Value.Center(), objective));
+            SupplyKind kind = SupplyKind.Field;
+            if (objective)
+            {
+                kind = SupplyKind.Objective;
+            }
+            supplies.Add(new SupplySpot(spot.Value.Center(), kind));
         }
 
         PlaceObstacles(random, draft);

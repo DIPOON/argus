@@ -44,8 +44,8 @@ internal static class LayoutTests
         FixedVector[] facilities = new FixedVector[] { FixedVector.FromInt(820, 200) };
         SupplySpot[] supplies = new SupplySpot[]
         {
-            new SupplySpot(FixedVector.FromInt(220, 470), false),
-            new SupplySpot(FixedVector.FromInt(600, 700), true)
+            new SupplySpot(FixedVector.FromInt(220, 470), SupplyKind.Field),
+            new SupplySpot(FixedVector.FromInt(600, 700), SupplyKind.Objective)
         };
         EnemySpot[] enemies = new EnemySpot[] { new EnemySpot(FixedVector.FromInt(900, 650), EnemyDefinition.Grunt) };
         SpawnRing ring = new SpawnRing(FixedVector.FromInt(576, 432), 420, 320);
@@ -134,7 +134,7 @@ internal static class LayoutTests
         int far = size * BattleMap.Cell - 150;
         FixedVector camp = FixedVector.FromInt(far, far);
         FixedVector[] facilities = new FixedVector[] { FixedVector.FromInt(150, 150) };
-        SupplySpot[] supplies = new SupplySpot[] { new SupplySpot(FixedVector.FromInt(150, far), true) };
+        SupplySpot[] supplies = new SupplySpot[] { new SupplySpot(FixedVector.FromInt(150, far), SupplyKind.Objective) };
         EnemySpot[] enemies = new EnemySpot[] { new EnemySpot(FixedVector.FromInt(far, 150), EnemyDefinition.Grunt) };
         int center = size * BattleMap.Cell / 2;
         SpawnRing ring = new SpawnRing(FixedVector.FromInt(center, center), center - 150, center - 150);
@@ -193,7 +193,7 @@ internal static class LayoutTests
     {
         int size = 10;
         FixedVector[] facilities = new FixedVector[] { facility };
-        SupplySpot[] supplies = new SupplySpot[] { new SupplySpot(supply, false) };
+        SupplySpot[] supplies = new SupplySpot[] { new SupplySpot(supply, SupplyKind.Field) };
         EnemySpot[] enemies = new EnemySpot[] { new EnemySpot(enemy, EnemyDefinition.Grunt) };
         return new MissionLayout(size, size, BorderTiles(size, size), camp, extraction, facilities, supplies, enemies, ring);
     }
@@ -252,7 +252,7 @@ internal static class LayoutTests
         int size = 10;
         FixedVector middle = FixedVector.FromInt(240, 240);
         FixedVector[] facilities = new FixedVector[] { middle };
-        SupplySpot[] supplies = new SupplySpot[] { new SupplySpot(middle, false) };
+        SupplySpot[] supplies = new SupplySpot[] { new SupplySpot(middle, SupplyKind.Field) };
         SpawnRing ring = new SpawnRing(middle, 120, 120);
         return new MissionLayout(size, size, BorderTiles(size, size), middle, middle, facilities, supplies, enemies, ring);
     }

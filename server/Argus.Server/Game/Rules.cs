@@ -31,8 +31,6 @@ public sealed class Rules
     // 대원 몸의 반지름이다. 판정에 쓰는 고정소수점 값이고, 스냅샷의 규칙에는 실수로 바꿔 보낸다.
     public static readonly Fixed PlayerRadius = Fixed.FromInt(13);
     public double DeploySeconds { get; init; } = 5;
-    public double PulseSeconds { get; init; } = 600;
-    public double PulseDamage { get; init; } = 2;
     public double ExtractionSeconds { get; init; } = 20;
     public double ReconnectSeconds { get; init; } = 120;
     // HTTP 참가 후 첫 접속까지 기다리는 시간이다. 연결이 끊긴 대원의 복구 유예와 별개다.
@@ -47,6 +45,10 @@ public sealed class Rules
     public int MaxMana { get; init; } = 24;
     public double Vision { get; init; } = 410;
     public double SupplyCooldown { get; init; } = 18;
+    // 들판의 일반 보급 상자 하나로 채울 수 있는 횟수다. 분대가 함께 쓰고, 한 번에 쓴 사람만 채운다. 캠프 상자는 횟수 제한이 없다.
+    public int FieldSupplyUses { get; init; } = 2;
+    // 시설을 부순 자리에 생기는 보급 상자의 횟수다. 들판 상자처럼 쓴 사람만 채운다.
+    public int FacilitySupplyUses { get; init; } = 2;
     public double GuardHalfAngle { get; init; } = Math.PI / 3;
 
     // 근접 타격: 범위에 닿은 적을 한 번씩 치고 시설과 벽을 부순다.

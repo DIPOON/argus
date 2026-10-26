@@ -21,7 +21,6 @@ public sealed partial class Match
         hasher.AddText(Phase);
         hasher.AddOptionalText(Result);
         hasher.AddLong(_extractionHalfTicks);
-        hasher.AddInt(Pulse);
         hasher.AddInt(Departures);
         hasher.AddLong(_nextSpawnTick);
         hasher.AddInt(_nextId);
@@ -57,8 +56,14 @@ public sealed partial class Match
             Supply supply = Supplies[i];
             hasher.AddInt(supply.Id);
             hasher.AddPoint(supply.Position);
-            hasher.AddBool(supply.Objective);
+            hasher.AddText(SupplyRecord.KindName(supply.Kind));
             hasher.AddBool(supply.Collected);
+            long? uses = null;
+            if (supply.UsesLeft != null)
+            {
+                uses = supply.UsesLeft.Value;
+            }
+            hasher.AddOptionalLong(uses);
             hasher.AddTextLongMap(supply.ReadyTicks);
         }
         hasher.AddInt(Effects.Count);
