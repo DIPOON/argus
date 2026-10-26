@@ -16,6 +16,7 @@ internal static class ClientParityTests
     public static void Register(List<TestCase> tests)
     {
         tests.Add(new TestCase("The client parity vectors hold exactly what the server computes now", VectorsMatch));
+        tests.Add(new TestCase("The scenario blocked by bodies depends on the warden's radius, so the vectors check a collision with the larger body", BodyScenarioUsesRadius));
     }
 
     private static void VectorsMatch()
@@ -413,18 +414,7 @@ internal static class ClientParityTests
         AddInputs(slide, 8, 1, -0.25);
         scenarios.Add(RunScenario("벽 면에 비스듬히 밀며 미끄러짐", 180, FixedVector.FromInt(455, 530), new List<FixedVector>(), new List<EnemyDefinition>(), slide));
 
-        List<FixedVector> bodies = new List<FixedVector>();
-        List<EnemyDefinition> kinds = new List<EnemyDefinition>();
-        bodies.Add(FixedVector.FromInt(352, 730));
-        kinds.Add(EnemyDefinition.Grunt);
-        bodies.Add(FixedVector.FromInt(392, 690));
-        kinds.Add(EnemyDefinition.Warden);
-        List<double[]?> blocked = new List<double[]?>();
-        AddInputs(blocked, 8, 1, 0);
-        AddInputs(blocked, 8, diagonal, -diagonal);
-        AddInputs(blocked, 8, 1, 0);
-        AddInputs(blocked, 6, 0, 1);
-        scenarios.Add(RunScenario("멈춘 적에 막히고 돌아감", 180, FixedVector.FromInt(300, 730), bodies, kinds, blocked));
+        scenarios.Add(BlockedScenario(EnemyDefinition.Warden));
 
         List<double[]?> uneven = new List<double[]?>();
         AddInputs(uneven, 8, 0.6, 0.8);
@@ -469,6 +459,42 @@ internal static class ClientParityTests
             text.Append('\n');
         }
         text.Append("  ]\n");
+    }
+
+    // 멈춘 적 둘에 막혔다가 돌아가는 시나리오다. 첫 구간에서 병사에, 셋째 구간(오른쪽)에서 철위병에 막힌다.
+    // 철위병 앞에서 멈춘 자리의 거리(약 38.3)는 반지름의 합(36)보다 크다. 다음 걸음(3)을 가면 합보다 가까워져(35.3) 그 자리에 선다.
+    private static string BlockedScenario(EnemyDefinition warden)
+    {
+        double diagonal = 1 / Math.Sqrt(2);
+        List<FixedVector> bodies = new List<FixedVector>();
+        List<EnemyDefinition> kinds = new List<EnemyDefinition>();
+        bodies.Add(FixedVector.FromInt(352, 730));
+        kinds.Add(EnemyDefinition.Grunt);
+        bodies.Add(FixedVector.FromInt(392, 690));
+        kinds.Add(warden);
+        List<double[]?> blocked = new List<double[]?>();
+        AddInputs(blocked, 8, 1, 0);
+        AddInputs(blocked, 8, diagonal, -diagonal);
+        AddInputs(blocked, 8, 1, 0);
+        AddInputs(blocked, 6, 0, 1);
+        return RunScenario("멈춘 적에 막히고 돌아감", 180, FixedVector.FromInt(300, 730), bodies, kinds, blocked);
+    }
+
+    private static void BodyScenarioUsesRadius()
+    {
+        // 대조 자료가 큰 몸과의 충돌까지 보려면, 대원의 경로가 철위병의 반지름에 따라 달라야 한다.
+        // 반지름이 하나 작으면(합 35) 그 걸음이 들어가 대원이 더 나아간다. 클라이언트가 받은 반지름을 쓰지 않으면 어긋난다.
+        string actual = TickRows(BlockedScenario(EnemyDefinition.Warden));
+        EnemyDefinition warden = EnemyDefinition.Warden;
+        EnemyDefinition smaller = new EnemyDefinition(warden.Id, warden.Name, warden.Radius - Fixed.One, warden.Health, warden.Speed, warden.Skills);
+        Check(TickRows(BlockedScenario(smaller)) != actual, "철위병의 반지름이 하나 작아도 대원의 경로가 같습니다. 대원이 철위병 몸에 막히지 않습니다");
+    }
+
+    // 시나리오에서 틱마다의 입력과 위치만 떼어 낸다. 앞부분의 몸 목록에는 반지름이 들어 있어 늘 다르다.
+    private static string TickRows(string scenario)
+    {
+        int start = scenario.IndexOf("\"ticks\"", StringComparison.Ordinal);
+        return scenario.Substring(start);
     }
 
     private static void AddInputs(List<double[]?> inputs, int count, double moveX, double moveY)

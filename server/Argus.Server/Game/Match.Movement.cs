@@ -318,7 +318,7 @@ public sealed partial class Match
             }
             FixedVector direct = target.Position - enemy.Position;
             bool sight = Map.LineOfSight(enemy.Position, target.Position);
-            if (Tick >= enemy.NextActionTick && closest < Fixed.FromInt(75 * 75) && sight)
+            if (Tick >= enemy.NextActionTick && closest < Fixed.FromInt(EngageDistance * EngageDistance) && sight)
             {
                 int index = _random.NextInt(0, enemy.Definition.Skills.Length);
                 EnemySkill skill = enemy.Definition.Skills[index];
@@ -329,29 +329,60 @@ public sealed partial class Match
                 continue;
             }
 
-            // 조향: 움직이기 전에 방향을 한 번 정하고 한 번만 움직인다. 막혔다고 다른 방향을 거듭 시도하지 않는다.
+            // 조향: 움직이기 전에 방향을 정하고 움직인다. 막혔다고 여러 방향을 거듭 시도하지 않는다.
             // 몸이 직선으로 지나갈 수 있으면 직진하고, 사선이 가려졌거나 몸이 모서리에 걸리면 흐름장 경로를 따른다.
             FixedVector heading = direct;
+            bool straight = true;
             if (!sight || !BodyCanPass(enemy, target.Position))
             {
                 FixedVector flow = FlowHeading(enemy.Position);
                 if (flow.LengthSquared() > TinyLengthSquared)
                 {
                     heading = flow;
+                    straight = false;
                 }
             }
             if (heading.LengthSquared() < TinyLengthSquared)
             {
                 continue;
             }
-            // 가까운 적끼리 밀어내는 방향을 0.8배(4/5)로 더해, 줄지어 막히지 않고 옆으로 비켜 가게 한다.
-            FixedVector steer = heading.Normalize() + Separation(enemy) * 4 / 5;
-            if (steer.LengthSquared() < TinyLengthSquared)
+            FixedVector movement = Steer(enemy, heading);
+            if (movement.IsZero())
             {
                 continue;
             }
-            FixedVector movement = steer.Normalize() * enemy.Definition.StepPerTick;
-            enemy.Position = MoveBody(enemy.Position, movement, enemy.Definition.Radius, enemy);
+            FixedVector moved = MoveBody(enemy.Position, movement, enemy.Definition.Radius, enemy);
+            // 몸 통과 판단은 옆선을 반지름보다 0.5 좁게 그으므로, 모서리를 반지름보다 0.5 미만으로 가깝게 스치는 직선도 지나갈 수
+            // 있다고 본다. 몸은 그 모서리에 걸리고, 대원과 같은 줄이면 방향의 옆 성분이 0이라 벽을 따라 미끄러지지도 못한다.
+            // 그래서 직진으로 이번 틱에 한 걸음의 절반도 가지 못하면 흐름장 방향으로 바꿔 움직인다. 흐름장은 칸 가운데를 이으므로
+            // 몸 지름이 한 칸보다 작은 적은 그 모서리를 비켜 간다. 조금이라도 갔으면 된다고 보면, 대원의 줄 쪽으로 아주 조금씩
+            // 미끄러지는 것도 간 것이 되어 모서리 앞에서 벗어나지 못한다. 벽에 45도로 부딪혀 미끄러지면 한 걸음의 0.7배쯤 가므로
+            // 그대로 직진한다. 몸 이동은 상태를 바꾸지 않는 계산이라 다시 구해도 된다.
+            if (straight && FixedVector.DistanceSquared(moved, enemy.Position) * 4 < movement.LengthSquared())
+            {
+                FixedVector flow = FlowHeading(enemy.Position);
+                if (flow.LengthSquared() > TinyLengthSquared)
+                {
+                    FixedVector detour = Steer(enemy, flow);
+                    if (!detour.IsZero())
+                    {
+                        moved = MoveBody(enemy.Position, detour, enemy.Definition.Radius, enemy);
+                    }
+                }
+            }
+            enemy.Position = moved;
         }
+    }
+
+    // 정한 방향에 이웃 적과의 분리 방향을 더해 이번 틱의 이동을 구한다. 둘이 맞서 방향이 없어지면 0 벡터다.
+    private FixedVector Steer(Enemy enemy, FixedVector heading)
+    {
+        // 가까운 적끼리 밀어내는 방향을 0.8배(4/5)로 더해, 줄지어 막히지 않고 옆으로 비켜 가게 한다.
+        FixedVector steer = heading.Normalize() + Separation(enemy) * 4 / 5;
+        if (steer.LengthSquared() < TinyLengthSquared)
+        {
+            return FixedVector.Zero;
+        }
+        return steer.Normalize() * enemy.Definition.StepPerTick;
     }
 }

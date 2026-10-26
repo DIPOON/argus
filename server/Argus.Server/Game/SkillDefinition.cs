@@ -107,6 +107,12 @@ public sealed class EnemyDefinition
 
     public EnemyDefinition(string id, string name, Fixed radius, int health, double speed, EnemySkill[] skills)
     {
+        // 몸 지름은 한 칸보다 작아야 한다. 적의 길(흐름장)은 칸 가운데를 이으므로, 지름이 한 칸이면(반지름 24) 칸 가운데 줄이
+        // 벽 모서리에 딱 붙어 모서리와 한 칸 틈에서 멈춘다(EncounterTests의 NarrowGap). 검사의 종류 목록에 넣지 않은 새 적도 여기서 막는다.
+        if (radius * 2 >= Fixed.FromInt(BattleMap.Cell))
+        {
+            throw new ArgumentOutOfRangeException(nameof(radius), radius, $"적의 몸 지름은 한 칸({BattleMap.Cell})보다 작아야 합니다");
+        }
         Id = id;
         Name = name;
         Radius = radius;
@@ -126,12 +132,11 @@ public sealed class EnemyDefinition
     // id로 정의를 찾는다. 기록에 적은 적 종류를 되읽을 때 쓴다. 모르는 id면 예외를 낸다.
     public static EnemyDefinition FromId(string id)
     {
-        EnemyDefinition[] all = new EnemyDefinition[] { Grunt, Breaker, Warden };
-        for (int i = 0; i < all.Length; i++)
+        for (int i = 0; i < All.Count; i++)
         {
-            if (all[i].Id == id)
+            if (All[i].Id == id)
             {
-                return all[i];
+                return All[i];
             }
         }
         throw new ArgumentException($"적 종류 {id}를 모릅니다", nameof(id));
@@ -164,4 +169,23 @@ public sealed class EnemyDefinition
             new EnemySkill("block", 2, 1, 1.2, 78, 24),
             new EnemySkill("channel", 1, 0, 1, 68, 18)
         });
+
+    // 모든 적 종류다. 새 종류를 만들면 여기에 넣는다. 기록의 적 종류 되읽기(FromId), 가장 큰 몸(LargestRadius),
+    // 모든 종류를 도는 검사가 이 목록을 쓴다. 정적 필드는 적힌 순서대로 만들어지므로 위의 정의들보다 뒤에 둔다.
+    public static readonly IReadOnlyList<EnemyDefinition> All = Array.AsReadOnly(new EnemyDefinition[] { Grunt, Breaker, Warden });
+    // 가장 큰 몸의 반지름이다. 증원 타원에 이 몸이 설 자리가 있는지 볼 때 쓴다.
+    public static readonly Fixed LargestRadius = FindLargestRadius();
+
+    private static Fixed FindLargestRadius()
+    {
+        Fixed largest = All[0].Radius;
+        for (int i = 1; i < All.Count; i++)
+        {
+            if (All[i].Radius > largest)
+            {
+                largest = All[i].Radius;
+            }
+        }
+        return largest;
+    }
 }

@@ -240,7 +240,8 @@ public static class MissionGenerator
             BuildEnclosure(random, draft, facility.Value);
         }
 
-        // 처음 적은 시설마다 하나씩, 병사·분쇄자·철위병 순서다. 엘리트를 끈 작전에서는 Match가 모두 병사로 둔다.
+        // 처음 적은 시설마다 하나씩, 병사·분쇄자·철위병 순서다. 모든 적 종류(EnemyDefinition.All)가 아니라 이 작전의 구성이라
+        // 새 종류가 생겨도 이 셋이다. 엘리트를 끈 작전에서는 Match가 모두 병사로 둔다.
         EnemyDefinition[] kinds = new EnemyDefinition[] { EnemyDefinition.Grunt, EnemyDefinition.Breaker, EnemyDefinition.Warden };
         EnemySpot[] enemies = new EnemySpot[FacilityCount];
         for (int i = 0; i < FacilityCount; i++)

@@ -187,7 +187,7 @@ public sealed class MissionLayout
         FixedVector reach = FixedVector.FromInt(ring.RadiusX, ring.RadiusY);
         RequireInside(map, ring.Center - reach, nameof(Reinforcements), "증원 타원의 왼쪽 위");
         RequireInside(map, ring.Center + reach, nameof(Reinforcements), "증원 타원의 오른쪽 아래");
-        Fixed largest = Fixed.Max(EnemyDefinition.Grunt.Radius, Fixed.Max(EnemyDefinition.Breaker.Radius, EnemyDefinition.Warden.Radius));
+        Fixed largest = EnemyDefinition.LargestRadius;
         for (int i = 0; i < RingSamples; i++)
         {
             FixedVector direction = Angle.FromFraction(i, RingSamples).Direction();

@@ -58,6 +58,8 @@ public sealed partial class Match
     private const double MaxCoordinate = 1_000_000;
     // 아래 세 기준은 뜻이 다르다. 앞의 둘은 값이 같지만(Raw 4, 약 0.001) 하나는 거리의 제곱에 두는 여유이고,
     // 하나는 길이의 제곱으로 본 "방향 없음"의 기준이다. 셋째는 길이(제곱이 아님)의 기준이다.
+    // 적이 행동을 고르는 거리다. 쫓는 대원이 이 거리 안에 있고 사선이 열려 있으면 행동한다.
+    public const int EngageDistance = 75;
     // 몸끼리 딱 붙은 자리를 겹친 것으로 보지 않게 하는, 거리의 제곱에 두는 여유다. 거리의 제곱은 성분마다 반올림하므로 조금 작게 나올 수 있다.
     private static readonly Fixed TouchTolerance = Fixed.FromRaw(4);
     // 길이의 제곱이 이보다 작은 벡터는 방향이 없는 것으로 본다. 거의 0인 벡터로 적의 이동 방향을 정하지 않게 한다.
