@@ -1,12 +1,14 @@
-# Argus protocol v3
+# Argus protocol v4
 
 2026-10-09. JSON over HTTP + WebSocket, UTF-8. 좌표 단위는 월드 단위, 시간은 서버 초, 각도는 라디안이다. 서버는 좌표를 4096분의 1 단위 고정소수점 정수로 계산하고, 좌표와 몸 반지름은 소수 둘째 자리로 반올림해 보낸다. 딱 절반이면 0에서 먼 쪽으로 간다(0.125는 0.13). 4096분의 1 단위에는 0.125처럼 소수 셋째 자리가 딱 5인 값이 실제로 있다. 원점은 왼쪽 위다. X는 오른쪽, Y는 아래쪽이다. 서버는 1/30초 틱으로 진행하며, 시간 필드는 세 가지다.
 
-- **틱 시각과 틱 수**: `now`, `elapsed`, `nextPulse`, 기술의 `startedAt`·`contactAt`·`activeUntil`·`followupUntil`·`endsAt`, 효과의 `until`, 안내의 `at`, 대원의 `busy`·`deploy`, 보급의 `cooldown`. 틱을 초로 바꿔 소수 둘째 자리로 반올림해 보낸다. 한 틱은 약 0.033초라 반올림해도 틱끼리 구분된다. 같은 틱의 시각은 `now`와 정확히 같고, 값에 30을 곱해 반올림하면 틱 번호가 된다.
+- **틱 시각과 틱 수**: `now`, `elapsed`, 기술의 `startedAt`·`contactAt`·`activeUntil`·`followupUntil`·`endsAt`, 효과의 `until`, 안내의 `at`, 대원의 `busy`·`deploy`, 보급의 `cooldown`. 틱을 초로 바꿔 소수 둘째 자리로 반올림해 보낸다. 한 틱은 약 0.033초라 반올림해도 틱끼리 구분된다. 같은 틱의 시각은 `now`와 정확히 같고, 값에 30을 곱해 반올림하면 틱 번호가 된다.
 - **규칙 값**: `rules.deploy`, `rules.parryFollowupSeconds`, `rules.skills`의 `contactAfter`·`activeSeconds`·`duration`, `extraction.duration`. 설정한 초를 그대로 보낸다. 서버는 이 기간을 틱으로 올려 세므로, 30을 곱해도 틱 수가 되지 않을 수 있다. 기술의 기간은 모두 `startedAt`부터 잰 초이고 각각 올린다. 예를 들어 `contactAfter` 0.18초는 6틱(0.2초)이다. `parryFollowupSeconds`만은 따로 올리지 않는다. `startedAt`부터 `activeSeconds + parryFollowupSeconds`를 합친 뒤 틱으로 올리고, 그 시각을 기술 객체의 `followupUntil`로 보낸다. `activeUntil`에 반격 시간을 따로 더하면 반격 끝이 한 틱까지 어긋나므로 `followupUntil`을 쓴다. 지금 수치로 센 예는 [전투 명세의 코드 읽기 절](combat.md#코드-읽기)에 있다.
 - **탈출 진행도**: `extraction.progress`. 반 틱 단위로 센 값을 초로 바꿔 소수 둘째 자리로 반올림한다. 반 틱 간격(1/60초 ≈ 0.017초)이 반올림 오차(최대 0.005초)의 두 배보다 크므로, 값에 60을 곱해 반올림하면 정확한 반 틱 수가 된다.
 
-`/health`의 `protocol`과 snapshot의 `version`은 3이다.
+`/health`의 `protocol`과 snapshot의 `version`은 4이다.
+
+v3 → v4(2026-10-27): 전역 충격을 없애 `pulse`와 `nextPulse`를 뺐다. `supplies`에 남은 횟수 `uses`가 늘었다(캠프 상자처럼 횟수 제한이 없으면 `null`, 다 쓴 상자는 `0`). 시설을 부수면 그 자리에 보급이 새로 생기고, `id`는 앞의 보급 다음 번호로 이어진다.
 
 v2 → v3(2026-10-14): `walls`는 수신자가 아직 받지 못한 판일 때만, `rules`와 `map`은 수신자가 아직 받지 못했을 때만 스냅샷에 담긴다. 빠진 값은 같은 방의 이전 스냅샷 값을 그대로 쓴다. `rules.skills`에 기술별 동작(`guardsFront`, `hasFollowup`, `singleTarget`, `breaksStructures`)이 추가되었고, 적 `id`는 무작위가 되었다.
 
@@ -94,7 +96,6 @@ slots를 생략하면 `["strike","parry","grab","strike"]`. 길이는 정확히 
 | type, version, room, you | snapshot, 3, 방 코드, 수신자 공개 ID |
 | now, elapsed | 방 시간 / 첫 투입 이후 임무 시간. 임무 종료 후 elapsed 고정. 둘 다 틱 시각이다(맨 위 시간 필드 참고) |
 | phase, result | staging / active / ended, null / success / failure |
-| pulse, nextPulse | 전역 피해 회차 / 다음 피해까지 초 |
 | map | width, height, cell, columns, rows, campX, campY. 아직 받지 못했을 때만 온다 |
 | walls, mapRevision | 행 우선 byte 타일 배열의 Base64 / 파괴 버전. 0 빈 지면, 1 파괴 가능, 2 맵 경계. walls는 그 판을 아직 받지 못했을 때만 온다 |
 | rules | deploy, speed, playerRadius, guardHalfAngle, parryFollowupSeconds, skills. 아직 받지 못했을 때만 온다 |
@@ -103,7 +104,7 @@ slots를 생략하면 `["strike","parry","grab","strike"]`. 길이는 정확히 
 | enemies | 팀 시야에 실제 들어온 적과 기술 예고 |
 | effects | 시야 안의 효과: id, x, y(소수 둘째 자리로 반올림), kind, until(사라지는 시각, 초) |
 | facilities | 공개 목표: id, x, y, hp, maxHp |
-| supplies | 공개 보급: id, x, y, objective, collected, cooldown. cooldown은 수신 대원 기준 |
+| supplies | 공개 보급: id, x, y, objective, collected, uses, cooldown. uses는 남은 횟수로, 캠프 상자처럼 제한이 없으면 null, 다 쓴 상자는 0이다. 시설을 부수면 그 자리에 새 보급이 생긴다. cooldown은 수신 대원 기준 |
 | extraction | x, y, progress, duration, unlocked |
 | notices | 최근 안내 최대 6개: id, at(나온 시각, 초), text. id는 방마다 1부터 늘어나는 순번이라 같은 틱에 같은 문구가 와도 다르다. 클라이언트는 id로 새 안내를 가린다 |
 

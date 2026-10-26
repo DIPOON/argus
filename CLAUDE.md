@@ -98,7 +98,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 
 | 파일 | 담당 |
 | --- | --- |
-| `Game/Match.cs` | 참가·장비·투입·입력 검증, `Step` 진행 순서, 마나·보급·증원·전역 충격·임무 종료, `Visible` |
+| `Game/Match.cs` | 참가·장비·투입·입력 검증, `Step` 진행 순서, 마나·보급(상자 종류와 남은 횟수, 시설 자리 상자)·증원·임무 종료, `Visible` |
 | `Game/Match.Combat.cs` | 접촉 → 유효 대응 수집 → 완전 파훼 → 부분 대응·비김·패배 → 후속 반격, 시설·벽 파괴 |
 | `Game/Match.Movement.cs` | 몸 충돌, 적 생성, 흐름장(flow field) 경로, 적 조향과 예고 시작 |
 | `Game/Match.StateHash.cs` | 진행 상태 전체의 요약값(`StateHash`). 결정론 검사와 재현 확인에 쓴다 |
@@ -178,7 +178,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 
 ### 프로토콜
 
-통신 형식은 [docs/protocol.md](docs/protocol.md)의 protocol v3다. `/health`의 `protocol`과 스냅샷의 `version`이 모두 3이다. `Game/Snapshot.cs`(공개 상태 선별)와 `Game/SnapshotMessage.cs`(전송 자료구조)가 서버 쪽이고, `client/src/types.ts`가 같은 모양을 TypeScript로 옮겨 둔 것이다.
+통신 형식은 [docs/protocol.md](docs/protocol.md)의 protocol v4다. `/health`의 `protocol`과 스냅샷의 `version`이 모두 4다. `Game/Snapshot.cs`(공개 상태 선별)와 `Game/SnapshotMessage.cs`(전송 자료구조)가 서버 쪽이고, `client/src/types.ts`가 같은 모양을 TypeScript로 옮겨 둔 것이다.
 
 방송할 때 `RoomHost.PublishSnapshots`는 `Snapshot.CreateShared`로 팀 공통 부분(시야 계산 포함)을 한 번만 만들고, 수신자마다 `Snapshot.CreatePersonal`로 `you`, 보급 `cooldown`, 그리고 `walls`·`rules`·`map`을 담을지를 정한다. `walls`는 그 연결이 아직 받지 못한 판일 때만, `rules`·`map`은 아직 받지 못했을 때만 담는다. 받았는지는 **보낸 뒤에** `Peer.MarkSent`가 기록한다(`Peer.Send`). 만들 때 기록하면, 느린 연결에서 그 스냅샷이 버려졌을 때 클라이언트가 바뀐 벽을 영영 받지 못한다. 클라이언트(`main.ts`)와 임무 검사 봇은 빠진 값을 같은 방의 이전 스냅샷에서 이어 쓴다. 직렬화도 공통 부분은 방송마다 한 번만 한다. `Snapshot.SerializeShared`가 공통 부분을 한 번 직렬화하고, `Snapshot.Combine`이 수신자별 `PersonalSnapshot`을 직렬화한 뒤 두 JSON의 바깥 중괄호 안쪽을 원본 배열에서 바로 복사해 쉼표로 잇는다. `SnapshotMessage`에는 수신자별 속성이 없으므로 공통 부분에 수신자별 값이 섞일 수 없다. 연결 직후 한 명에게 보내는 `Snapshot.Create`도 같은 방식으로 만든다. **수신자별 값을 새로 추가하면 `PersonalSnapshot`에 넣는다.** `SnapshotMessage`에 넣으면 모든 수신자에게 같은 값이 간다. `LifecycleTests`의 `SharedSnapshot`이 수신자별 값을 확인하고, 그 값을 뺀 나머지가 공통 부분과 같은지 확인한다.
 
@@ -206,7 +206,7 @@ cd client && PLAYWRIGHT_BROWSERS_PATH=$D/browsers LD_LIBRARY_PATH=$D/root/usr/li
 | --- | --- |
 | [docs/requirements.md](docs/requirements.md) | 합의한 목표와 범위. 무엇을 넣지 않기로 했는지 포함 |
 | [docs/combat.md](docs/combat.md) | 확정된 전투 판정 규칙, 시험 수치, 아직 규칙이 아닌 임시 처리 |
-| [docs/protocol.md](docs/protocol.md) | protocol v3 통신 형식과 버전별 변경 |
+| [docs/protocol.md](docs/protocol.md) | protocol v4 통신 형식과 버전별 변경 |
 | [docs/verification.md](docs/verification.md) | 날짜별 검증 기록과 실제 확인한 범위 |
 
 `docs/combat.md`는 세 층으로 나뉜다. **합의한 규칙**은 바꾸기 전에 확인을 받고, **시험 설정**의 수치는 자유롭게 조정하며, **규칙으로 확정하지 않은 임시 처리**는 지금 적당히 맞춰 둔 동작이라 바꿔도 규칙 위반이 아니다. 어느 층에 해당하는지 먼저 판단한다. 게임 규칙을 바꾸면 해당 절을 함께 고친다. 검증을 수행했으면 `docs/verification.md`에 날짜와 확인 범위를 남긴다. 가독성 정리처럼 동작을 바꾸지 않아야 하는 작업에서는 게임 규칙과 통신 형식을 보존하고, 서버 검사와 브라우저 검사로 회귀가 없음을 확인한다.
