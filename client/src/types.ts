@@ -32,8 +32,11 @@ export interface Enemy extends Position {
 export interface Snapshot {
   type: 'snapshot'; version: number; room: string; you: string; now: number; elapsed: number;
   phase: 'staging' | 'active' | 'ended'; result: 'success' | 'failure' | null;
+  // 벽 배열(base64)이다. 칸마다 0 빈 땅, 1 부술 수 있는 벽, 2 부술 수 없는 벽, 3 분대가 아직 보지 못한 칸이다(protocol v5).
+  // 판 번호는 벽이 부서지거나 분대가 새 칸을 볼 때 바뀐다.
   walls: string; mapRevision: number;
-  extraction: Position & { progress: number; duration: number; unlocked: boolean };
+  // 탈출 지점은 분대가 그 칸을 보기 전까지 null이다. 시설과 보급도 본 칸에 있는 것만 온다(protocol v5).
+  extraction: (Position & { progress: number; duration: number; unlocked: boolean }) | null;
   map: { width: number; height: number; cell: number; columns: number; rows: number; campX: number; campY: number };
   rules: { deploy: number; speed: number; playerRadius: number; guardHalfAngle: number; parryFollowupSeconds: number; skills: SkillDefinition[] };
   players: Player[]; enemies: Enemy[];

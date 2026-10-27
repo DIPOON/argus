@@ -95,7 +95,7 @@ internal static class LayoutTests
 
         Match match = DeployedRoom(layout, out Player player);
 
-        // 스냅샷의 맵 크기와 캠프·탈출 지점, 벽 칸 수도 이 배치를 따른다.
+        // 스냅샷의 맵 크기와 캠프, 벽 칸 수도 이 배치를 따른다. 캠프에서 먼 탈출 지점은 아직 보지 못해 보내지 않는다.
         using (JsonDocument json = JsonDocument.Parse(Snapshot.Create(match, player, RoomHost.Json)))
         {
             JsonElement root = json.RootElement;
@@ -107,9 +107,19 @@ internal static class LayoutTests
             Equal(map.GetProperty("rows").GetInt32(), 18);
             Equal(map.GetProperty("campX").GetDouble(), 150.0);
             Equal(map.GetProperty("campY").GetDouble(), 430.0);
-            Equal(root.GetProperty("extraction").GetProperty("x").GetDouble(), 1000.0);
+            Equal(root.GetProperty("extraction").ValueKind, JsonValueKind.Null);
             byte[] walls = Convert.FromBase64String(root.GetProperty("walls").GetString()!);
             Equal(walls.Length, 24 * 18);
+        }
+
+        // 걷는 검사와 상태 요약 비교에 영향이 없도록 다른 방에서 탈출 지점을 둘러본 뒤 본다.
+        Match scouted = DeployedRoom(SmallLayout(), out Player scout);
+        Scout(scouted, scout, layout.Extraction);
+        using (JsonDocument json = JsonDocument.Parse(Snapshot.Create(scouted, scout, RoomHost.Json)))
+        {
+            JsonElement extraction = json.RootElement.GetProperty("extraction");
+            Equal(extraction.GetProperty("x").GetDouble(), 1000.0);
+            Equal(extraction.GetProperty("y").GetDouble(), 430.0);
         }
 
         // 40초 동안 걸으면 증원이 생기고, 흐름장과 적 조향이 이 크기의 맵에서 돈다. 적은 모두 맵 안의 설 수 있는 자리에 있다.

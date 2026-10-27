@@ -8,13 +8,14 @@ namespace Argus.Server.Game;
 public sealed class SnapshotMessage
 {
     public string Type { get; set; } = "snapshot";
-    public int Version { get; set; } = 4;
+    public int Version { get; set; } = 5;
     public string Room { get; set; } = "";
     public double Now { get; set; }
     public double Elapsed { get; set; }
     public string Phase { get; set; } = "";
     public string? Result { get; set; }
-    public ExtractionSnapshot Extraction { get; set; } = new ExtractionSnapshot();
+    // 분대가 탈출 지점의 칸을 보기 전에는 null이다.
+    public ExtractionSnapshot? Extraction { get; set; }
     public int MapRevision { get; set; }
     public List<PlayerSnapshot> Players { get; set; } = new List<PlayerSnapshot>();
     public List<EnemySnapshot> Enemies { get; set; } = new List<EnemySnapshot>();

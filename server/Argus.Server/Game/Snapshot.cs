@@ -45,13 +45,20 @@ public static class Snapshot
         message.Elapsed = Seconds(match.ElapsedTicks);
         message.Phase = match.Phase;
         message.Result = match.Result;
-        message.Extraction.X = Round(match.Layout.Extraction.X);
-        message.Extraction.Y = Round(match.Layout.Extraction.Y);
-        message.Extraction.Progress = Round(match.ExtractionProgress);
-        message.Extraction.Duration = match.Rules.ExtractionSeconds;
-        message.Extraction.Unlocked = match.ObjectivesComplete;
+        // 탈출 지점은 분대가 그 칸을 보기 전까지 보내지 않는다. 시설·보급과 마찬가지로 안 본 곳은 숨은 정보다.
+        if (match.Explored(match.Layout.Extraction))
+        {
+            ExtractionSnapshot extraction = new ExtractionSnapshot();
+            extraction.X = Round(match.Layout.Extraction.X);
+            extraction.Y = Round(match.Layout.Extraction.Y);
+            extraction.Progress = Round(match.ExtractionProgress);
+            extraction.Duration = match.Rules.ExtractionSeconds;
+            extraction.Unlocked = match.ObjectivesComplete;
+            message.Extraction = extraction;
+        }
         // 벽 자체는 수신자별 부분이 담는다. 판 번호는 매번 보내 클라이언트가 바뀐 것을 알게 한다.
-        message.MapRevision = match.Map.Revision;
+        // 벽이 부서지거나 분대가 본 칸이 늘면 바뀐다.
+        message.MapRevision = match.WallsRevision;
         for (int i = 0; i < match.Players.Count; i++)
         {
             message.Players.Add(CreatePlayer(match, match.Players[i]));
@@ -123,9 +130,14 @@ public static class Snapshot
                 message.Sight.Add(CreateSightPolygon(match, match.Players[i].Position, match.VisionRange));
             }
         }
+        // 시설은 분대가 그 칸을 본 것만 보낸다.
         for (int i = 0; i < match.Facilities.Count; i++)
         {
             Facility facility = match.Facilities[i];
+            if (!match.Explored(facility.Position))
+            {
+                continue;
+            }
             FacilitySnapshot entry = new FacilitySnapshot();
             entry.Id = facility.Id;
             entry.X = Round(facility.Position.X);
@@ -166,9 +178,14 @@ public static class Snapshot
     {
         PersonalSnapshot personal = new PersonalSnapshot();
         personal.You = recipient.Id;
+        // 보급은 분대가 그 칸을 본 것만 보낸다.
         for (int i = 0; i < match.Supplies.Count; i++)
         {
             Supply supply = match.Supplies[i];
+            if (!match.Explored(supply.Position))
+            {
+                continue;
+            }
             SupplySnapshot entry = new SupplySnapshot();
             entry.Id = supply.Id;
             entry.X = Round(supply.Position.X);
@@ -183,7 +200,8 @@ public static class Snapshot
         }
         if (includeWalls)
         {
-            personal.Walls = match.Map.Tiles;
+            // 분대가 보지 못한 칸은 모름(3)으로 가린다.
+            personal.Walls = match.PublicTiles();
         }
         if (includeStatic)
         {

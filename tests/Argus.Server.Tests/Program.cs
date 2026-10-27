@@ -28,6 +28,7 @@ internal static class Program
             ClientParityTests.Register(tests);
             LayoutTests.Register(tests);
             GeneratorTests.Register(tests);
+            ExplorationTests.Register(tests);
         }
         else if (args.Length == 1 && args[0] == "determinism")
         {
@@ -145,6 +146,19 @@ internal static class TestTools
         {
             match.Step();
         }
+    }
+
+    // 살아 있는 대원을 point로 옮겨 한 틱 진행하고 제자리로 돌려놓는다. 그 틱에 대원의 시야로 point 둘레가 분대가 본 칸이 된다.
+    // 안 본 칸은 스냅샷에 실리지 않고 투입도 받지 않으므로, 캠프에서 먼 곳을 다루는 검사는 먼저 그곳을 본다.
+    // 한 틱이 지나고 point의 상자를 쓸 수도 있으므로, 상자 자리가 아닌 곳을 고른다.
+    public static void Scout(Match match, Player player, FixedVector point)
+    {
+        Check(player.State == "alive", "살아 있는 대원만 둘러볼 수 있습니다");
+        FixedVector home = player.Position;
+        player.Position = point;
+        match.Step();
+        player.Position = home;
+        Check(match.Explored(point), $"{point}를 보지 못했습니다");
     }
 
     public static void Check(bool condition, string message = "Expected condition to be true")

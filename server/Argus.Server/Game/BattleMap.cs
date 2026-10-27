@@ -23,6 +23,8 @@ public sealed class BattleMap
     public const int Cell = 48;
     // 캠프의 시야 반경이다. 캠프 둘레는 대원이 없어도 늘 보인다.
     public const int CampVision = 260;
+    // 스냅샷의 벽 배열에서 분대가 아직 보지 못한 칸이다. 0 빈 땅, 1 부술 수 있는 벽, 2 부술 수 없는 벽 다음 값이다.
+    public const byte UnknownTile = 3;
     // 부술 수 있는 벽(종류 1)의 체력이다. 부술 수 없는 벽(종류 2)은 무한대이고, 빈 땅은 0이다.
     // 체력을 읽는 코드가 벽 종류를 먼저 보지 않아도, 부술 수 없는 벽을 이미 부서진 벽(체력 0 이하)으로 보지 않는다.
     private const double BreakableWallHp = 3;
@@ -98,6 +100,13 @@ public sealed class BattleMap
 
     public bool CanStand(FixedVector position, Fixed radius)
     {
+        return CanStand(position, radius, null);
+    }
+
+    // known이 있으면 그 칸이 참인 벽만 본다(분대가 본 칸의 벽). 투입 요청에 답할 때처럼 안 본 칸의 벽에 따라 답이 달라지면
+    // 안 되는 곳에서 쓴다. 안 본 칸은 빈 땅으로 본다.
+    public bool CanStand(FixedVector position, Fixed radius, bool[]? known)
+    {
         if (position.X < radius || position.Y < radius ||
             position.X > Fixed.FromInt(Width) - radius || position.Y > Fixed.FromInt(Height) - radius)
         {
@@ -114,6 +123,12 @@ public sealed class BattleMap
             for (int x = minX; x <= maxX; x++)
             {
                 if (!Solid(x, y))
+                {
+                    continue;
+                }
+                // 맵 밖 칸은 늘 벽이다. 몸이 맵 끝에 딱 닿으면 맵 밖 칸이 범위에 들어오므로 칸 번호를 쓰기 전에 거른다.
+                bool inside = x >= 0 && y >= 0 && x < Columns && y < Rows;
+                if (known != null && inside && !known[y * Columns + x])
                 {
                     continue;
                 }

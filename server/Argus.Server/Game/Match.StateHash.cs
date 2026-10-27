@@ -21,6 +21,8 @@ public sealed partial class Match
         hasher.AddText(Phase);
         hasher.AddOptionalText(Result);
         hasher.AddLong(_extractionHalfTicks);
+        hasher.AddBoolArray(_explored);
+        hasher.AddInt(_exploreRevision);
         hasher.AddInt(Departures);
         hasher.AddLong(_nextSpawnTick);
         hasher.AddInt(_nextId);

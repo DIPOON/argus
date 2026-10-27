@@ -14,6 +14,11 @@ public sealed partial class Match
     public List<Supply> Supplies { get; } = new List<Supply>();
     public List<Effect> Effects { get; } = new List<Effect>();
     public List<Notice> Notices { get; } = new List<Notice>();
+    // 분대가 본 칸이다(칸 번호마다 참·거짓). 처음에는 캠프 둘레만 보이고, 캠프와 살아 있는 대원의 시야로 넓어진다.
+    // 한 번 본 칸은 계속 안다. 스냅샷은 본 칸의 벽과 본 칸에 있는 시설·보급·탈출 지점만 보내고, 투입도 본 칸에만 받는다.
+    private readonly bool[] _explored;
+    // 본 칸이 늘어난 틱마다 1씩 는다. 벽이 부서질 때 느는 BattleMap.Revision과 더해 벽 배열의 판 번호(WallsRevision)로 쓴다.
+    private int _exploreRevision;
     // 지금까지 진행한 틱 수다. 시각은 모두 이 틱 번호로 저장하고 비교한다. 초는 스냅샷으로 보낼 때만 쓴다.
     public long Tick { get; private set; }
     // 첫 투입이 끝난 틱이다. 작전이 시작되기 전에는 -1이다.
@@ -79,6 +84,7 @@ public sealed partial class Match
         Rules = rules;
         Layout = layout;
         Map = new BattleMap(layout);
+        _explored = new bool[Map.Columns * Map.Rows];
         _flow = new int[Map.Columns * Map.Rows];
         _random = new SeededRandom(seed);
         _rulesJson = StateHasher.ToJson(rules);
@@ -124,6 +130,8 @@ public sealed partial class Match
             }
             PlaceInitialEnemy(spot.Position, kind);
         }
+        // 처음에는 캠프의 시야만큼 보인다. 대원이 투입하기 전에는 여기에만 투입할 수 있다.
+        Explore();
     }
 
     // 손으로 만든 고정 맵의 방이다. 검사와 재현에 쓴다.
@@ -278,9 +286,10 @@ public sealed partial class Match
             return false;
         }
         FixedVector target = FixedVector.FromDouble(x, y);
-        // 위치 선택의 즉시 응답으로 시야 밖 적을 탐색할 수 없도록 공개된 벽만 검사한다.
-        // 적과 겹치는지는 5초 뒤 실제 투입 직전에 검사한다.
-        if (!Map.CanStand(target, Rules.PlayerRadius))
+        // 분대가 본 칸에만 투입할 수 있고, 몸이 들어가는지도 본 칸의 벽만으로 본다. 안 본 칸의 벽이나 시야 밖 적에 따라
+        // 답이 달라지면 투입 요청으로 숨은 곳을 엿볼 수 있기 때문이다. 적이나 안 본 벽과 겹치는지는 5초 뒤 실제 투입 직전에
+        // 검사하고, 겹치면 가까운 빈 자리로 옮긴다(FindLanding).
+        if (!Explored(target) || !Map.CanStand(target, Rules.PlayerRadius, _explored))
         {
             return false;
         }
@@ -392,6 +401,8 @@ public sealed partial class Match
                 UpdatePlayer(Players[i]);
             }
         }
+        // 움직인 대원의 시야로 본 칸을 넓힌다.
+        Explore();
         if (ElapsedTicks >= _nextSpawnTick && Enemies.Count < Rules.MaxEnemies)
         {
             // 증원 간격은 시간이 지날수록 줄어들고 2.5초 아래로는 줄지 않는다.
@@ -710,6 +721,98 @@ public sealed partial class Match
             {
                 Note("주목표 완료 · 탈출 지점을 확보하세요");
             }
+        }
+    }
+
+    // 분대가 지금 보는 칸을 본 칸으로 적는다(캠프와 살아 있는 대원의 시야). 본 칸이 늘었으면 판 번호를 올린다.
+    private void Explore()
+    {
+        bool grew = ExploreFrom(Layout.Camp, Fixed.FromInt(BattleMap.CampVision));
+        for (int i = 0; i < Players.Count; i++)
+        {
+            if (Players[i].State != "alive")
+            {
+                continue;
+            }
+            if (ExploreFrom(Players[i].Position, VisionRange))
+            {
+                grew = true;
+            }
+        }
+        if (grew)
+        {
+            _exploreRevision++;
+        }
+    }
+
+    // eye에서 range 안에 가운데가 있는 칸 가운데, 가운데까지 벽에 막히지 않거나 처음 막힌 벽이 바로 그 칸(벽의 앞면이 보임)인
+    // 칸을 본 칸으로 적는다. 시야(Visible)와 같은 반경과 사선을 쓴다. 이미 본 칸은 다시 보지 않으므로 둘러본 곳에서는 비용이 거의 없다.
+    private bool ExploreFrom(FixedVector eye, Fixed range)
+    {
+        int minX = Math.Max(0, (eye.X - range).FloorDivide(BattleMap.Cell));
+        int maxX = Math.Min(Map.Columns - 1, (eye.X + range).FloorDivide(BattleMap.Cell));
+        int minY = Math.Max(0, (eye.Y - range).FloorDivide(BattleMap.Cell));
+        int maxY = Math.Min(Map.Rows - 1, (eye.Y + range).FloorDivide(BattleMap.Cell));
+        Fixed rangeSquared = range * range;
+        bool grew = false;
+        for (int y = minY; y <= maxY; y++)
+        {
+            for (int x = minX; x <= maxX; x++)
+            {
+                int index = y * Map.Columns + x;
+                if (_explored[index])
+                {
+                    continue;
+                }
+                FixedVector center = FixedVector.FromInt(x * BattleMap.Cell + BattleMap.Cell / 2, y * BattleMap.Cell + BattleMap.Cell / 2);
+                if (FixedVector.DistanceSquared(eye, center) > rangeSquared)
+                {
+                    continue;
+                }
+                WallHit wall = Map.RayWall(eye, center);
+                if (wall.Hit && wall.Tile != index)
+                {
+                    continue;
+                }
+                _explored[index] = true;
+                grew = true;
+            }
+        }
+        return grew;
+    }
+
+    // 그 자리의 칸을 분대가 보았는지다. 맵 밖이면 거짓이다.
+    public bool Explored(FixedVector point)
+    {
+        int x = point.X.FloorDivide(BattleMap.Cell);
+        int y = point.Y.FloorDivide(BattleMap.Cell);
+        if (x < 0 || y < 0 || x >= Map.Columns || y >= Map.Rows)
+        {
+            return false;
+        }
+        return _explored[y * Map.Columns + x];
+    }
+
+    // 스냅샷으로 보내는 벽 배열이다. 분대가 보지 못한 칸은 모름(BattleMap.UnknownTile)으로 가린다.
+    public byte[] PublicTiles()
+    {
+        byte[] tiles = (byte[])Map.Tiles.Clone();
+        for (int i = 0; i < tiles.Length; i++)
+        {
+            if (!_explored[i])
+            {
+                tiles[i] = BattleMap.UnknownTile;
+            }
+        }
+        return tiles;
+    }
+
+    // 스냅샷 벽 배열의 판 번호다. 벽이 부서지거나 본 칸이 늘면 바뀐다. 두 값 모두 늘기만 하므로 더한 값도 바뀔 때마다 는다.
+    public int WallsRevision
+    {
+        get
+        {
+            return Map.Revision + _exploreRevision;
         }
     }
 

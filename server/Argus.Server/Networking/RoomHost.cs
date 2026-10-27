@@ -688,7 +688,7 @@ public sealed class RoomHost : BackgroundService
             room.Match.Connect(player);
             room.LastVisit = DateTime.UtcNow;
             byte[] snapshot = Snapshot.Create(room.Match, player, Json);
-            peer.Outgoing.Writer.TryWrite(new OutgoingMessage(snapshot, room.Match.Map.Revision, true));
+            peer.Outgoing.Writer.TryWrite(new OutgoingMessage(snapshot, room.Match.WallsRevision, true));
             return (room, player, peer);
         }
     }
@@ -945,7 +945,7 @@ public sealed class RoomHost : BackgroundService
         // (you, 보급 대기 시간, 아직 받지 못한 벽·규칙·맵)만 따로 직렬화해 앞에 이어 붙인다.
         SnapshotMessage shared = Snapshot.CreateShared(room.Match);
         byte[] sharedJson = Snapshot.SerializeShared(shared, Json);
-        int revision = room.Match.Map.Revision;
+        int revision = room.Match.WallsRevision;
         for (int i = 0; i < room.Match.Players.Count; i++)
         {
             Player player = room.Match.Players[i];

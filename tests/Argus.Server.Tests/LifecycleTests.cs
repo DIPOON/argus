@@ -14,6 +14,7 @@ internal static class LifecycleTests
     {
         tests.Add(new TestCase("Entry waits for selection and five seconds without revealing the landing", Deployment));
         tests.Add(new TestCase("A repeated deploy request while deploying is accepted without moving the landing or the timer", RepeatedDeploy));
+        tests.Add(new TestCase("A deploy answer depends only on seen walls; an unseen wall moves the landing on arrival", UnseenWallDeploy));
         tests.Add(new TestCase("Movement rejects invalid/replayed input and normalizes diagonals", InputAuthority));
         tests.Add(new TestCase("Steps of a split move add up to exactly the move even when it does not divide evenly", StepsAddUp));
         tests.Add(new TestCase("Stale input and disconnect stop movement and further casts", InputExpiry));
@@ -65,35 +66,64 @@ internal static class LifecycleTests
         Equal(player.State, "waiting");
         Equal(match.Phase, "staging");
         Check(!match.Deploy(player, double.NaN, 400));
-        Check(!match.Deploy(player, 730, 350));
-        Check(match.Deploy(player, 1200, 500));
-        Check(!match.Visible(FixedVector.FromInt(1200, 500)));
+        // 처음에는 캠프 둘레만 본 칸이다. 본 칸의 벽(10, 18번 칸)에는 투입할 수 없다.
+        Check(match.Explored(FixedVector.FromInt(504, 888)) && match.Map.Solid(10, 18));
+        Check(!match.Deploy(player, 504, 888));
+        // 안 본 칸에는 빈 땅이어도 투입할 수 없다.
+        FixedVector unseen = FixedVector.FromInt(1200, 500);
+        Check(!match.Explored(unseen) && match.Map.CanStand(unseen, Rules.PlayerRadius));
+        Check(!match.Deploy(player, 1200, 500));
+        // 본 칸의 빈 땅에는 투입한다. 착지하면 대원의 시야로 캠프에서 보이지 않던 곳까지 본 칸이 넓어진다.
+        FixedVector beyond = FixedVector.FromInt(850, 730);
+        Check(match.Deploy(player, 500, 730));
+        Check(!match.Visible(beyond) && !match.Explored(beyond));
         Advance(match, 4.95);
         Equal(player.State, "deploying");
-        Check(!match.Visible(FixedVector.FromInt(1200, 500)));
+        Check(!match.Visible(beyond) && !match.Explored(beyond));
         Advance(match, 0.1);
         Equal(player.State, "alive");
         Equal(player.Mana, 0);
-        Check(match.Visible(FixedVector.FromInt(1200, 500)));
+        Check(match.Visible(beyond) && match.Explored(beyond));
+    }
+
+    private static void UnseenWallDeploy()
+    {
+        // 투입 요청의 답은 본 칸의 벽으로만 정한다. 답이 안 본 칸의 벽에 따라 달라지면 투입 요청으로 안개 속 지형을 엿볼 수 있다.
+        // 몸이 안 본 벽에 걸리는 자리도 받아들이고, 5초 뒤 착지할 때 실제 벽을 보고 가까운 빈 자리로 옮긴다(FindLanding).
+        Match match = new Match("TEST01", new Rules { MaxEnemies = 0 }, 73);
+        Player player = match.Join("p", "pilot")!;
+        // (470, 540)은 본 칸(9, 11)이지만, 몸(반지름 13)이 오른쪽의 안 본 벽 칸(10, 11)에 걸린다.
+        FixedVector target = FixedVector.FromInt(470, 540);
+        Check(match.Explored(target));
+        Check(match.Map.Solid(10, 11) && !match.Explored(FixedVector.FromInt(10 * BattleMap.Cell + 1, 11 * BattleMap.Cell + 1)));
+        Check(!match.Map.CanStand(target, Rules.PlayerRadius));
+        Check(match.Deploy(player, 470, 540), "안 본 벽에 걸리는 자리를 거절했습니다");
+        Advance(match, match.Rules.DeploySeconds);
+        Equal(player.State, "alive");
+        Check(player.Position != target, "벽에 걸린 자리에 그대로 착지했습니다");
+        Check(match.Map.CanStand(player.Position, Rules.PlayerRadius));
+        Check(Distance(player.Position, target) <= 128, "투입 지점에서 너무 멀리 옮겨졌습니다");
+        // 착지한 대원의 시야로 그 벽도 본 칸이 된다.
+        Check(match.Explored(FixedVector.FromInt(10 * BattleMap.Cell + 1, 11 * BattleMap.Cell + 1)));
     }
 
     private static void RepeatedDeploy()
     {
         Match match = new Match("TEST01", new Rules { MaxEnemies = 0 }, 73);
         Player player = match.Join("p", "pilot")!;
-        Check(match.Deploy(player, 1200, 500));
+        Check(match.Deploy(player, 500, 730));
         FixedVector landing = player.Landing;
         long arrives = player.DeployTick;
         Advance(match, 1);
         // 투입 버튼을 두 번 눌러도 거절로 답하지 않는다. 자리와 도착 시각은 처음 요청대로다.
-        Check(match.Deploy(player, 1100, 520), "투입 중인 대원의 재요청을 거절했습니다");
+        Check(match.Deploy(player, 520, 760), "투입 중인 대원의 재요청을 거절했습니다");
         Equal(player.State, "deploying");
         Equal(player.Landing, landing);
         Equal(player.DeployTick, arrives);
         Advance(match, match.Rules.DeploySeconds);
         Equal(player.State, "alive");
         // 살아 있는 대원의 투입 요청은 여전히 거절한다.
-        Check(!match.Deploy(player, 1100, 520));
+        Check(!match.Deploy(player, 520, 760));
     }
 
     private static void InputAuthority()
@@ -297,23 +327,25 @@ internal static class LifecycleTests
         Equal(left.UsesLeft, f.Match.Rules.FacilitySupplyUses - 1);
 
         // 스냅샷은 보급마다 종류와 남은 횟수(늘 정수)를 보낸다. 부목표 상자는 1에서 회수하면 0이 된다. 전역 충격 필드는 없다.
+        // 스냅샷에는 분대가 본 칸의 보급만 실리므로 번호로 찾는다. 남은 부목표 상자(3번)와 들판 상자(5번)도 둘러봐 둔다.
+        Scout(f.Match, ally, f.Match.Supplies[2].Position + FixedVector.FromInt(0, -60));
+        Scout(f.Match, ally, f.Match.Supplies[4].Position + FixedVector.FromInt(0, -60));
         byte[] snapshot = Snapshot.Create(f.Match, f.Player, RoomHost.Json);
         using (JsonDocument json = JsonDocument.Parse(snapshot))
         {
             JsonElement root = json.RootElement;
-            Equal(root.GetProperty("version").GetInt32(), 4);
+            Equal(root.GetProperty("version").GetInt32(), 5);
             Check(!root.TryGetProperty("pulse", out JsonElement _) && !root.TryGetProperty("nextPulse", out JsonElement _), "전역 충격 필드가 남아 있습니다");
             JsonElement supplies = root.GetProperty("supplies");
-            string[] kinds = new string[] { "camp", "objective", "objective", "field", "field" };
+            Equal(supplies.GetArrayLength(), f.Match.Supplies.Count);
+            string[] kinds = new string[] { "camp", "objective", "objective", "field", "field", "field" };
+            int[] uses = new int[] { 0, 1, 1, 0, f.Match.Rules.FieldSupplyUses, f.Match.Rules.FacilitySupplyUses - 1 };
             for (int i = 0; i < kinds.Length; i++)
             {
-                Equal(supplies[i].GetProperty("kind").GetString(), kinds[i]);
+                JsonElement entry = FindId(supplies, i + 1);
+                Equal(entry.GetProperty("kind").GetString(), kinds[i]);
+                Equal(entry.GetProperty("uses").GetInt32(), uses[i]);
             }
-            Equal(supplies[0].GetProperty("uses").GetInt32(), 0);
-            Equal(supplies[1].GetProperty("uses").GetInt32(), 1);
-            Equal(supplies[3].GetProperty("uses").GetInt32(), 0);
-            Equal(supplies[before].GetProperty("kind").GetString(), "field");
-            Equal(supplies[before].GetProperty("uses").GetInt32(), f.Match.Rules.FacilitySupplyUses - 1);
         }
     }
 
@@ -439,7 +471,7 @@ internal static class LifecycleTests
         f.Match.Effects.Add(new Effect(9003, FixedVector.FromInt(1300, 1100), "break", f.Match.Tick + Rules.ToTicks(1)));
         string serialized = Encoding.UTF8.GetString(Snapshot.Create(f.Match, f.Player, RoomHost.Json));
         using JsonDocument json = JsonDocument.Parse(serialized);
-        Equal(json.RootElement.GetProperty("version").GetInt32(), 4);
+        Equal(json.RootElement.GetProperty("version").GetInt32(), 5);
         Equal(json.RootElement.GetProperty("enemies").GetArrayLength(), 1);
         Check(!serialized.Contains("9001") && !serialized.Contains("9002") && !serialized.Contains("9003"));
         Player ally = Ally(f, "scout");
@@ -594,6 +626,9 @@ internal static class LifecycleTests
         // 좌표는 4096분의 1 단위라 0.125(Raw 512)나 0.625(Raw 2560)처럼 소수 셋째 자리가 딱 5인 값이 있다.
         // 실수의 Math.Round는 이런 값을 짝수 쪽(0.12, 0.62)으로 보내지만, 보낼 때는 Fixed처럼 0에서 먼 쪽(0.13, 0.63)으로 반올림한다.
         Fixture f = new Fixture();
+        // 시설과 탈출 지점은 분대가 본 뒤에야 스냅샷에 실린다. 먼저 둘러본다.
+        Scout(f.Match, f.Player, f.Match.Facilities[0].Position);
+        Scout(f.Match, f.Player, f.Match.Layout.Extraction);
         Fixed x = Fixed.FromRaw(300 * Fixed.Scale + 512);
         Fixed y = Fixed.FromRaw(730 * Fixed.Scale + 2560);
         f.Player.Position = new FixedVector(x, y);
@@ -612,10 +647,10 @@ internal static class LifecycleTests
             Equal(player.GetProperty("rawY").GetInt64(), y.Raw);
 
             // 시설·보급·탈출 지점·캠프의 좌표와 몸 반지름도 같은 도우미를 거친다. 지금은 모두 정수라 값이 그대로다.
-            JsonElement facility = root.GetProperty("facilities")[0];
+            JsonElement facility = FindId(root.GetProperty("facilities"), f.Match.Facilities[0].Id);
             Equal(facility.GetProperty("x").GetDouble(), f.Match.Facilities[0].Position.X.ToDouble());
             Equal(facility.GetProperty("y").GetDouble(), f.Match.Facilities[0].Position.Y.ToDouble());
-            JsonElement supply = root.GetProperty("supplies")[0];
+            JsonElement supply = FindId(root.GetProperty("supplies"), f.Match.Supplies[0].Id);
             Equal(supply.GetProperty("x").GetDouble(), f.Match.Supplies[0].Position.X.ToDouble());
             Equal(supply.GetProperty("y").GetDouble(), f.Match.Supplies[0].Position.Y.ToDouble());
             JsonElement extraction = root.GetProperty("extraction");
@@ -674,6 +709,19 @@ internal static class LifecycleTests
             }
         }
         throw new Exception($"{name}이 {prefix}로 시작하는 항목이 없습니다");
+    }
+
+    // 배열에서 id가 같은 항목을 찾는다. 안 본 곳의 항목이 빠지므로 순서가 아니라 번호로 찾는다.
+    private static JsonElement FindId(JsonElement array, int id)
+    {
+        foreach (JsonElement item in array.EnumerateArray())
+        {
+            if (item.GetProperty("id").GetInt32() == id)
+            {
+                return item;
+            }
+        }
+        throw new Exception($"id {id}인 항목이 없습니다");
     }
 
     // JSON 객체의 속성 이름을 순서대로 쉼표로 이어 돌려준다.
@@ -1199,6 +1247,8 @@ internal static class LifecycleTests
         // 움직이지도 행동하지도 않는 적으로 투입 지점 주변 반경 150을 간격 30으로 채운다. 어느 점이든 적과 26보다 가깝다.
         EnemyDefinition still = new EnemyDefinition("still", "정지", Fixed.FromInt(13), 1, 0, EnemyDefinition.Grunt.Skills);
         FixedVector landing = FixedVector.FromInt(1400, 1250);
+        // 본 칸에만 투입할 수 있으므로 투입 지점을 먼저 둘러본다.
+        Scout(f.Match, f.Player, landing);
         int id = 31000;
         for (int x = -5; x <= 5; x++)
         {
@@ -1408,9 +1458,12 @@ internal static class LifecycleTests
     {
         Fixture f = new Fixture();
         Player late = f.Match.Join("late", "late")!;
+        // 전에 둘러봤지만 지금은 아무도 보지 않는 곳이다. 그 사이 적이 들어와 있다.
+        FixedVector spot = FixedVector.FromInt(1000, 600);
+        Scout(f.Match, f.Player, spot);
         Enemy enemy = Target(f);
-        enemy.Position = FixedVector.FromInt(1000, 600);
-        Check(!f.Match.Visible(enemy.Position));
+        enemy.Position = spot;
+        Check(f.Match.Explored(enemy.Position) && !f.Match.Visible(enemy.Position));
         Check(f.Match.Deploy(late, enemy.Position.X.ToDouble(), enemy.Position.Y.ToDouble()));
         Check(!f.Match.Visible(enemy.Position));
         Advance(f.Match, 5.1);

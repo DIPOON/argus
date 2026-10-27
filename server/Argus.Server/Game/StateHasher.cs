@@ -71,6 +71,15 @@ public sealed class StateHasher : IDisposable
         _hash.AppendData(value);
     }
 
+    public void AddBoolArray(bool[] values)
+    {
+        AddInt(values.Length);
+        for (int i = 0; i < values.Length; i++)
+        {
+            AddBool(values[i]);
+        }
+    }
+
     public void AddIntArray(int[] values)
     {
         AddInt(values.Length);

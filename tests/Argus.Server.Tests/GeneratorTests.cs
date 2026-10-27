@@ -160,7 +160,7 @@ internal static class GeneratorTests
             }
             Check(reachable * 100 >= 64 * 60, $"{name}: 증원 타원 위의 점에 {reachable}/64개만 갈 수 있습니다");
         }
-        // 크기가 여러 가지로 나온다. 크기는 가로 17가지 × 세로 13가지다.
+        // 크기가 여러 가지로 나온다. 크기는 가로 21가지 × 세로 15가지다.
         Check(sizes.Count >= 200, $"{SeedCount}개 시드에서 맵 크기가 {sizes.Count}가지뿐입니다");
     }
 
@@ -334,7 +334,7 @@ internal static class GeneratorTests
     // 시드 1~5로 만든 배치 전체를 SHA-256으로 요약한 값이다. 생성기를 바꾸면 이 값도 바뀌므로, 의도한 변경이면 새 값으로 고친다.
     // 배치를 기록과 같은 JSON으로 적어 요약하므로 기록 모양을 바꿔도 바뀐다(2026-10-27 보급 종류 kind를 더했을 때, 맵은 그대로).
     // 결정론 묶음에도 들어 있어 CI가 Windows·macOS에서도 같은 맵이 나오는지 확인한다.
-    private const string ExpectedChecksum = "F30893BFD9402C2E11420F4EA5493018B123C5C5E29217BDEBC8FFD4CE49354A";
+    private const string ExpectedChecksum = "960C08B6D6D9BC4E08A57E8568408F9DD6FAD541AE2D9F7102AFF1FB17701025";
 
     private static void FixedChecksums()
     {
