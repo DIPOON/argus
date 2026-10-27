@@ -138,10 +138,12 @@ public sealed class SupplySnapshot
     public int Id { get; set; }
     public double X { get; set; }
     public double Y { get; set; }
+    // 보급 종류(camp·field·objective)다. 시설 자리 상자도 field다.
+    public string Kind { get; set; } = "";
     public bool Objective { get; set; }
     public bool Collected { get; set; }
-    // 남은 횟수다. 캠프 상자처럼 횟수 제한이 없으면 null이고, 0이면 다 쓴 상자다.
-    public int? Uses { get; set; }
+    // 남은 횟수다. 0이면 다 쓴 상자다. 부목표 상자는 1에서 회수하면 0이 된다.
+    public int Uses { get; set; }
     public double Cooldown { get; set; }
 }
 

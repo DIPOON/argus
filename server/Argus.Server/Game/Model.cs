@@ -202,12 +202,12 @@ public sealed class Supply
     public SupplyKind Kind { get; }
     // 부목표 상자를 분대가 회수했는지다.
     public bool Collected;
-    // 남은 횟수다. 캠프 상자처럼 횟수 제한이 없으면 null이고, 0이면 다 쓴 상자다. 부목표 상자는 회수 여부(Collected)로 본다.
-    public int? UsesLeft;
+    // 남은 횟수다. 0이면 다 쓴 상자다. 부목표 상자는 1에서 시작해 회수하면 0이 된다.
+    public int UsesLeft;
     // 대원마다 이 보급을 다시 쓸 수 있게 되는 틱이다.
     public Dictionary<string, long> ReadyTicks { get; } = new Dictionary<string, long>();
 
-    public Supply(int id, FixedVector position, SupplyKind kind, int? uses)
+    public Supply(int id, FixedVector position, SupplyKind kind, int uses)
     {
         Id = id;
         Position = position;

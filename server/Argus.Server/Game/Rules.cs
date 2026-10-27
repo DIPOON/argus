@@ -45,7 +45,10 @@ public sealed class Rules
     public int MaxMana { get; init; } = 24;
     public double Vision { get; init; } = 410;
     public double SupplyCooldown { get; init; } = 18;
-    // 들판의 일반 보급 상자 하나로 채울 수 있는 횟수다. 분대가 함께 쓰고, 한 번에 쓴 사람만 채운다. 캠프 상자는 횟수 제한이 없다.
+    // 캠프 상자로 채울 수 있는 횟수다. 분대가 함께 쓰고 한 번에 쓴 사람만 채운다. 대원마다 세지 않는 것은, 새 게스트로 다시
+    // 들어온 사람을 서버가 같은 사람으로 알아볼 수 없어 다시 채울 수 있기 때문이다. 횟수가 없으면 캠프 옆에서 버텨 작전이 끝나지 않는다.
+    public int CampSupplyUses { get; init; } = 4;
+    // 들판의 일반 보급 상자 하나로 채울 수 있는 횟수다. 캠프 상자처럼 분대가 함께 쓰고, 한 번에 쓴 사람만 채운다.
     public int FieldSupplyUses { get; init; } = 2;
     // 시설을 부순 자리에 생기는 보급 상자의 횟수다. 들판 상자처럼 쓴 사람만 채운다.
     public int FacilitySupplyUses { get; init; } = 2;

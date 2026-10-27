@@ -3,9 +3,10 @@ namespace Argus.Server.Game;
 // 보급 상자의 종류다.
 public enum SupplyKind
 {
-    // 캠프 옆의 상자다. 횟수 제한 없이 채운다.
+    // 캠프 옆의 상자다. 분대가 함께 쓰는 횟수(Rules.CampSupplyUses)가 있고, 한 번에 쓴 사람만 채운다.
     Camp,
     // 들판의 일반 상자다. 상자마다 쓸 수 있는 횟수(Rules.FieldSupplyUses)가 있고, 쓴 사람만 채운다.
+    // 시설을 부순 자리에 생기는 상자도 이 종류이고, 그 횟수는 Rules.FacilitySupplyUses다.
     Field,
     // 부목표 상자다. 탈출 조건에 들고, 분대에서 한 번만 회수한다.
     Objective

@@ -38,8 +38,8 @@ export interface Snapshot {
   rules: { deploy: number; speed: number; playerRadius: number; guardHalfAngle: number; parryFollowupSeconds: number; skills: SkillDefinition[] };
   players: Player[]; enemies: Enemy[];
   facilities: (Position & { id: number; hp: number; maxHp: number })[];
-  // uses는 남은 횟수다. 캠프 상자처럼 횟수 제한이 없으면 null, 다 쓴 상자는 0이다.
-  supplies: (Position & { id: number; objective: boolean; collected: boolean; uses: number | null; cooldown: number })[];
+  // kind는 보급 종류(시설 자리 상자도 field)이고 uses는 남은 횟수다. 다 쓴 상자는 0, 부목표 상자는 1에서 회수하면 0이다.
+  supplies: (Position & { id: number; kind: 'camp' | 'field' | 'objective'; objective: boolean; collected: boolean; uses: number; cooldown: number })[];
   effects: (Position & { id: number; kind: string; until: number })[];
   sight: number[][]; notices: { id: number; at: number; text: string }[];
 }

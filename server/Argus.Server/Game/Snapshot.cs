@@ -173,6 +173,7 @@ public static class Snapshot
             entry.Id = supply.Id;
             entry.X = Round(supply.Position.X);
             entry.Y = Round(supply.Position.Y);
+            entry.Kind = SupplyRecord.KindName(supply.Kind);
             entry.Objective = supply.Objective;
             entry.Collected = supply.Collected;
             entry.Uses = supply.UsesLeft;

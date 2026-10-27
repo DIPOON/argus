@@ -365,9 +365,10 @@ export class World {
       const color = supply.cooldown > 0 ? 0x829388 : supply.objective ? colors.gold : colors.teal;
       g.roundRect(supply.x - 12, supply.y - 12, 24, 24, 3).fill(0x1a2325).stroke({ color, width: 2 });
       g.moveTo(supply.x - 6, supply.y).lineTo(supply.x + 6, supply.y).moveTo(supply.x, supply.y - 6).lineTo(supply.x, supply.y + 6).stroke({ color, width: 2 });
+      // 남은 횟수는 늘 보인다. 내 대기 시간은 대원마다 따로 세므로, 대기 중에도 횟수를 가리지 않고 함께 보인다.
+      const name = supply.kind === 'camp' ? '캠프 보급' : '보급';
       const text = supply.objective ? '보급품 회수'
-        : supply.cooldown > 0 ? `보급 · ${Math.ceil(supply.cooldown)}s`
-          : supply.uses === null ? '체력 / 마나 보급' : `보급 · ${supply.uses}회 남음`;
+        : supply.cooldown > 0 ? `${name} · ${supply.uses}회 · ${Math.ceil(supply.cooldown)}s` : `${name} · ${supply.uses}회`;
       this.label(`supply-${supply.id}`, text, supply.x, supply.y + 30, color, 12);
     }
     const landing = me?.state === 'deploying' ? { x: me.landingX, y: me.landingY } : me?.state === 'waiting' ? this.landing : undefined;

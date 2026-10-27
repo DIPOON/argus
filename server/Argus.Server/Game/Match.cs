@@ -97,12 +97,16 @@ public sealed partial class Match
         {
             Facilities.Add(new Facility(i + 1, layout.Facilities[i]));
         }
-        // 들판 상자는 정해진 횟수만 쓰고, 캠프 상자는 횟수 제한이 없다. 부목표 상자는 한 번 회수하면 사라진다.
+        // 상자마다 정해진 횟수만 쓴다. 캠프 상자와 들판 상자는 분대가 함께 쓰고, 부목표 상자는 한 번 회수하면 사라진다.
         for (int i = 0; i < layout.Supplies.Count; i++)
         {
             SupplySpot spot = layout.Supplies[i];
-            int? uses = null;
-            if (spot.Kind == SupplyKind.Field)
+            int uses = 1;
+            if (spot.Kind == SupplyKind.Camp)
+            {
+                uses = rules.CampSupplyUses;
+            }
+            else if (spot.Kind == SupplyKind.Field)
             {
                 uses = rules.FieldSupplyUses;
             }
@@ -589,7 +593,7 @@ public sealed partial class Match
         {
             Supply supply = Supplies[i];
             // 거리는 제곱끼리 비교한다(35² = 1225). 다 쓴 상자(남은 횟수 0)는 더 채우지 않는다.
-            if (supply.Collected || supply.UsesLeft == 0 || supply.ReadyTick(player) > Tick ||
+            if (supply.Collected || supply.UsesLeft <= 0 || supply.ReadyTick(player) > Tick ||
                 FixedVector.DistanceSquared(player.Position, supply.Position) > Fixed.FromInt(35 * 35) ||
                 !Map.LineOfSight(player.Position, supply.Position))
             {
@@ -606,11 +610,8 @@ public sealed partial class Match
             }
             player.Hp = player.MaxHp;
             player.Mana = player.MaxMana;
-            // 횟수가 있는 상자는 한 번 썼다. 쓴 사람만 채우므로 곁에 선 동료는 따로 한 번을 쓴다.
-            if (supply.UsesLeft != null)
-            {
-                supply.UsesLeft = supply.UsesLeft - 1;
-            }
+            // 한 번 썼다. 쓴 사람만 채우므로 곁에 선 동료는 따로 한 번을 쓴다.
+            supply.UsesLeft--;
             // 난입자와 겹쳐 선 동료가 다른 사람의 보급 사용 때문에 기다리지 않게 한다.
             supply.ReadyTicks[player.Id] = Tick + Rules.ToTicks(Rules.SupplyCooldown);
             Effect(player.Position, "heal", 0.5);

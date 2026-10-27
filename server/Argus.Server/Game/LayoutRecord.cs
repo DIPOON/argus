@@ -109,17 +109,23 @@ public sealed class SupplyRecord
     // 부목표인지다. 종류가 없던 형식 2의 기록은 이것만 있다.
     public bool Objective { get; set; }
 
+    // 보급 종류의 이름이다. 기록, 상태 요약값, 스냅샷이 같은 이름을 쓴다. 새 종류를 만들고 여기를 빠뜨리면
+    // 다른 종류로 조용히 적히지 않게 예외를 낸다.
     public static string KindName(SupplyKind kind)
     {
         if (kind == SupplyKind.Camp)
         {
             return "camp";
         }
+        if (kind == SupplyKind.Field)
+        {
+            return "field";
+        }
         if (kind == SupplyKind.Objective)
         {
             return "objective";
         }
-        return "field";
+        throw new ArgumentOutOfRangeException(nameof(kind), kind, "모르는 보급 종류입니다");
     }
 
     // 적어 둔 종류로 되돌린다. 형식 2의 기록에는 종류가 없으므로 부목표 여부만 본다. 그때는 캠프 상자도 들판 상자로 읽히지만,

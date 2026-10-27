@@ -58,12 +58,7 @@ public sealed partial class Match
             hasher.AddPoint(supply.Position);
             hasher.AddText(SupplyRecord.KindName(supply.Kind));
             hasher.AddBool(supply.Collected);
-            long? uses = null;
-            if (supply.UsesLeft != null)
-            {
-                uses = supply.UsesLeft.Value;
-            }
-            hasher.AddOptionalLong(uses);
+            hasher.AddInt(supply.UsesLeft);
             hasher.AddTextLongMap(supply.ReadyTicks);
         }
         hasher.AddInt(Effects.Count);
