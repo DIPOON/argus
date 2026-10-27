@@ -8,7 +8,7 @@
 
 `/health`의 `protocol`과 snapshot의 `version`은 4이다.
 
-v3 → v4(2026-10-27): 전역 충격을 없애 `pulse`와 `nextPulse`를 뺐다. `supplies`에 남은 횟수 `uses`가 늘었다(캠프 상자처럼 횟수 제한이 없으면 `null`, 다 쓴 상자는 `0`). 시설을 부수면 그 자리에 보급이 새로 생기고, `id`는 앞의 보급 다음 번호로 이어진다.
+v3 → v4(2026-10-27): 전역 충격을 없애 `pulse`와 `nextPulse`를 뺐다. `supplies`에 보급 종류 `kind`(`camp`·`field`·`objective`)와 남은 횟수 `uses`(늘 정수, 다 쓴 상자는 `0`)가 늘었다. 시설을 부수면 그 자리에 보급(`field`)이 새로 생기고, `id`는 앞의 보급 다음 번호로 이어진다.
 
 v2 → v3(2026-10-14): `walls`는 수신자가 아직 받지 못한 판일 때만, `rules`와 `map`은 수신자가 아직 받지 못했을 때만 스냅샷에 담긴다. 빠진 값은 같은 방의 이전 스냅샷 값을 그대로 쓴다. `rules.skills`에 기술별 동작(`guardsFront`, `hasFollowup`, `singleTarget`, `breaksStructures`)이 추가되었고, 적 `id`는 무작위가 되었다.
 
@@ -104,7 +104,7 @@ slots를 생략하면 `["strike","parry","grab","strike"]`. 길이는 정확히 
 | enemies | 팀 시야에 실제 들어온 적과 기술 예고 |
 | effects | 시야 안의 효과: id, x, y(소수 둘째 자리로 반올림), kind, until(사라지는 시각, 초) |
 | facilities | 공개 목표: id, x, y, hp, maxHp |
-| supplies | 공개 보급: id, x, y, objective, collected, uses, cooldown. uses는 남은 횟수로, 캠프 상자처럼 제한이 없으면 null, 다 쓴 상자는 0이다. 시설을 부수면 그 자리에 새 보급이 생긴다. cooldown은 수신 대원 기준 |
+| supplies | 공개 보급: id, x, y, kind, objective, collected, uses, cooldown. kind는 camp·field·objective이고 시설 자리 상자도 field다. uses는 남은 횟수(정수)로 다 쓴 상자는 0, 부목표 상자는 1에서 회수하면 0이다. 시설을 부수면 그 자리에 새 보급이 생긴다. cooldown은 수신 대원 기준 |
 | extraction | x, y, progress, duration, unlocked |
 | notices | 최근 안내 최대 6개: id, at(나온 시각, 초), text. id는 방마다 1부터 늘어나는 순번이라 같은 틱에 같은 문구가 와도 다르다. 클라이언트는 id로 새 안내를 가린다 |
 
