@@ -93,16 +93,24 @@ internal static class GeneratorTests
             Check(layout.Rows >= MissionGenerator.MinimumRows && layout.Rows <= MissionGenerator.MaximumRows, $"{name}: 세로 칸 수가 범위 밖입니다");
             sizes.Add(layout.Columns * 1000 + layout.Rows);
             Equal(layout.Facilities.Count, MissionGenerator.FacilityCount);
+            // 보급은 캠프 상자 하나(첫 번째), 부목표 둘, 들판 상자 둘이다.
             Equal(layout.Supplies.Count, 5);
+            Equal(layout.Supplies[0].Kind, SupplyKind.Camp);
             int objectives = 0;
-            for (int i = 0; i < layout.Supplies.Count; i++)
+            int fields = 0;
+            for (int i = 1; i < layout.Supplies.Count; i++)
             {
-                if (layout.Supplies[i].Objective)
+                if (layout.Supplies[i].Kind == SupplyKind.Objective)
                 {
                     objectives++;
                 }
+                if (layout.Supplies[i].Kind == SupplyKind.Field)
+                {
+                    fields++;
+                }
             }
             Equal(objectives, 2);
+            Equal(fields, 2);
             Equal(layout.InitialEnemySpots.Count, 3);
             Equal(layout.InitialEnemySpots[0].Kind, EnemyDefinition.Grunt);
             Equal(layout.InitialEnemySpots[1].Kind, EnemyDefinition.Breaker);
@@ -324,8 +332,9 @@ internal static class GeneratorTests
     }
 
     // 시드 1~5로 만든 배치 전체를 SHA-256으로 요약한 값이다. 생성기를 바꾸면 이 값도 바뀌므로, 의도한 변경이면 새 값으로 고친다.
+    // 배치를 기록과 같은 JSON으로 적어 요약하므로 기록 모양을 바꿔도 바뀐다(2026-10-27 보급 종류 kind를 더했을 때, 맵은 그대로).
     // 결정론 묶음에도 들어 있어 CI가 Windows·macOS에서도 같은 맵이 나오는지 확인한다.
-    private const string ExpectedChecksum = "231633F893106C2318E4819D87BC175B2CCD7ACF7A3A00872BDB0D4786F83D8A";
+    private const string ExpectedChecksum = "F30893BFD9402C2E11420F4EA5493018B123C5C5E29217BDEBC8FFD4CE49354A";
 
     private static void FixedChecksums()
     {

@@ -1,15 +1,35 @@
 namespace Argus.Server.Game;
 
-// 보급 상자의 자리와 부목표인지다. 부목표 보급은 탈출 조건에 들고 한 번만 먹을 수 있다.
+// 보급 상자의 종류다.
+public enum SupplyKind
+{
+    // 캠프 옆의 상자다. 분대가 함께 쓰는 횟수(Rules.CampSupplyUses)가 있고, 한 번에 쓴 사람만 채운다.
+    Camp,
+    // 들판의 일반 상자다. 상자마다 쓸 수 있는 횟수(Rules.FieldSupplyUses)가 있고, 쓴 사람만 채운다.
+    // 시설을 부순 자리에 생기는 상자도 이 종류이고, 그 횟수는 Rules.FacilitySupplyUses다.
+    Field,
+    // 부목표 상자다. 탈출 조건에 들고, 분대에서 한 번만 회수한다.
+    Objective
+}
+
+// 보급 상자의 자리와 종류다.
 public sealed class SupplySpot
 {
     public FixedVector Position { get; }
-    public bool Objective { get; }
+    public SupplyKind Kind { get; }
 
-    public SupplySpot(FixedVector position, bool objective)
+    public SupplySpot(FixedVector position, SupplyKind kind)
     {
         Position = position;
-        Objective = objective;
+        Kind = kind;
+    }
+
+    public bool Objective
+    {
+        get
+        {
+            return Kind == SupplyKind.Objective;
+        }
     }
 }
 
@@ -283,11 +303,11 @@ public sealed class MissionLayout
         };
         SupplySpot[] supplies = new SupplySpot[]
         {
-            new SupplySpot(camp + FixedVector.FromInt(70, 40), false),
-            new SupplySpot(FixedVector.FromInt(845, 640), true),
-            new SupplySpot(FixedVector.FromInt(1150, 835), true),
-            new SupplySpot(FixedVector.FromInt(815, 985), false),
-            new SupplySpot(FixedVector.FromInt(1080, 740), false)
+            new SupplySpot(camp + FixedVector.FromInt(70, 40), SupplyKind.Camp),
+            new SupplySpot(FixedVector.FromInt(845, 640), SupplyKind.Objective),
+            new SupplySpot(FixedVector.FromInt(1150, 835), SupplyKind.Objective),
+            new SupplySpot(FixedVector.FromInt(815, 985), SupplyKind.Field),
+            new SupplySpot(FixedVector.FromInt(1080, 740), SupplyKind.Field)
         };
         // 셋 모두 가장 가까운 벽에서 60 넘게 떨어진 빈 땅이라, 가장 큰 적(철위병, 반지름 23)도 넉넉히 들어간다.
         // (970, 640)은 시설 1 아래 장애물의 남쪽이다. 엘리트를 켠 작전에서는 뒤의 둘이 분쇄자와 철위병이다.

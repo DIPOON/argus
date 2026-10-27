@@ -360,11 +360,16 @@ export class World {
       this.label(`facility-${f.id}`, f.hp > 0 ? `0${f.id} · 적 시설` : `0${f.id} · 파괴 완료`, f.x, f.y + 47, color, 14);
     }
     for (const supply of s.supplies) {
-      if (supply.collected) continue;
+      // 회수한 부목표 상자와 다 쓴 상자(남은 횟수 0)는 그리지 않는다.
+      if (supply.collected || supply.uses === 0) continue;
       const color = supply.cooldown > 0 ? 0x829388 : supply.objective ? colors.gold : colors.teal;
       g.roundRect(supply.x - 12, supply.y - 12, 24, 24, 3).fill(0x1a2325).stroke({ color, width: 2 });
       g.moveTo(supply.x - 6, supply.y).lineTo(supply.x + 6, supply.y).moveTo(supply.x, supply.y - 6).lineTo(supply.x, supply.y + 6).stroke({ color, width: 2 });
-      this.label(`supply-${supply.id}`, supply.objective ? '보급품 회수' : supply.cooldown > 0 ? `보급 · ${Math.ceil(supply.cooldown)}s` : '체력 / 마나 보급', supply.x, supply.y + 30, color, 12);
+      // 남은 횟수는 늘 보인다. 내 대기 시간은 대원마다 따로 세므로, 대기 중에도 횟수를 가리지 않고 함께 보인다.
+      const name = supply.kind === 'camp' ? '캠프 보급' : '보급';
+      const text = supply.objective ? '보급품 회수'
+        : supply.cooldown > 0 ? `${name} · ${supply.uses}회 · ${Math.ceil(supply.cooldown)}s` : `${name} · ${supply.uses}회`;
+      this.label(`supply-${supply.id}`, text, supply.x, supply.y + 30, color, 12);
     }
     const landing = me?.state === 'deploying' ? { x: me.landingX, y: me.landingY } : me?.state === 'waiting' ? this.landing : undefined;
     if (landing && s.phase !== 'ended') {

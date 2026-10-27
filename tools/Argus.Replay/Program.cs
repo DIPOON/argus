@@ -283,7 +283,7 @@ internal static class Program
 
     private static void PrintState(Match match)
     {
-        Console.WriteLine($"상태: {match.Tick}틱({Clock(match.Tick)}) · 단계 {match.Phase} · 임무 경과 {Clock(match.ElapsedTicks)} · 전역 충격 {match.Pulse}회 · 탈출 {match.ExtractionProgress:0.0}초");
+        Console.WriteLine($"상태: {match.Tick}틱({Clock(match.Tick)}) · 단계 {match.Phase} · 임무 경과 {Clock(match.ElapsedTicks)} · 탈출 {match.ExtractionProgress:0.0}초");
         for (int i = 0; i < match.Players.Count; i++)
         {
             Player player = match.Players[i];

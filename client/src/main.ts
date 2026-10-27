@@ -69,7 +69,7 @@ $('app').innerHTML = `
     </aside>
     <section id="battlefield" class="battlefield" aria-label="작전 지도">
       <div id="canvas-host" class="canvas-host"></div>
-      <div class="map-top"><span class="map-title"><i></i><span id="view-label">전술 지도 / 투입 위치 선택</span></span><div class="timers"><span>경과 <b id="elapsed">00:00</b></span><span id="pulse-label">전역 충격 <b id="pulse">10:00</b></span></div></div>
+      <div class="map-top"><span class="map-title"><i></i><span id="view-label">전술 지도 / 투입 위치 선택</span></span><div class="timers"><span>경과 <b id="elapsed">00:00</b></span></div></div>
       <div id="toast" class="toast" role="status" hidden></div>
       <div id="deploy-panel" class="deploy-panel"><div><span class="eyebrow" id="deploy-kicker">READY TO DEPLOY</span><h3 id="deploy-title">투입할 위치를 선택하세요</h3><p id="deploy-description">지도의 빈 지면을 클릭하세요. 선택 전에는 계속 대기합니다.</p></div><div class="deploy-actions"><button id="camp" class="secondary">캠프 선택</button><button id="deploy" class="primary" disabled>위치 선택 필요</button></div></div>
       <div id="combat-hud" class="combat-hud" hidden>
@@ -266,7 +266,7 @@ function connect() {
     }
     if (message.type === 'reportNoted') { toast('제보에 내용을 덧붙였습니다.', false); return; }
     if (message.type !== 'snapshot') return;
-    if (message.version !== 3) { leave(); $('lobby-error').textContent = '서버와 클라이언트 버전이 다릅니다. 새로고침 후 다시 접속하세요.'; return; }
+    if (message.version !== 4) { leave(); $('lobby-error').textContent = '서버와 클라이언트 버전이 다릅니다. 새로고침 후 다시 접속하세요.'; return; }
     // 벽은 바뀔 때만, 규칙과 맵은 접속 직후에만 온다. 빠진 값은 같은 방의 이전 스냅샷에서 이어 쓴다.
     const wire = message as SnapshotWire;
     const previous = snapshot?.room === wire.room ? snapshot : undefined;
@@ -323,8 +323,6 @@ function updateUi() {
   $('room-code').textContent = s.room;
   $('mission-state').textContent = ended ? '작전 종료' : s.phase === 'active' ? '진행 중' : '투입 대기';
   $('elapsed').textContent = time(s.elapsed);
-  $('pulse').textContent = time(s.nextPulse);
-  $('pulse-label').classList.toggle('danger', s.nextPulse < 30);
   $('primary-count').textContent = `${s.facilities.filter(f => f.hp <= 0).length}/3`;
   $('secondary-count').textContent = `${s.supplies.filter(f => f.objective && f.collected).length}/2`;
   $('facility-list').innerHTML = s.facilities.map(f => `<span class="${f.hp <= 0 ? 'done' : ''}">${f.hp <= 0 ? '✓' : '◇'} 0${f.id}</span>`).join('');

@@ -69,8 +69,8 @@ function snapshot(): Snapshot {
   const walls = new Uint8Array(40 * 30);
   walls[10 * 40 + 10] = 1;
   return {
-    type: 'snapshot', version: 3, room: 'ROOM01', you: 'pilot', now: 10, elapsed: 5,
-    phase: 'active', result: null, pulse: 0, nextPulse: 595,
+    type: 'snapshot', version: 4, room: 'ROOM01', you: 'pilot', now: 10, elapsed: 5,
+    phase: 'active', result: null,
     walls: Buffer.from(walls).toString('base64'), mapRevision: 0,
     extraction: { x: 1080, y: 1130, progress: 0, duration: 20, unlocked: false },
     map: { width: 1920, height: 1440, cell: 48, columns: 40, rows: 30, campX: 300, campY: 730 },

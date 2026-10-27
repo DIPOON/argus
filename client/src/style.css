@@ -829,10 +829,6 @@ input::placeholder {
   color:#dce5ce
 }
 
-.timers .danger b {
-  color:var(--red)
-}
-
 .map-bottom {
   position:absolute;
   bottom:15px;
