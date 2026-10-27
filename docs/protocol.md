@@ -1,4 +1,4 @@
-# Argus protocol v4
+# Argus protocol v5
 
 2026-10-09. JSON over HTTP + WebSocket, UTF-8. 좌표 단위는 월드 단위, 시간은 서버 초, 각도는 라디안이다. 서버는 좌표를 4096분의 1 단위 고정소수점 정수로 계산하고, 좌표와 몸 반지름은 소수 둘째 자리로 반올림해 보낸다. 딱 절반이면 0에서 먼 쪽으로 간다(0.125는 0.13). 4096분의 1 단위에는 0.125처럼 소수 셋째 자리가 딱 5인 값이 실제로 있다. 원점은 왼쪽 위다. X는 오른쪽, Y는 아래쪽이다. 서버는 1/30초 틱으로 진행하며, 시간 필드는 세 가지다.
 
@@ -6,7 +6,9 @@
 - **규칙 값**: `rules.deploy`, `rules.parryFollowupSeconds`, `rules.skills`의 `contactAfter`·`activeSeconds`·`duration`, `extraction.duration`. 설정한 초를 그대로 보낸다. 서버는 이 기간을 틱으로 올려 세므로, 30을 곱해도 틱 수가 되지 않을 수 있다. 기술의 기간은 모두 `startedAt`부터 잰 초이고 각각 올린다. 예를 들어 `contactAfter` 0.18초는 6틱(0.2초)이다. `parryFollowupSeconds`만은 따로 올리지 않는다. `startedAt`부터 `activeSeconds + parryFollowupSeconds`를 합친 뒤 틱으로 올리고, 그 시각을 기술 객체의 `followupUntil`로 보낸다. `activeUntil`에 반격 시간을 따로 더하면 반격 끝이 한 틱까지 어긋나므로 `followupUntil`을 쓴다. 지금 수치로 센 예는 [전투 명세의 코드 읽기 절](combat.md#코드-읽기)에 있다.
 - **탈출 진행도**: `extraction.progress`. 반 틱 단위로 센 값을 초로 바꿔 소수 둘째 자리로 반올림한다. 반 틱 간격(1/60초 ≈ 0.017초)이 반올림 오차(최대 0.005초)의 두 배보다 크므로, 값에 60을 곱해 반올림하면 정확한 반 틱 수가 된다.
 
-`/health`의 `protocol`과 snapshot의 `version`은 4이다.
+`/health`의 `protocol`과 snapshot의 `version`은 5이다.
+
+v4 → v5(2026-10-28): 지도는 분대가 본 칸만 보낸다. `walls`에 분대가 아직 보지 못한 칸 `3`이 늘었고, 그런 칸의 실제 값은 보내지 않는다. `mapRevision`은 벽이 부서질 때뿐 아니라 분대가 새 칸을 볼 때도 바뀐다. `facilities`와 `supplies`는 본 칸에 있는 것만 담고, `extraction`은 그 칸을 보기 전까지 `null`이다. `deploy`는 본 칸에만 받는다(아래 입력 절).
 
 v3 → v4(2026-10-27): 전역 충격을 없애 `pulse`와 `nextPulse`를 뺐다. `supplies`에 보급 종류 `kind`(`camp`·`field`·`objective`)와 남은 횟수 `uses`(늘 정수, 다 쓴 상자는 `0`)가 늘었다. 시설을 부수면 그 자리에 보급(`field`)이 새로 생기고, `id`는 앞의 보급 다음 번호로 이어진다.
 
@@ -28,7 +30,7 @@ v3 안에서 추가(2026-10-21): 대원과 적에 예측용 좌표 `rawX`, `rawY
 
 v1 → v2: 총기·탄창·재장전·보조 장비·패시브 필드를 제거하고 네 슬롯의 근접 기술과 마나로 전환했다.
 
-버전 정책: 하위 버전 호환은 유지하지 않는다. 프로토콜 버전이 올라가면 공식 클라이언트를 함께 갱신해 배포한다. 서드파티 클라이언트는 `/health`의 `protocol`과 스냅샷의 `version`을 확인하고, 지원 버전과 다르면 접속을 멈추고 갱신해야 한다. 현재 공식 클라이언트는 `version`이 3이 아니면 접속을 끊고 새로고침을 안내한다.
+버전 정책: 하위 버전 호환은 유지하지 않는다. 프로토콜 버전이 올라가면 공식 클라이언트를 함께 갱신해 배포한다. 서드파티 클라이언트는 `/health`의 `protocol`과 스냅샷의 `version`을 확인하고, 지원 버전과 다르면 접속을 멈추고 갱신해야 한다. 현재 공식 클라이언트는 `version`이 5가 아니면 접속을 끊고 새로고침을 안내한다.
 
 ## 참가와 복구
 
@@ -79,7 +81,7 @@ slots를 생략하면 `["strike","parry","grab","strike"]`. 길이는 정확히 
 {"type":"reportNote","tick":1234,"text":"적이 벽을 지나간 것 같아요"}
 ```
 
-`deploy`는 waiting 상태에서 공개된 벽과 겹치지 않는 위치를 선택할 수 있다. 이미 투입 중인 대원이 다시 요청하면 처음 고른 자리와 시간대로 진행하고 오류를 보내지 않는다. 요청 응답으로 숨겨진 적의 점유 여부가 드러나지 않도록 적과의 겹침은 실제 투입 직전에 검사한다. 투입 준비는 5초이고 선택만으로 시야가 생기지 않는다. 도착 시 적이 막고 있으면 원래 지점이 보이는 가장 가까운 빈 자리로 투입하고, 그런 자리가 없으면 캠프로, 캠프도 막혔으면 반지름 640까지 넓혀 찾는다. 실패로 되돌리지 않으므로 투입 결과로 숨겨진 적의 위치를 알 수 없다. 전멸 검사가 증원보다 우선한다.
+`deploy`는 waiting 상태에서 분대가 본 칸(`walls` 값이 3이 아닌 칸)의, 본 칸의 벽과 겹치지 않는 위치를 선택할 수 있다. 보지 못한 칸은 빈 땅으로 본다. 그래서 몸이 보지 못한 칸에 걸쳐도 받아들인다. 이미 투입 중인 대원이 다시 요청하면 처음 고른 자리와 시간대로 진행하고 오류를 보내지 않는다. 요청 응답으로 숨겨진 적의 점유 여부나 보지 못한 지형이 드러나지 않도록 적과 보지 못한 벽과의 겹침은 실제 투입 직전에 검사한다. 투입 준비는 5초이고 선택만으로 시야가 생기지 않는다. 도착 시 적이나 보지 못한 벽이 막고 있으면 원래 지점이 보이는 가장 가까운 빈 자리로 투입하고, 그런 자리가 없으면 캠프로, 캠프도 막혔으면 반지름 640까지 넓혀 찾는다. 실패로 되돌리지 않으므로 투입 결과로 숨겨진 적의 위치를 알 수 없다. 전멸 검사가 증원보다 우선한다.
 
 `loadout`은 최초 투입 시작 전 waiting 상태에서만 허용한다. 사망·증원·재접속으로 다시 바꿀 수 없다. `ping`은 같은 sent의 pong으로 응답하며 클라이언트 시간은 게임 판정에 사용하지 않는다.
 
@@ -89,23 +91,25 @@ slots를 생략하면 `["strike","parry","grab","strike"]`. 길이는 정확히 
 
 연결 직후 한 번, 이후 10Hz(0.1초 간격)로 스냅샷을 전송한다. 한 번이 한 틱 늦게 나가면 다음 것이 그만큼 일찍 나가 평균 간격을 지킨다. 느린 수신자에게 쌓인 오래된 스냅샷은 버린다.
 
-작전 중 바뀌지 않거나 드물게 바뀌는 `walls`, `rules`, `map`은 필요할 때만 담는다. 서버는 그 정보를 담은 스냅샷을 **실제로 보낸 뒤에야** 수신자가 받았다고 기록한다. 그래서 담긴 스냅샷이 느린 연결에서 버려져도 다음 스냅샷에 다시 담기고, 클라이언트가 처음 받는 스냅샷에는 세 값이 모두 있다. `mapRevision`은 매번 온다. 클라이언트는 이 값이 바뀌면 함께 온 `walls`로 벽을 갱신하고, 세 값이 빠진 스냅샷에서는 이전 값을 그대로 쓴다.
+분대가 본 칸은 캠프(반지름 260)와 살아 있는 대원(반지름 410)의 시야로 정한다. 칸 가운데가 시야 반경 안이고 가운데까지 벽에 막히지 않은 칸, 그리고 가운데로 가는 선이 처음 닿는 벽이 바로 그 칸인 벽 칸(앞면이 보이는 벽)이다. 처음에는 캠프 둘레만 본 칸이고, 한 번 본 칸은 계속 본 칸이다. 본 칸의 벽이 부서지면 그대로 알린다.
+
+작전 중 바뀌지 않거나 가끔 바뀌는 `walls`, `rules`, `map`은 필요할 때만 담는다. 서버는 그 정보를 담은 스냅샷을 **실제로 보낸 뒤에야** 수신자가 받았다고 기록한다. 그래서 담긴 스냅샷이 느린 연결에서 버려져도 다음 스냅샷에 다시 담기고, 클라이언트가 처음 받는 스냅샷에는 세 값이 모두 있다. `mapRevision`은 매번 온다. 클라이언트는 이 값이 바뀌면 함께 온 `walls`로 벽을 갱신하고, 세 값이 빠진 스냅샷에서는 이전 값을 그대로 쓴다.
 
 | 필드 | 내용 |
 | --- | --- |
-| type, version, room, you | snapshot, 3, 방 코드, 수신자 공개 ID |
+| type, version, room, you | snapshot, 5, 방 코드, 수신자 공개 ID |
 | now, elapsed | 방 시간 / 첫 투입 이후 임무 시간. 임무 종료 후 elapsed 고정. 둘 다 틱 시각이다(맨 위 시간 필드 참고) |
 | phase, result | staging / active / ended, null / success / failure |
 | map | width, height, cell, columns, rows, campX, campY. 아직 받지 못했을 때만 온다 |
-| walls, mapRevision | 행 우선 byte 타일 배열의 Base64 / 파괴 버전. 0 빈 지면, 1 파괴 가능, 2 맵 경계. walls는 그 판을 아직 받지 못했을 때만 온다 |
+| walls, mapRevision | 행 우선 byte 타일 배열의 Base64 / 판 번호. 0 빈 지면, 1 파괴 가능, 2 맵 경계, 3 분대가 아직 보지 못한 칸. 판 번호는 벽이 부서지거나 분대가 새 칸을 볼 때 바뀐다. walls는 그 판을 아직 받지 못했을 때만 온다 |
 | rules | deploy, speed, playerRadius, guardHalfAngle, parryFollowupSeconds, skills. 아직 받지 못했을 때만 온다 |
 | sight | 팀 시야 다각형 배열. 다각형은 `[x0,y0,x1,y1,…]`이며 좌표는 정수다(딱 절반이면 0에서 먼 쪽으로 반올림) |
 | players | 분대 전체 상태 |
 | enemies | 팀 시야에 실제 들어온 적과 기술 예고 |
 | effects | 시야 안의 효과: id, x, y(소수 둘째 자리로 반올림), kind, until(사라지는 시각, 초) |
-| facilities | 공개 목표: id, x, y, hp, maxHp |
-| supplies | 공개 보급: id, x, y, kind, objective, collected, uses, cooldown. kind는 camp·field·objective이고 시설 자리 상자도 field다. uses는 남은 횟수(정수)로 다 쓴 상자는 0, 부목표 상자는 1에서 회수하면 0이다. 시설을 부수면 그 자리에 새 보급이 생긴다. cooldown은 수신 대원 기준 |
-| extraction | x, y, progress, duration, unlocked |
+| facilities | 분대가 본 칸에 있는 시설: id, x, y, hp, maxHp |
+| supplies | 분대가 본 칸에 있는 보급: id, x, y, kind, objective, collected, uses, cooldown. kind는 camp·field·objective이고 시설 자리 상자도 field다. uses는 남은 횟수(정수)로 다 쓴 상자는 0, 부목표 상자는 1에서 회수하면 0이다. 시설을 부수면 그 자리에 새 보급이 생긴다. cooldown은 수신 대원 기준 |
+| extraction | x, y, progress, duration, unlocked. 분대가 그 칸을 보기 전에는 null |
 | notices | 최근 안내 최대 6개: id, at(나온 시각, 초), text. id는 방마다 1부터 늘어나는 순번이라 같은 틱에 같은 문구가 와도 다르다. 클라이언트는 id로 새 안내를 가린다 |
 
 `rules.skills`는 기본기별 `id, kind, mana, contactAfter, activeSeconds, duration, range, halfWidth, guardsFront, hasFollowup, singleTarget, breaksStructures, followupBreaksStructures`를 제공한다. kind는 strike / block / channel이다. 뒤의 다섯 값은 기술별 동작이다. `guardsFront`는 먼저 치지 않고 앞에서 들어오는 공격에만 반응함, `hasFollowup`은 유효 시간 뒤 상성 없는 반격, `singleTarget`은 가장 가까운 한 명만 판정, `breaksStructures`는 접촉 중에 시설과 벽을 부숨, `followupBreaksStructures`는 반격이 시설과 벽을 부숨을 뜻한다. 동작은 id가 아니라 이 값으로 정해진다. 이 수치를 클라이언트가 돌려보내도 서버 설정을 바꾸지 않는다.
@@ -140,6 +144,6 @@ aim, startedAt, contactAt, activeUntil, followupUntil, endsAt, range, halfWidth
 
 상성·합산·피해 규칙은 [전투 명세](combat.md)에 있다. 클라이언트는 모양·진행률·예고를 그리며 판정 결과를 결정하지 않는다. `effects.kind`는 break / partial / draw / guard / hit / hurt / heal / deploy이며 표시용이다.
 
-시야에서 사라진 적은 죽었거나 시야를 벗어났을 수 있다. 현재 목록에 없는 적의 위치와 기술 예고를 이전 스냅샷으로 계속 보여주지 않는다. 사망·대기 대원은 추가 시야를 제공하지 않는다. 공개 맵·시설·보급 상태는 별개다.
+시야에서 사라진 적은 죽었거나 시야를 벗어났을 수 있다. 현재 목록에 없는 적의 위치와 기술 예고를 이전 스냅샷으로 계속 보여주지 않는다. 사망·대기 대원은 추가 시야를 제공하지 않는다. 분대가 본 칸의 지형·시설·보급 상태는 이와 별개로, 지금 보이지 않아도 계속 보낸다.
 
 거절된 투입과 제보에는 `{ "type":"error", "message":"…" }`가 올 수 있다. 입력·장비 거절마다 오류를 보내지는 않으므로 다음 스냅샷으로 확인한다. 오류 안내와 `pong`, `reported`, `reportNoted`는 스냅샷과 다른 통로로 보내며, 느린 연결에서 스냅샷을 버릴 때도 버리지 않는다. 스냅샷 JSON의 속성 순서는 정해져 있지 않으므로 이름으로 읽는다.
