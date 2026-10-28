@@ -20,7 +20,8 @@ internal static class CombatTests
         tests.Add(new TestCase("A complete break protects C irrespective of player iteration order", ProtectBystander));
         tests.Add(new TestCase("An expired response cannot be saved up toward a later tier-two attack", ExpiredContribution));
         tests.Add(new TestCase("Prepared independent effects from one owner also count toward the total", IndependentActions));
-        tests.Add(new TestCase("Partial counters deal one to players and preserve each elite's distinct response", PartialVariants));
+        tests.Add(new TestCase("Partial counters cost the player one and deal the skill's partial damage, which can finish an elite", PartialVariants));
+        tests.Add(new TestCase("A breaker and a warden fall to two solo parries of their tier-two strike", PartialsFinishElites));
         tests.Add(new TestCase("Tier-two draws deal two to players and one to the elite only once", EliteDraw));
         tests.Add(new TestCase("Reduced HP leaves skill tiers unchanged; a weak skill can still be fully broken", WeakPhase));
         tests.Add(new TestCase("Wall cover prevents melee hits between otherwise clear endpoints", Cover));
@@ -32,7 +33,7 @@ internal static class CombatTests
         tests.Add(new TestCase("A new skill id with guard flags still guards and follows up like a parry", SkillFlags));
         tests.Add(new TestCase("A flank outside an enemy action's area deals ordinary damage without its affinity", Flank));
         tests.Add(new TestCase("A player the shield shove reaches answers it with affinity even beside the shield", ShoveReach));
-        tests.Add(new TestCase("A draw kill is credited to the drawing player, not a partial responder", DrawCredit));
+        tests.Add(new TestCase("A kill goes to the player whose draw or partial damage finished the elite", DrawCredit));
         tests.Add(new TestCase("A grab takes the nearest enemy at contact, including one that came closer during windup", GrabRetarget));
         tests.Add(new TestCase("A grab picks its target on the contact tick itself and forgets one that left its reach", GrabContactTarget));
     }
@@ -299,6 +300,7 @@ internal static class CombatTests
 
     private static void PartialVariants()
     {
+        // 2티어 행동에 맞는 대응이 하나뿐이면(부분 대응) 대원은 피해 1을 받고 기술이 중단된다. 적은 기술별 부분 대응 피해를 받는다.
         for (int partial = 0; partial <= 1; partial++)
         {
             Fixture f = new Fixture();
@@ -308,17 +310,46 @@ internal static class CombatTests
             Near(enemy.Hp, 2 - partial);
             Near(f.Player.Hp, 5);
             Check(parry.Cancelled);
+            // 체력 1인 적에게 다시 부분 대응한다. 부분 대응 피해가 있으면 그 피해로 쓰러지고, 처치는 부분 대응한 대원이 가져간다.
             enemy.Hp = 1;
             enemy.Action = new EnemyAction(999, new EnemySkill("strike", 2, partial, 0.05, 85, 25), Angle.FromRadians(Math.PI), f.Match.Tick);
             Prepare(f, f.Player, "parry");
             Advance(f.Match, 0.1);
-            Near(enemy.Hp, 1);
+            Near(enemy.Hp, 1 - partial);
+            Equal(f.Player.Kills, partial);
         }
         Fixture none = new Fixture();
         Enemy uncountered = Threat(none, "strike", 2);
         Advance(none.Match, 0.5);
         Near(none.Player.Hp, 4);
         Near(uncountered.Hp, 2);
+    }
+
+    private static void PartialsFinishElites()
+    {
+        // 엘리트의 2티어 타격을 혼자 받아치기로 두 번 막으면(부분 대응) 쓰러진다. 대원은 매번 피해 1을 받는다.
+        // 2026-10-28 전에는 부분 대응으로 쓰러지지 않았다. 분쇄자는 피해가 없었고, 철위병은 체력 1에서 멈췄다.
+        EnemyDefinition[] elites = new EnemyDefinition[] { EnemyDefinition.Breaker, EnemyDefinition.Warden };
+        for (int i = 0; i < elites.Length; i++)
+        {
+            Fixture f = new Fixture();
+            Enemy elite = Target(f, elites[i]);
+            EnemySkill strike = elites[i].Skills[0];
+            Equal(strike.Tier, 2);
+            for (int round = 1; round <= 2; round++)
+            {
+                f.Player.Hp = f.Player.MaxHp;
+                elite.Action = new EnemyAction(990 + round, strike, Angle.FromRadians(Math.PI), f.Match.Tick);
+                // 예고가 끝나기 조금 전에 받아치기를 시작해, 타격이 닿을 때 방어가 유효하게 한다.
+                Advance(f.Match, strike.Windup - 0.2);
+                Prepare(f, f.Player, "parry");
+                Advance(f.Match, 0.4);
+                Near(f.Player.Hp, f.Player.MaxHp - 1);
+                Near(elite.Hp, 2 - round);
+            }
+            Equal(f.Player.Kills, 1);
+            Check(!f.Match.Enemies.Contains(elite), $"{elites[i].Name}이 쓰러지고도 남아 있습니다");
+        }
     }
 
     private static void EliteDraw()
@@ -640,7 +671,7 @@ internal static class CombatTests
 
     private static void DrawCredit()
     {
-        // 같은 2티어 공격에 한 명은 비기고 다른 한 명은 부분 대응했다. 비김 피해로 쓰러뜨린 대원이 처치를 가져간다.
+        // 같은 2티어 공격에 한 명은 비기고 다른 한 명은 부분 대응했다. 부분 대응 피해가 없는 행동이라 비김 피해로 쓰러뜨린 대원이 처치를 가져간다.
         Fixture f = new Fixture();
         Player partner = Ally(f, "partner");
         Enemy elite = Threat(f, "strike", 2);
@@ -651,6 +682,21 @@ internal static class CombatTests
         Near(elite.Hp, 0);
         Equal(f.Player.Kills, 1);
         Equal(partner.Kills, 0);
+
+        // 부분 대응 피해가 있는 행동이면 그 피해를 먼저 준다. 그 피해로 쓰러지므로 부분 대응한 대원이 처치를 가져가고,
+        // 비김 피해는 더하지 않는다. 대원이 받는 피해는 그대로다(비긴 대원 2, 부분 대응한 대원 1).
+        Fixture g = new Fixture();
+        Player second = Ally(g, "partner");
+        Enemy finished = Threat(g, "strike", 2, 1);
+        finished.Hp = 1;
+        Prepare(g, g.Player, "strike");
+        Prepare(g, second, "parry");
+        Advance(g.Match, 0.08);
+        Near(finished.Hp, 0);
+        Equal(g.Player.Kills, 0);
+        Equal(second.Kills, 1);
+        Near(g.Player.Hp, g.Player.MaxHp - 2);
+        Near(second.Hp, second.MaxHp - 1);
     }
 
     private static void GrabRetarget()

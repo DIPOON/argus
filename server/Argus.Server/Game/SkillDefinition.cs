@@ -67,6 +67,7 @@ public sealed class EnemySkill
 {
     public string Kind { get; }
     public int Tier { get; }
+    // 2티어 행동에 맞는 대응이 하나뿐일 때(부분 대응) 적이 받는 피해다. 이 피해로도 쓰러진다.
     public int PartialDamage { get; }
     public double Windup { get; }
     // 사거리와 반폭은 클라이언트에 그대로 보내는 설정 값이고, 판정은 고정소수점 값으로 한다.
@@ -150,16 +151,16 @@ public sealed class EnemyDefinition
             new EnemySkill("channel", 1, 0, 0.95, 60, 13)
         });
 
-    // 분쇄자는 타격만 강화한다. 부분 방어로는 분쇄자에게 피해를 주지 못한다.
+    // 분쇄자는 타격만 강화한다. 혼자 받아치기로 막으면(부분 대응) 피해 1을 받는다.
     public static readonly EnemyDefinition Breaker = new EnemyDefinition("breaker", "분쇄자", Fixed.FromInt(22), 2, 82,
         new EnemySkill[]
         {
-            new EnemySkill("strike", 2, 0, 1.1, 82, 24),
+            new EnemySkill("strike", 2, 1, 1.1, 82, 24),
             new EnemySkill("block", 1, 0, 0.95, 70, 20),
             new EnemySkill("channel", 1, 0, 0.95, 68, 18)
         });
 
-    // 철위병은 타격과 방어를 강화한다. 부분 파훼로 체력 1까지 깎을 수 있다.
+    // 철위병은 타격과 방어를 강화한다. 두 행동 모두 부분 대응하면 피해 1을 받는다.
     // 몸 반지름은 칸의 절반(24)보다 작게 둔다. 반지름이 24면 적이 따라가는 칸 가운데 줄이 벽 모서리에 딱 붙어,
     // 반올림으로 조금만 벗어나도 모서리에 걸린 채 멈춘다(EncounterTests의 NarrowGap).
     public static readonly EnemyDefinition Warden = new EnemyDefinition("warden", "철위병", Fixed.FromInt(23), 2, 76,

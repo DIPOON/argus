@@ -266,9 +266,9 @@ public sealed partial class Match
 
         double enemyDamage = 0;
         // 비김 피해로 쓰러뜨리면 비긴 대원 중 가장 먼저 기술을 시작한 대원이 처치를 가져간다.
-        // 부분 대응은 체력을 1 아래로 내리지 않으므로 처치와 관계없다.
+        // 부분 대응 피해로 쓰러뜨리면 부분 대응한 대원 중 가장 먼저 기술을 시작한 대원이 가져간다.
         Response? drawCredit = null;
-        bool partial = false;
+        Response? partialCredit = null;
         for (int i = 0; i < Players.Count; i++)
         {
             Player player = Players[i];
@@ -316,8 +316,11 @@ public sealed partial class Match
             }
             if (priority == 2)
             {
-                // 2티어에 하나만 맞춘 경우다. 이 구현의 기본 기술은 중단되고 적은 살아남는다.
-                partial = true;
+                // 2티어에 하나만 맞춘 경우다. 이 구현의 기본 기술은 중단되고, 적은 기술별 부분 대응 피해를 받는다.
+                if (best != null && (partialCredit == null || best.Action.Id < partialCredit.Action.Id))
+                {
+                    partialCredit = best;
+                }
                 CancelActions(player);
                 Hurt(player, 1);
                 Effect(enemy.Position, "partial", 0.65);
@@ -338,10 +341,11 @@ public sealed partial class Match
                 Hurt(player, attack.Skill.Tier);
             }
         }
-        if (partial)
+        // 부분 대응 피해는 기술별 설정이고 대응자가 여러 명이어도 한 번만 준다. 이 피해로도 엘리트가 쓰러진다.
+        // 같은 공격에 비김이 함께 있으면 부분 대응 피해를 먼저 준다. 그 피해로 쓰러지면 비김 피해는 더하지 않는다.
+        if (partialCredit != null && attack.Skill.PartialDamage > 0)
         {
-            // 부분 대응 효과는 기술별 설정이다. 이것만으로는 엘리트를 처치하지 않는다.
-            enemy.Hp = Math.Max(1, enemy.Hp - attack.Skill.PartialDamage);
+            DamageEnemy(enemy, attack.Skill.PartialDamage, partialCredit.Player, "partial");
         }
         if (enemyDamage > 0 && drawCredit != null)
         {
