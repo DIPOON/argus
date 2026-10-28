@@ -40,6 +40,9 @@ public sealed class Player
     public long LastSequence = -1;
     // 이동 방향이다. 길이는 1 이하이고, 틱마다 이 방향으로 이동 속도만큼 움직인다.
     public FixedVector Move;
+    // 이 대원의 시야로 마지막에 본 칸을 넓힌 자리다(Match.Explore). 그 자리에서 반 칸 넘게 움직이면 다시 둘러본다.
+    public FixedVector ExploreOrigin;
+    public bool HasExploreOrigin;
     public long Connection;
     public bool Connected;
     // 연결이 끊긴 틱이다. 연결되어 있으면 null이다.

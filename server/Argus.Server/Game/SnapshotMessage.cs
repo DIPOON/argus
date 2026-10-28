@@ -34,8 +34,12 @@ public sealed class PersonalSnapshot
     // 보급 대기 시간이 대원마다 달라 보급 목록 전체를 수신자별 값으로 다룬다.
     public List<SupplySnapshot> Supplies { get; set; } = new List<SupplySnapshot>();
     // 벽은 수신자가 아직 받지 못한 판일 때만, 맵과 규칙은 아직 받지 못했을 때만 담는다.
+    // 벽은 받은 판이 있으면 그 뒤로 바뀐 칸만(WallChanges), 처음이거나 바뀐 칸이 많으면 배열 전체(Walls)를 담는다. 둘은 함께 오지 않는다.
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public byte[]? Walls { get; set; }
+    // 받은 판 뒤로 바뀐 칸이다. [칸 번호, 값, 칸 번호, 값, …] 순서이고 앞에서부터 차례로 적용한다. 같은 칸이 두 번 나올 수 있다.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int[]? WallChanges { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MapSnapshot? Map { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

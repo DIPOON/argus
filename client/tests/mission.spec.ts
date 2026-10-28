@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import type { Enemy, Guest, Player, Position, Snapshot } from '../src/types';
+import { applyWallChanges, type Enemy, type Guest, type Player, type Position, type Snapshot } from '../src/types';
 
 // 실제 HTTP 참가와 WebSocket 입력만 사용한다. 서버 상태를 직접 수정하지 않는다.
 function route(snapshot: Snapshot, from: Position, goal: Position): Position {
@@ -118,8 +118,11 @@ test('a squad counters enemies and completes the mission using only public gamep
       const value = JSON.parse(String(event.data));
       if (value.type !== 'snapshot') return;
       // 벽·규칙·맵은 바뀌거나 처음일 때만 온다(protocol v3부터). 빠진 값은 이전 스냅샷에서 이어 쓴다.
+      // 벽은 전체가 오거나 받은 배열에서 바뀐 칸만 온다(protocol v5). 바뀐 칸은 이전 배열에 적용한다.
       const previous = client.snapshot;
-      client.snapshot = { ...value, walls: value.walls ?? previous?.walls, rules: value.rules ?? previous?.rules, map: value.map ?? previous?.map };
+      let walls = value.walls ?? previous?.walls;
+      if (!value.walls && value.wallChanges && walls) walls = applyWallChanges(walls, value.wallChanges);
+      client.snapshot = { ...value, walls, rules: value.rules ?? previous?.rules, map: value.map ?? previous?.map };
     });
     await new Promise<void>(resolve => ws.addEventListener('open', () => resolve()));
     ws.send(JSON.stringify({ type: 'hello', room: guest.room, token: guest.token }));

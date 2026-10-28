@@ -47,6 +47,16 @@ export interface Snapshot {
   sight: number[][]; notices: { id: number; at: number; text: string }[];
 }
 // 서버가 보내는 그대로의 스냅샷. 벽은 바뀔 때만, 규칙과 맵은 접속 직후에만 담긴다(protocol v3부터).
-export type SnapshotWire = Omit<Snapshot, 'walls' | 'rules' | 'map'> & Partial<Pick<Snapshot, 'walls' | 'rules' | 'map'>>;
+// 벽은 전체(walls)가 오거나, 이미 받은 배열에서 바뀐 칸만(wallChanges: [칸 번호, 값, …], 앞에서부터 적용) 온다(protocol v5).
+export type SnapshotWire = Omit<Snapshot, 'walls' | 'rules' | 'map'> & Partial<Pick<Snapshot, 'walls' | 'rules' | 'map'>> & { wallChanges?: number[] };
+
+// base64 벽 배열에 바뀐 칸([칸 번호, 값, …])을 앞에서부터 적용한 새 base64 배열이다. 같은 칸이 두 번 나오면 뒤의 값이 남는다.
+export function applyWallChanges(walls: string, changes: readonly number[]): string {
+  const tiles = Uint8Array.from(atob(walls), c => c.charCodeAt(0));
+  for (let i = 0; i + 1 < changes.length; i += 2) tiles[changes[i]] = changes[i + 1];
+  let binary = '';
+  for (const tile of tiles) binary += String.fromCharCode(tile);
+  return btoa(binary);
+}
 export interface Guest { room: string; id: string; token: string }
 export interface Control { x: number; y: number; aim: number; slot: number }

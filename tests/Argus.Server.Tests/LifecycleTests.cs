@@ -92,19 +92,20 @@ internal static class LifecycleTests
         // 몸이 안 본 벽에 걸리는 자리도 받아들이고, 5초 뒤 착지할 때 실제 벽을 보고 가까운 빈 자리로 옮긴다(FindLanding).
         Match match = new Match("TEST01", new Rules { MaxEnemies = 0 }, 73);
         Player player = match.Join("p", "pilot")!;
-        // (470, 540)은 본 칸(9, 11)이지만, 몸(반지름 13)이 오른쪽의 안 본 벽 칸(10, 11)에 걸린다.
-        FixedVector target = FixedVector.FromInt(470, 540);
+        // (470, 482)는 본 칸(9, 10)이지만, 몸(반지름 13)이 오른쪽의 안 본 벽 칸(10, 10)에 걸린다.
+        FixedVector target = FixedVector.FromInt(470, 482);
+        FixedVector unseenWall = FixedVector.FromInt(10 * BattleMap.Cell + 1, 10 * BattleMap.Cell + 1);
         Check(match.Explored(target));
-        Check(match.Map.Solid(10, 11) && !match.Explored(FixedVector.FromInt(10 * BattleMap.Cell + 1, 11 * BattleMap.Cell + 1)));
+        Check(match.Map.Solid(10, 10) && !match.Explored(unseenWall));
         Check(!match.Map.CanStand(target, Rules.PlayerRadius));
-        Check(match.Deploy(player, 470, 540), "안 본 벽에 걸리는 자리를 거절했습니다");
+        Check(match.Deploy(player, 470, 482), "안 본 벽에 걸리는 자리를 거절했습니다");
         Advance(match, match.Rules.DeploySeconds);
         Equal(player.State, "alive");
         Check(player.Position != target, "벽에 걸린 자리에 그대로 착지했습니다");
         Check(match.Map.CanStand(player.Position, Rules.PlayerRadius));
         Check(Distance(player.Position, target) <= 128, "투입 지점에서 너무 멀리 옮겨졌습니다");
         // 착지한 대원의 시야로 그 벽도 본 칸이 된다.
-        Check(match.Explored(FixedVector.FromInt(10 * BattleMap.Cell + 1, 11 * BattleMap.Cell + 1)));
+        Check(match.Explored(unseenWall));
     }
 
     private static void RepeatedDeploy()
@@ -770,15 +771,15 @@ internal static class LifecycleTests
         byte[] body = Snapshot.SerializeShared(Snapshot.CreateShared(f.Match), RoomHost.Json);
         JsonObject shared = JsonNode.Parse(body)!.AsObject();
         // 공통 몸통에는 수신자별 값이 들어가지 않는다. SnapshotMessage에 그런 속성이 없다.
-        string[] personalKeys = new string[] { "you", "supplies", "walls", "map", "rules" };
+        string[] personalKeys = new string[] { "you", "supplies", "walls", "wallChanges", "map", "rules" };
         for (int i = 0; i < personalKeys.Length; i++)
         {
             Check(!shared.ContainsKey(personalKeys[i]), $"공통 부분에 수신자별 값 {personalKeys[i]}이 섞였습니다");
         }
 
         // 수신자마다 공통 몸통에 자기 값만 이어 붙인다. 조종사는 벽·규칙·맵을 아직 받지 못했고 정찰병은 받았다.
-        byte[] pilotBytes = Snapshot.Combine(body, Snapshot.CreatePersonal(f.Match, f.Player, true, true), RoomHost.Json);
-        byte[] scoutBytes = Snapshot.Combine(body, Snapshot.CreatePersonal(f.Match, ally, false, false), RoomHost.Json);
+        byte[] pilotBytes = Snapshot.Combine(body, Snapshot.CreatePersonal(f.Match, f.Player, Snapshot.NoWallsReceived, true), RoomHost.Json);
+        byte[] scoutBytes = Snapshot.Combine(body, Snapshot.CreatePersonal(f.Match, ally, f.Match.WallsRevision, false), RoomHost.Json);
         JsonObject pilot = JsonNode.Parse(pilotBytes)!.AsObject();
         JsonObject scout = JsonNode.Parse(scoutBytes)!.AsObject();
         Equal((string)pilot["you"]!, f.Player.Id);
@@ -1193,16 +1194,63 @@ internal static class LifecycleTests
         Check(!Carries(lean, "walls") && !Carries(lean, "rules") && !Carries(lean, "map"), "보낸 정보를 또 보냅니다");
         Check(Carries(lean, "mapRevision"));
         peer.MarkSent(lean);
-        // 벽이 부서져 판 번호가 바뀌면 벽만 다시 보낸다. 방마다 맵이 다르므로 부술 수 있는 벽(체력 3)을 하나 찾아 부순다.
-        int breakable = Array.IndexOf(room.Match.Map.Tiles, (byte)1);
-        Check(breakable >= 0, "부술 수 있는 벽이 없습니다");
-        Check(room.Match.Map.Damage(breakable, 3));
+        // 본 벽이 부서지면 판 번호가 바뀌어 벽을 다시 보낸다. 이미 받은 배열이 있으므로 바뀐 칸만 보낸다.
+        // 방마다 맵이 다르므로 본 칸 가운데 부술 수 있는 벽(체력 3)을 찾는다. 캠프 둘레에 없으면 대원을 투입해 시설 울타리를 둘러본다.
+        int breakable;
         lock (room.Gate)
         {
+            breakable = SeenBreakable(room.Match);
+            if (breakable < 0)
+            {
+                Match match = room.Match;
+                Check(match.Deploy(player, match.Layout.Camp.X.ToDouble(), match.Layout.Camp.Y.ToDouble()));
+                Advance(match, match.Rules.DeploySeconds + 0.1);
+                for (int i = 0; i < match.Facilities.Count && breakable < 0; i++)
+                {
+                    player.Position = match.Facilities[i].Position;
+                    match.Step();
+                    breakable = SeenBreakable(match);
+                }
+                RoomHost.PublishSnapshots(room);
+                peer.MarkSent(Next(peer));
+            }
+        }
+        Check(breakable >= 0, "본 칸에 부술 수 있는 벽이 없습니다");
+        lock (room.Gate)
+        {
+            Check(room.Match.Map.Damage(breakable, 3));
+            room.Match.Step();
             RoomHost.PublishSnapshots(room);
         }
         OutgoingMessage changed = Next(peer);
-        Check(Carries(changed, "walls") && !Carries(changed, "rules"), "바뀐 벽을 다시 보내지 않았습니다");
+        Check(Carries(changed, "wallChanges") && !Carries(changed, "walls") && !Carries(changed, "rules"), "바뀐 벽을 바뀐 칸으로 다시 보내지 않았습니다");
+        using (JsonDocument json = JsonDocument.Parse(changed.Bytes))
+        {
+            JsonElement changes = json.RootElement.GetProperty("wallChanges");
+            bool broken = false;
+            for (int i = 0; i < changes.GetArrayLength(); i += 2)
+            {
+                if (changes[i].GetInt32() == breakable && changes[i + 1].GetInt32() == 0)
+                {
+                    broken = true;
+                }
+            }
+            Check(broken, "부서진 벽이 바뀐 칸에 없습니다");
+        }
+    }
+
+    // 분대가 본 칸 가운데 부술 수 있는 벽 칸 번호다. 없으면 -1이다.
+    private static int SeenBreakable(Match match)
+    {
+        for (int i = 0; i < match.Map.Tiles.Length; i++)
+        {
+            FixedVector center = FixedVector.FromInt((i % match.Map.Columns) * BattleMap.Cell + 24, (i / match.Map.Columns) * BattleMap.Cell + 24);
+            if (match.Map.Tiles[i] == 1 && match.Explored(center))
+            {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private static void TokenCleanup()

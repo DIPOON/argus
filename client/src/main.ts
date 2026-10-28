@@ -1,7 +1,7 @@
 import './style.css';
 import { tickMilliseconds } from './movement';
 import { World } from './world';
-import { skillNames, type Guest, type Player, type Snapshot, type SnapshotWire, type Skill } from './types';
+import { applyWallChanges, skillNames, type Guest, type Player, type Snapshot, type SnapshotWire, type Skill } from './types';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const escape = (value: string) => value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -273,7 +273,10 @@ function connect() {
     // 벽은 바뀔 때만, 규칙과 맵은 접속 직후에만 온다. 빠진 값은 같은 방의 이전 스냅샷에서 이어 쓴다.
     const wire = message as SnapshotWire;
     const previous = snapshot?.room === wire.room ? snapshot : undefined;
-    const walls = wire.walls ?? previous?.walls, rules = wire.rules ?? previous?.rules, map = wire.map ?? previous?.map;
+    // 벽은 전체가 오거나, 받은 배열에서 바뀐 칸만 온다. 바뀐 칸은 같은 방의 이전 배열에 적용한다.
+    let walls = wire.walls ?? previous?.walls;
+    if (!wire.walls && wire.wallChanges && walls !== undefined) walls = applyWallChanges(walls, wire.wallChanges);
+    const rules = wire.rules ?? previous?.rules, map = wire.map ?? previous?.map;
     // 서버는 실제로 보낼 때까지 다시 담으므로 처음 받은 스냅샷에는 모두 있다. 그래도 빠졌으면 다음 것을 기다린다.
     if (walls === undefined || rules === undefined || map === undefined) return;
     const wasAlive = me()?.state === 'alive';

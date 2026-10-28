@@ -9,7 +9,7 @@ public static class Snapshot
     public static byte[] Create(Match match, Player recipient, JsonSerializerOptions options)
     {
         byte[] sharedJson = SerializeShared(CreateShared(match), options);
-        PersonalSnapshot personal = CreatePersonal(match, recipient, true, true);
+        PersonalSnapshot personal = CreatePersonal(match, recipient, NoWallsReceived, true);
         return Combine(sharedJson, personal, options);
     }
 
@@ -172,9 +172,16 @@ public static class Snapshot
         return rules;
     }
 
-    // 수신자마다 다른 값만 만든다. includeWalls는 이 수신자가 지금 판의 벽을 아직 받지 못했을 때,
+    // 벽 배열을 아직 받지 못한 수신자의 판 번호다.
+    public const int NoWallsReceived = -1;
+    // 바뀐 칸이 칸 수의 1/8보다 많으면 바뀐 칸 대신 벽 배열 전체를 보낸다. 바뀐 칸 하나가 JSON으로 수 두 개(칸 번호와 값)라,
+    // 이쯤에서 base64로 적은 배열 전체와 길이가 비슷해진다.
+    private const int ChangesPerFullWalls = 8;
+
+    // 수신자마다 다른 값만 만든다. knownWalls는 이 수신자가 이미 받은 벽 배열의 판 번호(받은 적이 없으면 NoWallsReceived)다.
+    // 지금 판과 같으면 벽을 담지 않고, 받은 판이 있으면 그 뒤로 바뀐 칸만, 처음이거나 바뀐 칸이 많으면 배열 전체를 담는다.
     // includeStatic은 규칙과 맵을 아직 받지 못했을 때 켠다.
-    public static PersonalSnapshot CreatePersonal(Match match, Player recipient, bool includeWalls, bool includeStatic)
+    public static PersonalSnapshot CreatePersonal(Match match, Player recipient, int knownWalls, bool includeStatic)
     {
         PersonalSnapshot personal = new PersonalSnapshot();
         personal.You = recipient.Id;
@@ -198,10 +205,19 @@ public static class Snapshot
             entry.Cooldown = Seconds(Math.Max(0, supply.ReadyTick(recipient) - match.Tick));
             personal.Supplies.Add(entry);
         }
-        if (includeWalls)
+        // 분대가 보지 못한 칸은 모름(3)으로 가린 배열이다.
+        int revision = match.WallsRevision;
+        if (knownWalls != revision)
         {
-            // 분대가 보지 못한 칸은 모름(3)으로 가린다.
-            personal.Walls = match.PublicTiles();
+            bool fewChanges = revision - knownWalls <= match.Map.Tiles.Length / ChangesPerFullWalls;
+            if (knownWalls >= 0 && knownWalls < revision && fewChanges)
+            {
+                personal.WallChanges = match.PublicChangesSince(knownWalls);
+            }
+            else
+            {
+                personal.Walls = match.PublicTiles();
+            }
         }
         if (includeStatic)
         {

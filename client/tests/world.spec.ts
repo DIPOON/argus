@@ -7,8 +7,7 @@ import type { Control, Position, Snapshot } from '../src/types';
 interface TestWorld {
   update(snapshot: Snapshot): void;
   draw(dt: number): void;
-  canStand(position: Position, radius?: number): boolean;
-  deployCheck(position: Position): 'ok' | 'unseen' | 'blocked';
+  deployCheck(position: Position, radius?: number): 'ok' | 'unseen' | 'blocked';
   control: Control;
   recordInput(seq: number, x: number, y: number, at?: number): void;
   holdLastInput(missed: number, at?: number): void;
@@ -376,10 +375,10 @@ test('deploy placement uses the server player radius', async ({ page }) => {
   const result = await page.evaluate(state => {
     const world = window.testWorld;
     world.update(structuredClone(state));
-    // 벽 타일 (10, 10)의 왼쪽 면(x = 480)에서 14 떨어진 자리다. 서버 반지름 13이면 설 수 있다.
-    return world.canStand({ x: 466, y: 504 });
+    // 벽 타일 (10, 10)의 왼쪽 면(x = 480)에서 14 떨어진 자리다. 서버 반지름 13이면 설 수 있고, 15면 벽에 걸린다.
+    return [world.deployCheck({ x: 466, y: 504 }), world.deployCheck({ x: 466, y: 504 }, 15)];
   }, snapshot());
-  expect(result).toBe(true);
+  expect(result).toEqual(['ok', 'blocked']);
 });
 
 test('deploy placement needs a tile the squad has seen and counts only the walls it has seen', async ({ page }) => {
@@ -405,7 +404,7 @@ test('deploy placement needs a tile the squad has seen and counts only the walls
   expect(result).toEqual({ open: 'ok', wall: 'blocked', unseen: 'unseen', edge: 'ok' });
 });
 
-test('newly seen tiles redraw only their own map chunk, and an unseen extraction is not drawn', async ({ page }) => {
+test('newly seen tiles redraw only their own map chunk under the light, and an unseen extraction is not drawn', async ({ page }) => {
   const state = snapshot();
   const walls = Buffer.from(state.walls, 'base64');
   walls.fill(3);
@@ -414,10 +413,13 @@ test('newly seen tiles redraw only their own map chunk, and an unseen extraction
   state.extraction = null;
   const result = await page.evaluate(state => {
     type Chunk = { context: { instructions: object[] } };
-    const world = window.testWorld as unknown as TestWorld & { wallChunks: Chunk[]; draw(dt: number): void };
+    type Layers = { root: { children: object[] }; fog: object; light: object; walls: object };
+    const world = window.testWorld as unknown as TestWorld & Layers & { fogChunks: Chunk[]; wallChunks: Chunk[]; draw(dt: number): void };
     world.update(structuredClone(state)); world.draw(1 / 60);
-    const chunks = world.wallChunks.length;
-    const first = world.wallChunks.map(chunk => chunk.context.instructions[0]);
+    // 보지 못한 칸의 덮개는 시야(밝은 면) 아래, 벽은 시야 위에 그린다.
+    const order = [world.fog, world.light, world.walls].map(layer => world.root.children.indexOf(layer));
+    const chunks = world.fogChunks.length;
+    const first = world.fogChunks.map(chunk => chunk.context.instructions[0]);
     const extractionLabel = world.labelsById.has('extract');
     // 맨 오른쪽 아래 칸 (39, 29)을 본다. 그 칸이 든 구역만 다시 그린다.
     const seen = Uint8Array.from(atob(state.walls), c => c.charCodeAt(0));
@@ -425,12 +427,16 @@ test('newly seen tiles redraw only their own map chunk, and an unseen extraction
     state.walls = btoa(String.fromCharCode(...seen));
     state.mapRevision = 1;
     world.update(structuredClone(state)); world.draw(1 / 60);
-    const redrawn = world.wallChunks.map((chunk, index) => chunk.context.instructions[0] !== first[index]);
-    return { chunks, after: world.wallChunks.length, redrawn: redrawn.filter(Boolean).length, last: redrawn[redrawn.length - 1], extractionLabel };
+    const redrawn = world.fogChunks.map((chunk, index) => chunk.context.instructions[0] !== first[index]);
+    return { chunks, after: world.fogChunks.length, walls: world.wallChunks.length, redrawn: redrawn.filter(Boolean).length,
+      last: redrawn[redrawn.length - 1], extractionLabel, order };
   }, state);
   // 40×30칸을 8×8칸 구역으로 나누면 5×4 = 20개다.
   expect(result.chunks).toBe(20);
   expect(result.after).toBe(20);
+  expect(result.walls).toBe(20);
+  expect(result.order[0]).toBeLessThan(result.order[1]);
+  expect(result.order[1]).toBeLessThan(result.order[2]);
   expect(result.redrawn).toBe(1);
   expect(result.last).toBe(true);
   expect(result.extractionLabel).toBe(false);

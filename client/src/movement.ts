@@ -28,7 +28,8 @@ const touchTolerance = 4;
 const stride = 4;
 
 // 보지 못한 칸은 빈 땅으로 본다. 서버도 투입 요청에는 본 칸의 벽만으로 답한다(BattleMap.CanStand의 known).
-// 이동 예측이 보지 못한 벽에 막히지 않아 생긴 차이는 다음 스냅샷의 서버 위치로 보정된다. 대원 둘레는 늘 보이므로 드물다.
+// 서버는 칸의 어느 부분이든 보이면 본 칸으로 치고, 대원이 반 칸을 움직일 때마다 다시 둘러본다. 그래서 대원 몸이 닿는 칸은
+// 거의 늘 본 칸이고, 예측이 보지 못한 벽을 지나가는 일은 모퉁이를 막 돌 때처럼 드물다. 그런 차이는 다음 스냅샷의 서버 위치로 보정된다.
 export function solid(terrain: Terrain, x: number, y: number): boolean {
   if (x < 0 || y < 0 || x >= terrain.columns || y >= terrain.rows) return true;
   const tile = terrain.tiles[y * terrain.columns + x];

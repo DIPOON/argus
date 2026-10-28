@@ -4,6 +4,7 @@ import {
   ceilingDivide, divide, divideInt, floorDivide, fromDouble, length, lengthSquared, multiply, normalize, roundedSqrt,
 } from '../src/fixed';
 import { deployable, inputHoldTicks, stepPlayer, ticksPerSecond, type Body, type Terrain } from '../src/movement';
+import { applyWallChanges } from '../src/types';
 
 // 서버(C#)가 계산해 적어 둔 대조 자료다. tests/Argus.Server.Tests의 ClientParityTests가 만들고, 서버 검사가 지금 계산과 같은지 본다.
 // 여기서는 클라이언트의 같은 계산이 Raw까지 같은 값을 내는지 본다. 화면이 필요 없어 브라우저 없이 돈다.
@@ -123,4 +124,12 @@ test('a deploy spot is accepted exactly where the server accepts it, counting on
   expect(deploy.answers.length).toBe(deploy.rows * deploy.columns);
   expect(deploy.answers).toContain('0');
   expect(deploy.answers).toContain('1');
+});
+
+test('wall changes apply in order onto the walls received before', () => {
+  // [칸 번호, 값] 짝을 앞에서부터 적용한다. 같은 칸이 두 번 나오면(본 벽이 나중에 부서짐) 뒤의 값이 남는다.
+  const before = Buffer.from([0, 3, 3, 2]).toString('base64');
+  const after = applyWallChanges(before, [1, 1, 2, 0, 1, 0]);
+  expect([...Buffer.from(after, 'base64')]).toEqual([0, 0, 0, 2]);
+  expect(applyWallChanges(before, [])).toBe(before);
 });

@@ -153,8 +153,23 @@ public sealed class BattleMap
     // JavaScript로도 같은 계산을 할 수 있다.
     public WallHit RayWall(FixedVector from, FixedVector to)
     {
+        return Trace(from, to, null, null);
+    }
+
+    // from에서 to로 가는 선분이 지나는 칸을 known에 참으로 적는다. 처음 닿는 벽 칸까지 적고 멈춘다(그 벽은 앞면이 보인다).
+    // 새로 적은 칸 번호는 revealed에 더한다. 맵 밖 칸은 적지 않는다. 지나는 칸과 멈추는 곳은 RayWall과 같다.
+    // 꼭짓점을 정확히 지날 때 옆 칸은 그 한 점만 닿으므로, 벽이라 멈출 때가 아니면 적지 않는다.
+    public WallHit Reveal(FixedVector from, FixedVector to, bool[] known, List<int> revealed)
+    {
+        return Trace(from, to, known, revealed);
+    }
+
+    // RayWall과 Reveal이 함께 쓰는 칸 따라가기다. known이 있으면 지나는 칸을 적는다.
+    private WallHit Trace(FixedVector from, FixedVector to, bool[]? known, List<int>? revealed)
+    {
         int x = from.X.FloorDivide(Cell);
         int y = from.Y.FloorDivide(Cell);
+        MarkKnown(known, revealed, x, y);
         if (Solid(x, y))
         {
             return TileHit(Fixed.Zero, x, y);
@@ -210,18 +225,23 @@ public sealed class BattleMap
             {
                 order = 1;
             }
-            Fixed fraction;
+            // 이번에 지나는 경계까지의 거리와 그 축의 선분 길이다. 벽에 닿았을 때만 둘로 비율을 구한다.
+            long crossed;
+            long length;
             if (order == 0)
             {
-                fraction = Ratio(untilX, width);
+                crossed = untilX;
+                length = width;
                 // 정확한 꼭짓점 통과도 양옆 타일을 확인한다.
                 if (Solid(x + stepX, y))
                 {
-                    return TileHit(fraction, x + stepX, y);
+                    MarkKnown(known, revealed, x + stepX, y);
+                    return TileHit(Ratio(crossed, length), x + stepX, y);
                 }
                 if (Solid(x, y + stepY))
                 {
-                    return TileHit(fraction, x, y + stepY);
+                    MarkKnown(known, revealed, x, y + stepY);
+                    return TileHit(Ratio(crossed, length), x, y + stepY);
                 }
                 x += stepX;
                 y += stepY;
@@ -230,20 +250,42 @@ public sealed class BattleMap
             }
             else if (order < 0)
             {
-                fraction = Ratio(untilX, width);
+                crossed = untilX;
+                length = width;
                 x += stepX;
                 untilX += cell;
             }
             else
             {
-                fraction = Ratio(untilY, height);
+                crossed = untilY;
+                length = height;
                 y += stepY;
                 untilY += cell;
             }
+            MarkKnown(known, revealed, x, y);
             if (Solid(x, y))
             {
-                return TileHit(fraction, x, y);
+                return TileHit(Ratio(crossed, length), x, y);
             }
+        }
+    }
+
+    // 맵 안 칸을 아직 적지 않았으면 known에 적고 revealed에 더한다. known이 없으면(RayWall) 아무것도 하지 않는다.
+    private void MarkKnown(bool[]? known, List<int>? revealed, int x, int y)
+    {
+        if (known == null || x < 0 || y < 0 || x >= Columns || y >= Rows)
+        {
+            return;
+        }
+        int index = y * Columns + x;
+        if (known[index])
+        {
+            return;
+        }
+        known[index] = true;
+        if (revealed != null)
+        {
+            revealed.Add(index);
         }
     }
 

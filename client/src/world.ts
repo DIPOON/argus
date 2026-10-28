@@ -1,6 +1,6 @@
 import { Application, Container, Graphics, Text } from 'pixi.js';
 import { fromDouble, toDouble, type FixedVector } from './fixed';
-import { canStand, deployable, inputHoldTicks, stepPlayer, tickMilliseconds, unknownTile, type Body, type Terrain } from './movement';
+import { deployable, inputHoldTicks, stepPlayer, tickMilliseconds, unknownTile, type Body, type Terrain } from './movement';
 import { affinityNames, type Affinity, type CombatAction, type Control, type Position, type Snapshot } from './types';
 
 const colors = { floor: 0x141e20, lit: 0x253335, grid: 0x304044, wall: 0x657372, edge: 0x94a29a, unknown: 0x0b1315, lime: 0xdfff80, teal: 0x77cec2, red: 0xf28068, gold: 0xeabd73 };
@@ -27,9 +27,13 @@ export class World {
   private root = new Container();
   private ground = new Graphics();
   private light = new Graphics();
-  // 벽과 분대가 보지 못한 칸은 구역(chunkSize × chunkSize칸)마다 따로 그린다. 분대가 새 칸을 볼 때마다 벽 배열이 다시 오므로
+  // 벽과 분대가 보지 못한 칸은 구역(chunkSize × chunkSize칸)마다 따로 그린다. 분대가 새 칸을 볼 때마다 바뀐 칸이 오므로
   // 바뀐 구역만 다시 그린다. 맵 전체를 매번 다시 그리면 큰 맵에서 초당 여러 번 수천 개의 사각형을 새로 만든다.
+  // 보지 못한 칸의 덮개(fog)는 시야(light) 아래, 벽(walls)은 시야 위에 둔다. 지금 보이는 곳은 아직 본 칸으로 오지 않았어도
+  // 밝게 보이고, 그 위의 적도 밝은 바닥 위에 그려진다.
+  private fog = new Container();
   private walls = new Container();
+  private fogChunks: Graphics[] = [];
   private wallChunks: Graphics[] = [];
   private static readonly chunkSize = 8;
   private props = new Graphics();
@@ -81,7 +85,7 @@ export class World {
     });
     host.appendChild(this.app.canvas);
     this.app.stage.addChild(this.root);
-    this.root.addChild(this.ground, this.light, this.walls, this.props, this.units, this.labels);
+    this.root.addChild(this.ground, this.fog, this.light, this.walls, this.props, this.units, this.labels);
     this.app.ticker.add(t => this.draw(Math.min(t.deltaMS / 1000, .05)));
   }
 
@@ -210,14 +214,8 @@ export class World {
     if (Math.hypot(this.correction.x, this.correction.y) > 100) this.correction = { x: 0, y: 0 };
   }
 
-  // 투입 위치 검사도 서버와 같은 계산(BattleMap.CanStand)과 대원 반지름을 쓴다. 서버처럼 아주 먼 좌표는 바로 거절한다.
-  // 보지 못한 칸은 빈 땅으로 본다(서버도 본 칸의 벽만 본다).
-  canStand(p: Position, radius = this.snapshot?.rules.playerRadius ?? 13) {
-    if (!this.terrain || !Number.isFinite(p.x) || !Number.isFinite(p.y) || Math.abs(p.x) > 1e6 || Math.abs(p.y) > 1e6) return false;
-    return canStand(this.terrain, { x: fromDouble(p.x), y: fromDouble(p.y) }, fromDouble(radius));
-  }
-
-  // 그 자리에 투입할 수 있는지 서버의 Deploy와 같은 계산(movement.ts의 deployable)으로 본다.
+  // 그 자리에 투입할 수 있는지 서버의 Deploy와 같은 계산(movement.ts의 deployable)과 대원 반지름으로 본다.
+  // 분대가 본 칸이어야 하고(unseen), 본 칸의 벽만으로 몸이 들어가야 한다(blocked). 서버처럼 아주 먼 좌표는 바로 거절한다.
   deployCheck(p: Position, radius = this.snapshot?.rules.playerRadius ?? 13): 'ok' | 'unseen' | 'blocked' {
     if (!this.terrain || !Number.isFinite(p.x) || !Number.isFinite(p.y) || Math.abs(p.x) > 1e6 || Math.abs(p.y) > 1e6) return 'blocked';
     return deployable(this.terrain, { x: fromDouble(p.x), y: fromDouble(p.y) }, fromDouble(radius));
@@ -281,7 +279,8 @@ export class World {
     const across = Math.ceil(columns / size), down = Math.ceil(rows / size);
     const rebuild = !before || before.length !== this.tiles.length || this.wallChunks.length !== across * down;
     if (rebuild) {
-      for (const chunk of this.wallChunks) chunk.destroy();
+      for (const chunk of [...this.fogChunks, ...this.wallChunks]) chunk.destroy();
+      this.fogChunks = Array.from({ length: across * down }, () => this.fog.addChild(new Graphics()));
       this.wallChunks = Array.from({ length: across * down }, () => this.walls.addChild(new Graphics()));
     }
     for (let cy = 0; cy < down; cy++) {
@@ -292,14 +291,15 @@ export class World {
           for (let x = x0; x < x1 && !changed; x++) changed = before![y * columns + x] !== this.tiles[y * columns + x];
         }
         if (!changed) continue;
+        const f = this.fogChunks[cy * across + cx].clear();
         const w = this.wallChunks[cy * across + cx].clear();
         for (let y = y0; y < y1; y++) {
-          // 보지 못한 칸은 가로로 이어진 칸을 한 사각형으로 묶어 어둡게 덮는다. 시야(밝은 면)보다 위에 있어 보이는 범위 안이어도 가린다.
+          // 보지 못한 칸은 가로로 이어진 칸을 한 사각형으로 묶어 어둡게 덮는다. 덮개는 시야 아래에 있어 지금 보이는 곳은 밝게 남는다.
           let run = -1;
           for (let x = x0; x <= x1; x++) {
             const unknown = x < x1 && this.tiles[y * columns + x] === unknownTile;
             if (unknown && run < 0) run = x;
-            if (!unknown && run >= 0) { w.rect(run * cell, y * cell, (x - run) * cell, cell).fill(colors.unknown); run = -1; }
+            if (!unknown && run >= 0) { f.rect(run * cell, y * cell, (x - run) * cell, cell).fill(colors.unknown); run = -1; }
           }
           for (let x = x0; x < x1; x++) {
             const tile = this.tiles[y * columns + x];
