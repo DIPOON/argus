@@ -742,8 +742,12 @@ public sealed partial class Match
     // 광선 사이가 약 6.7이라 칸(48)이 광선 사이로 빠지지 않는다.
     private const int ExploreDirectionCount = 384;
     private static readonly FixedVector[] ExploreDirections = CreateExploreDirections();
-    // 대원이 마지막으로 둘러본 자리에서 반 칸(24) 넘게 움직이면 다시 둘러본다. 그 안에서는 새로 보이는 곳이 시야 끝의 좁은 띠뿐이다.
+    // 대원이 마지막으로 둘러본 자리에서 반 칸(24) 넘게 움직이면 다시 둘러본다.
     private static readonly Fixed ExploreStepSquared = Fixed.FromInt((BattleMap.Cell / 2) * (BattleMap.Cell / 2));
+    // 움직이는 동안은 마지막으로 둘러본 지 이만큼(3틱, 0.1초, 방송 한 번) 지나면 반 칸을 못 갔어도 다시 둘러본다.
+    // 반 칸보다 덜 움직여도 모퉁이나 문 옆에서는 가려 있던 방이 통째로 보일 수 있다(PR #18 리뷰). 반 칸 안에서 오가며 싸워도
+    // 본 칸이 0.1초 넘게 뒤처지지 않는다.
+    public const long ExploreIntervalTicks = 3;
     // 벽 면 위에서 확인하는 자리(칸 왼쪽·위에서 잰 거리)다. 양 끝 가까이와 가운데, 그 사이를 본다.
     // 점은 면에서 벽 안쪽으로 가장 작은 단위(Raw 1)만큼 들어간 곳이다. 그 점까지 가는 선분이 처음 닿는 벽이 그 벽이면 면이 보인다.
     // 안쪽으로 많이 들어가면 아주 비스듬한 선분이 옆 칸의 면에서 먼저 막혀, 보이는 면을 못 본 것으로 친다.
@@ -760,8 +764,8 @@ public sealed partial class Match
     }
 
     // 분대가 본 칸을 넓힌다. 만들 때와 틱마다 진행이 끝난 뒤에 한 번 부른다.
-    // 광선은 필요할 때만 쏜다. 캠프는 벽이 바뀌었을 때, 살아 있는 대원은 처음이거나 마지막으로 둘러본 자리에서 반 칸 넘게
-    // 움직였거나 벽이 바뀌었을 때다. 제자리에 선 대원 둘레의 볼 수 없는 칸에 틱마다 광선을 다시 쏘지 않는다.
+    // 광선은 필요할 때만 쏜다. 캠프는 벽이 바뀌었을 때, 살아 있는 대원은 LooksAgain이 정한 때다.
+    // 제자리에 선 대원 둘레의 볼 수 없는 칸에 틱마다 광선을 다시 쏘지 않는다.
     private void Explore()
     {
         bool wallsChanged = Map.Revision != _exploredMapRevision;
@@ -785,16 +789,39 @@ public sealed partial class Match
             {
                 continue;
             }
-            bool moved = !player.HasExploreOrigin ||
-                FixedVector.DistanceSquared(player.Position, player.ExploreOrigin) >= ExploreStepSquared;
-            if (!moved && !wallsChanged)
+            if (!LooksAgain(player, wallsChanged))
             {
                 continue;
             }
             player.ExploreOrigin = player.Position;
             player.HasExploreOrigin = true;
+            player.ExploreTick = Tick;
             ExploreFrom(player.Position, VisionRange);
         }
+    }
+
+    // 살아 있는 대원이 이번 틱에 다시 둘러봐야 하는지다. 처음이거나 벽이 바뀌었으면 둘러본다. 마지막으로 둘러본 자리에 그대로
+    // 서 있으면 둘러보지 않는다. 그 밖에는 반 칸 넘게 움직였거나, 멈췄거나(이동 입력이 없음), 마지막으로 둘러본 지 0.1초가
+    // 지났으면 둘러본다. 멈춘 자리는 바로 둘러보므로, 문 앞에 서서 안을 들여다보면 그 틱에 방 안이 본 칸이 된다.
+    private bool LooksAgain(Player player, bool wallsChanged)
+    {
+        if (!player.HasExploreOrigin || wallsChanged)
+        {
+            return true;
+        }
+        if (player.Position == player.ExploreOrigin)
+        {
+            return false;
+        }
+        if (FixedVector.DistanceSquared(player.Position, player.ExploreOrigin) >= ExploreStepSquared)
+        {
+            return true;
+        }
+        if (player.Move == FixedVector.Zero)
+        {
+            return true;
+        }
+        return Tick - player.ExploreTick >= ExploreIntervalTicks;
     }
 
     // eye에서 range까지 여러 방향으로 광선을 쏴, 광선이 지나는 칸과 처음 닿는 벽 칸을 본 칸으로 적는다. 칸의 어느 부분이든 보이면

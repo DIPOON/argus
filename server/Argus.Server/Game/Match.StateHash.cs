@@ -125,6 +125,7 @@ public sealed partial class Match
         hasher.AddPoint(player.Move);
         hasher.AddPoint(player.ExploreOrigin);
         hasher.AddBool(player.HasExploreOrigin);
+        hasher.AddLong(player.ExploreTick);
         hasher.AddBool(player.Connected);
         hasher.AddOptionalLong(player.DisconnectedTick);
         hasher.AddBool(player.AwaitingFirstConnection);

@@ -13,7 +13,8 @@ internal static class ExplorationTests
         tests.Add(new TestCase("The squad sees no tile without a visible part, and misses no open center or wall face it can see", CampStart));
         tests.Add(new TestCase("A long wall row seen at a shallow angle is seen tile by tile, from afar and along the wall", ShallowWallRow));
         tests.Add(new TestCase("Alive players' vision adds seen tiles, which stay seen after they leave; fallen players see nothing", VisionExplores));
-        tests.Add(new TestCase("Players look again only after moving half a cell or a wall breaking, not every tick", ExploreThrottle));
+        tests.Add(new TestCase("Players look again when they stop, move half a cell, keep moving a tenth of a second or a wall breaks, not every tick", ExploreThrottle));
+        tests.Add(new TestCase("A player who stops after moving less than half a cell sees around the corner at once", StopPeek));
         tests.Add(new TestCase("Snapshots send unseen tiles as unknown and leave out the facilities, supplies and extraction on them", SnapshotMasks));
         tests.Add(new TestCase("Connections get the whole walls once and then only the tiles changed since what they received", ExploredResend));
         tests.Add(new TestCase("The state summary tells apart rooms that differ only in seen tiles, the walls revision or a look origin", HashCoversExploration));
@@ -344,18 +345,57 @@ internal static class ExplorationTests
 
     private static void ExploreThrottle()
     {
-        // 둘러보면 그 자리를 탐색 원점으로 적는다. 반 칸(24) 안에서 움직이면 다시 둘러보지 않아 원점이 그대로다.
+        // 둘러보면 그 자리와 틱을 탐색 원점으로 적는다. 그 자리에 서 있는 동안은 다시 둘러보지 않는다.
         Fixture f = new Fixture();
-        FixedVector origin = f.Player.ExploreOrigin;
-        Check(f.Player.HasExploreOrigin && origin == f.Player.Position, "착지한 자리에서 둘러보지 않았습니다");
-        f.Player.Position = origin + FixedVector.FromInt(23, 0);
+        Check(f.Player.HasExploreOrigin && f.Player.ExploreOrigin == f.Player.Position, "착지한 자리에서 둘러보지 않았습니다");
+        long landed = f.Player.ExploreTick;
+        Advance(f.Match, 1);
+        Equal(f.Player.ExploreTick, landed);
+
+        // 움직이는 동안은 반 칸을 못 가도 0.1초(3틱)마다 둘러본다. 틱마다 둘러보지는 않는다. 8틱 동안 오른쪽으로 걸으면
+        // 첫 틱(마지막으로 둘러본 지 오래됨)과 4번째, 7번째 틱에 둘러본다.
+        long sequence = 1;
+        int looks = 0;
+        for (int i = 0; i < 8; i++)
+        {
+            long before = f.Player.ExploreTick;
+            Check(f.Match.Input(f.Player, sequence, 1, 0, 0, 0));
+            sequence++;
+            f.Match.Step();
+            if (f.Player.ExploreTick != before)
+            {
+                looks++;
+                Equal(f.Player.ExploreOrigin, f.Player.Position);
+            }
+            Check(f.Match.Tick - f.Player.ExploreTick < Match.ExploreIntervalTicks, "움직이는 동안 0.1초 넘게 둘러보지 않았습니다");
+        }
+        Equal(looks, 3);
+
+        // 멈추면(이동 입력 없음) 0.1초가 지나지 않았어도 그 자리에서 바로 둘러본다. 문 앞에 멈춰 안을 들여다볼 때다.
+        // 마지막으로 둘러본 지 한 틱이라, 0.1초 조건으로는 아직 둘러보지 않는다.
+        Equal(f.Match.Tick - f.Player.ExploreTick, 1L);
+        Check(f.Player.Position != f.Player.ExploreOrigin);
+        Check(f.Match.Input(f.Player, sequence, 0, 0, 0, 0));
+        sequence++;
         f.Match.Step();
-        Equal(f.Player.ExploreOrigin, origin);
-        // 반 칸을 넘게 움직이면 그 자리에서 다시 둘러본다.
-        FixedVector farther = origin + FixedVector.FromInt(25, 0);
-        f.Player.Position = farther;
+        Equal(f.Player.ExploreTick, f.Match.Tick);
+        Equal(f.Player.ExploreOrigin, f.Player.Position);
+        // 멈춘 뒤로는 다시 둘러보지 않는다.
+        long stopped = f.Player.ExploreTick;
+        Advance(f.Match, 1);
+        Equal(f.Player.ExploreTick, stopped);
+
+        // 0.1초가 지나지 않았어도 반 칸 넘게 움직였으면 둘러본다. 한 틱에 많이 움직일 때다. 먼저 걷기 시작해 한 번 둘러보게 한 뒤,
+        // 다음 틱에 반 칸 넘게 옮긴다.
+        Check(f.Match.Input(f.Player, sequence, 1, 0, 0, 0));
+        sequence++;
         f.Match.Step();
-        Equal(f.Player.ExploreOrigin, farther);
+        Equal(f.Player.ExploreTick, f.Match.Tick);
+        f.Player.Position = f.Player.Position + FixedVector.FromInt(0, 25);
+        Check(f.Match.Input(f.Player, sequence, 1, 0, 0, 0));
+        sequence++;
+        f.Match.Step();
+        Equal(f.Player.ExploreTick, f.Match.Tick);
 
         // 제자리에 있어도 벽이 부서지면 다시 둘러본다. 그 뒤가 새로 보일 수 있다. 대원이 부술 수 있는 벽 (18, 21) 바로 위에 서면
         // 그 아래 칸 (18, 22)는 벽에 가려 보이지 않는다. 벽이 부서지면 대원이 움직이지 않아도 그 칸을 본다.
@@ -374,6 +414,66 @@ internal static class ExplorationTests
         // 본 벽이 부서졌으므로 공개 벽 배열이 바뀌고 판 번호가 오른다.
         Equal(g.Match.PublicTiles()[wall], (byte)0);
         Check(g.Match.WallsRevision > revision, "본 벽이 부서졌는데 판 번호가 그대로입니다");
+    }
+
+    private static void StopPeek()
+    {
+        // 반 칸(24)보다 덜 움직이고 멈춰도 그 자리에서 바로 둘러본다. 모퉁이나 문 옆에서는 몇 걸음만 옮겨도 가려 있던 통로나 방이
+        // 통째로 보인다. 생성 맵(시드 3)의 여러 자리에서 둘러본 뒤 네 방향으로 23만큼 옮겨 멈추고, 새 자리에서 가운데가 보이는
+        // 빈 땅이 모두 본 칸인지 본다. 멈출 때 다시 둘러보지 않으면 네 곳 가운데 한 곳꼴로 칸이 빠졌다(PR #18 리뷰).
+        byte[] seed = SeededRandom.SeedFromNumber(3);
+        MissionLayout layout = MissionGenerator.Generate(seed);
+        int[,] steps = new int[,] { { 23, 0 }, { -23, 0 }, { 0, 23 }, { 0, -23 } };
+        int spots = 0;
+        for (int py = 72; py < layout.Rows * BattleMap.Cell - 72; py += 240)
+        {
+            for (int px = 72; px < layout.Columns * BattleMap.Cell - 72; px += 240)
+            {
+                for (int d = 0; d < 4; d++)
+                {
+                    FixedVector first = FixedVector.FromInt(px, py);
+                    FixedVector second = FixedVector.FromInt(px + steps[d, 0], py + steps[d, 1]);
+                    Match match = new Match("PEEK01", Rules.ForGeneratedMission(), seed, layout);
+                    if (!match.Map.CanStand(first, Rules.PlayerRadius) || !match.Map.CanStand(second, Rules.PlayerRadius) ||
+                        !match.Map.LineOfSight(first, second))
+                    {
+                        continue;
+                    }
+                    // 투입을 거치지 않고 그 자리에 세운다. 작전이 시작되기 전이라 적은 움직이지 않고, 본 칸은 틱마다 맞춘다.
+                    Player player = match.Join("p", "pilot")!;
+                    player.State = "alive";
+                    player.HasDeployed = true;
+                    player.Position = first;
+                    match.Step();
+                    player.Position = second;
+                    match.Step();
+                    spots++;
+                    CheckCentersSeen(match, second);
+                }
+            }
+        }
+        Check(spots > 100, $"확인한 자리가 {spots}곳뿐입니다");
+    }
+
+    // eye의 시야 반경 안에서 가운데가 eye에서 보이는 빈 땅은 모두 본 칸이어야 한다.
+    private static void CheckCentersSeen(Match match, FixedVector eye)
+    {
+        Fixed range = match.VisionRange;
+        for (int y = 0; y < match.Map.Rows; y++)
+        {
+            for (int x = 0; x < match.Map.Columns; x++)
+            {
+                FixedVector center = Center(x, y);
+                if (match.Map.Solid(x, y) || FixedVector.DistanceSquared(eye, center) > range * range)
+                {
+                    continue;
+                }
+                if (match.Map.LineOfSight(eye, center))
+                {
+                    Check(match.Explored(center), $"{eye}에 멈춘 대원이 가운데가 보이는 빈 땅 ({x}, {y})을 보지 못했습니다");
+                }
+            }
+        }
     }
 
     private static void SnapshotMasks()
@@ -593,5 +693,8 @@ internal static class ExplorationTests
         Fixture fresh = new Fixture();
         fresh.Player.HasExploreOrigin = false;
         Check(fresh.Match.StateHash() != still.Match.StateHash(), "둘러본 적이 있는지만 다른데 상태 요약이 같습니다");
+        Fixture later = new Fixture();
+        later.Player.ExploreTick = later.Player.ExploreTick + 1;
+        Check(later.Match.StateHash() != still.Match.StateHash(), "마지막으로 둘러본 틱만 다른데 상태 요약이 같습니다");
     }
 }
