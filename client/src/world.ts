@@ -1,9 +1,9 @@
 import { Application, Container, Graphics, Text } from 'pixi.js';
 import { fromDouble, toDouble, type FixedVector } from './fixed';
-import { canStand, inputHoldTicks, stepPlayer, tickMilliseconds, type Body, type Terrain } from './movement';
+import { deployable, inputHoldTicks, stepPlayer, tickMilliseconds, unknownTile, type Body, type Terrain } from './movement';
 import { affinityNames, type Affinity, type CombatAction, type Control, type Position, type Snapshot } from './types';
 
-const colors = { floor: 0x141e20, lit: 0x253335, grid: 0x304044, wall: 0x657372, edge: 0x94a29a, lime: 0xdfff80, teal: 0x77cec2, red: 0xf28068, gold: 0xeabd73 };
+const colors = { floor: 0x141e20, lit: 0x253335, grid: 0x304044, wall: 0x657372, edge: 0x94a29a, unknown: 0x0b1315, lime: 0xdfff80, teal: 0x77cec2, red: 0xf28068, gold: 0xeabd73 };
 const affinityColors: Record<Affinity, number> = { strike: 0xf28068, block: 0x77cec2, channel: 0xc0a1f5, none: 0xeabd73 };
 const team = [colors.lime, colors.teal, 0xaeb5fa, 0xf2c981];
 const unitOutline = { color: 0x111a1a, width: 2.5 };
@@ -27,7 +27,15 @@ export class World {
   private root = new Container();
   private ground = new Graphics();
   private light = new Graphics();
-  private walls = new Graphics();
+  // 벽과 분대가 보지 못한 칸은 구역(chunkSize × chunkSize칸)마다 따로 그린다. 분대가 새 칸을 볼 때마다 바뀐 칸이 오므로
+  // 바뀐 구역만 다시 그린다. 맵 전체를 매번 다시 그리면 큰 맵에서 초당 여러 번 수천 개의 사각형을 새로 만든다.
+  // 보지 못한 칸의 덮개(fog)는 시야(light) 아래, 벽(walls)은 시야 위에 둔다. 지금 보이는 곳은 아직 본 칸으로 오지 않았어도
+  // 밝게 보이고, 그 위의 적도 밝은 바닥 위에 그려진다.
+  private fog = new Container();
+  private walls = new Container();
+  private fogChunks: Graphics[] = [];
+  private wallChunks: Graphics[] = [];
+  private static readonly chunkSize = 8;
   private props = new Graphics();
   private units = new Graphics();
   private labels = new Container();
@@ -77,7 +85,7 @@ export class World {
     });
     host.appendChild(this.app.canvas);
     this.app.stage.addChild(this.root);
-    this.root.addChild(this.ground, this.light, this.walls, this.props, this.units, this.labels);
+    this.root.addChild(this.ground, this.fog, this.light, this.walls, this.props, this.units, this.labels);
     this.app.ticker.add(t => this.draw(Math.min(t.deltaMS / 1000, .05)));
   }
 
@@ -91,8 +99,10 @@ export class World {
     this.received = performance.now();
     if (changedRoom || this.revision !== snapshot.mapRevision) {
       this.revision = snapshot.mapRevision;
+      const before = changedRoom ? undefined : this.tiles;
       this.tiles = Uint8Array.from(atob(snapshot.walls), c => c.charCodeAt(0));
-      this.drawMap();
+      if (changedRoom) this.drawGround();
+      this.drawTiles(before);
     }
     this.terrain = { tiles: this.tiles, columns: snapshot.map.columns, rows: snapshot.map.rows, cell: snapshot.map.cell };
     // 살아 있는 적만 대원을 막는다. 스냅샷에는 시야 안의 적만 오므로, 숨은 적이나 그 사이 움직인 적과의 차이는 서버 위치로 보정된다.
@@ -204,10 +214,11 @@ export class World {
     if (Math.hypot(this.correction.x, this.correction.y) > 100) this.correction = { x: 0, y: 0 };
   }
 
-  // 투입 위치 검사도 서버와 같은 계산(BattleMap.CanStand)과 대원 반지름을 쓴다. 서버처럼 아주 먼 좌표는 바로 거절한다.
-  canStand(p: Position, radius = this.snapshot?.rules.playerRadius ?? 13) {
-    if (!this.terrain || !Number.isFinite(p.x) || !Number.isFinite(p.y) || Math.abs(p.x) > 1e6 || Math.abs(p.y) > 1e6) return false;
-    return canStand(this.terrain, { x: fromDouble(p.x), y: fromDouble(p.y) }, fromDouble(radius));
+  // 그 자리에 투입할 수 있는지 서버의 Deploy와 같은 계산(movement.ts의 deployable)과 대원 반지름으로 본다.
+  // 분대가 본 칸이어야 하고(unseen), 본 칸의 벽만으로 몸이 들어가야 한다(blocked). 서버처럼 아주 먼 좌표는 바로 거절한다.
+  deployCheck(p: Position, radius = this.snapshot?.rules.playerRadius ?? 13): 'ok' | 'unseen' | 'blocked' {
+    if (!this.terrain || !Number.isFinite(p.x) || !Number.isFinite(p.y) || Math.abs(p.x) > 1e6 || Math.abs(p.y) > 1e6) return 'blocked';
+    return deployable(this.terrain, { x: fromDouble(p.x), y: fromDouble(p.y) }, fromDouble(radius));
   }
 
   private drawAction(g: Graphics, p: Position, action: CombatAction, now: number, player: boolean) {
@@ -251,21 +262,56 @@ export class World {
     }
   }
 
-  private drawMap() {
+  private drawGround() {
     const s = this.snapshot!;
     const g = this.ground.clear();
     g.rect(0, 0, s.map.width, s.map.height).fill(colors.floor);
     for (let x = 0; x <= s.map.width; x += s.map.cell) g.moveTo(x, 0).lineTo(x, s.map.height);
     for (let y = 0; y <= s.map.height; y += s.map.cell) g.moveTo(0, y).lineTo(s.map.width, y);
     g.stroke({ color: colors.grid, width: 1, alpha: .28 });
-    const w = this.walls.clear();
-    this.tiles.forEach((tile, index) => {
-      if (!tile) return;
-      const x = (index % s.map.columns) * s.map.cell, y = Math.floor(index / s.map.columns) * s.map.cell;
-      w.rect(x + 3, y + 5, s.map.cell - 3, s.map.cell - 3).fill({ color: 0x000000, alpha: .3 });
-      w.rect(x + 1, y + 1, s.map.cell - 2, s.map.cell - 2).fill(tile === 2 ? 0x303b3e : colors.wall);
-      if (tile === 1) w.moveTo(x + 3, y + 2).lineTo(x + s.map.cell - 3, y + 2).stroke({ color: colors.edge, width: 2 });
-    });
+  }
+
+  // before는 직전에 그린 벽 배열이다. 없거나 크기가 다르면(방이 바뀜) 모든 구역을 새로 만들고, 아니면 칸 값이 바뀐 구역만 다시 그린다.
+  private drawTiles(before?: Uint8Array) {
+    const s = this.snapshot!;
+    const { columns, rows, cell } = s.map;
+    const size = World.chunkSize;
+    const across = Math.ceil(columns / size), down = Math.ceil(rows / size);
+    const rebuild = !before || before.length !== this.tiles.length || this.wallChunks.length !== across * down;
+    if (rebuild) {
+      for (const chunk of [...this.fogChunks, ...this.wallChunks]) chunk.destroy();
+      this.fogChunks = Array.from({ length: across * down }, () => this.fog.addChild(new Graphics()));
+      this.wallChunks = Array.from({ length: across * down }, () => this.walls.addChild(new Graphics()));
+    }
+    for (let cy = 0; cy < down; cy++) {
+      for (let cx = 0; cx < across; cx++) {
+        const x0 = cx * size, y0 = cy * size, x1 = Math.min(columns, x0 + size), y1 = Math.min(rows, y0 + size);
+        let changed = rebuild;
+        for (let y = y0; y < y1 && !changed; y++) {
+          for (let x = x0; x < x1 && !changed; x++) changed = before![y * columns + x] !== this.tiles[y * columns + x];
+        }
+        if (!changed) continue;
+        const f = this.fogChunks[cy * across + cx].clear();
+        const w = this.wallChunks[cy * across + cx].clear();
+        for (let y = y0; y < y1; y++) {
+          // 보지 못한 칸은 가로로 이어진 칸을 한 사각형으로 묶어 어둡게 덮는다. 덮개는 시야 아래에 있어 지금 보이는 곳은 밝게 남는다.
+          let run = -1;
+          for (let x = x0; x <= x1; x++) {
+            const unknown = x < x1 && this.tiles[y * columns + x] === unknownTile;
+            if (unknown && run < 0) run = x;
+            if (!unknown && run >= 0) { f.rect(run * cell, y * cell, (x - run) * cell, cell).fill(colors.unknown); run = -1; }
+          }
+          for (let x = x0; x < x1; x++) {
+            const tile = this.tiles[y * columns + x];
+            if (tile !== 1 && tile !== 2) continue;
+            const px = x * cell, py = y * cell;
+            w.rect(px + 3, py + 5, cell - 3, cell - 3).fill({ color: 0x000000, alpha: .3 });
+            w.rect(px + 1, py + 1, cell - 2, cell - 2).fill(tile === 2 ? 0x303b3e : colors.wall);
+            if (tile === 1) w.moveTo(px + 3, py + 2).lineTo(px + cell - 3, py + 2).stroke({ color: colors.edge, width: 2 });
+          }
+        }
+      }
+    }
   }
 
   private label(key: string, text: string, x: number, y: number, color: number, size = 12) {
@@ -348,10 +394,13 @@ export class World {
     g.rect(s.map.campX - 20, s.map.campY - 20, 40, 40).stroke({ color: colors.teal, width: 2 });
     g.moveTo(s.map.campX - 12, s.map.campY).lineTo(s.map.campX + 12, s.map.campY).moveTo(s.map.campX, s.map.campY - 12).lineTo(s.map.campX, s.map.campY + 12).stroke({ color: colors.teal, width: 2 });
     this.label('camp', 'CAMP · 권장 투입', s.map.campX, s.map.campY + 105, colors.teal, 15);
+    // 탈출 지점은 분대가 그 칸을 본 뒤에야 온다.
     const ext = s.extraction;
-    g.circle(ext.x, ext.y, 80).fill({ color: colors.teal, alpha: ext.unlocked ? .12 : .025 }).stroke({ color: colors.teal, alpha: ext.unlocked ? .9 : .25, width: 2 });
-    if (ext.progress > 0) arcOnNewPath(g, ext.x, ext.y, 80, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ext.progress / ext.duration).stroke({ color: colors.lime, width: 7 });
-    this.label('extract', ext.unlocked ? '↑ 탈출 · 구역 확보' : '↑ 탈출 지점', ext.x, ext.y + 102, colors.teal, 15);
+    if (ext) {
+      g.circle(ext.x, ext.y, 80).fill({ color: colors.teal, alpha: ext.unlocked ? .12 : .025 }).stroke({ color: colors.teal, alpha: ext.unlocked ? .9 : .25, width: 2 });
+      if (ext.progress > 0) arcOnNewPath(g, ext.x, ext.y, 80, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ext.progress / ext.duration).stroke({ color: colors.lime, width: 7 });
+      this.label('extract', ext.unlocked ? '↑ 탈출 · 구역 확보' : '↑ 탈출 지점', ext.x, ext.y + 102, colors.teal, 15);
+    }
     for (const f of s.facilities) {
       const color = f.hp > 0 ? colors.red : 0x64706a;
       g.rect(f.x - 27, f.y - 27, 54, 54).fill(0x1a2325).stroke({ color, width: 3 });

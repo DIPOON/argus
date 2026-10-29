@@ -9,7 +9,7 @@ public static class Snapshot
     public static byte[] Create(Match match, Player recipient, JsonSerializerOptions options)
     {
         byte[] sharedJson = SerializeShared(CreateShared(match), options);
-        PersonalSnapshot personal = CreatePersonal(match, recipient, true, true);
+        PersonalSnapshot personal = CreatePersonal(match, recipient, NoWallsReceived, true);
         return Combine(sharedJson, personal, options);
     }
 
@@ -45,13 +45,20 @@ public static class Snapshot
         message.Elapsed = Seconds(match.ElapsedTicks);
         message.Phase = match.Phase;
         message.Result = match.Result;
-        message.Extraction.X = Round(match.Layout.Extraction.X);
-        message.Extraction.Y = Round(match.Layout.Extraction.Y);
-        message.Extraction.Progress = Round(match.ExtractionProgress);
-        message.Extraction.Duration = match.Rules.ExtractionSeconds;
-        message.Extraction.Unlocked = match.ObjectivesComplete;
+        // 탈출 지점은 분대가 그 칸을 보기 전까지 보내지 않는다. 시설·보급과 마찬가지로 안 본 곳은 숨은 정보다.
+        if (match.Explored(match.Layout.Extraction))
+        {
+            ExtractionSnapshot extraction = new ExtractionSnapshot();
+            extraction.X = Round(match.Layout.Extraction.X);
+            extraction.Y = Round(match.Layout.Extraction.Y);
+            extraction.Progress = Round(match.ExtractionProgress);
+            extraction.Duration = match.Rules.ExtractionSeconds;
+            extraction.Unlocked = match.ObjectivesComplete;
+            message.Extraction = extraction;
+        }
         // 벽 자체는 수신자별 부분이 담는다. 판 번호는 매번 보내 클라이언트가 바뀐 것을 알게 한다.
-        message.MapRevision = match.Map.Revision;
+        // 벽이 부서지거나 분대가 본 칸이 늘면 바뀐다.
+        message.MapRevision = match.WallsRevision;
         for (int i = 0; i < match.Players.Count; i++)
         {
             message.Players.Add(CreatePlayer(match, match.Players[i]));
@@ -123,9 +130,14 @@ public static class Snapshot
                 message.Sight.Add(CreateSightPolygon(match, match.Players[i].Position, match.VisionRange));
             }
         }
+        // 시설은 분대가 그 칸을 본 것만 보낸다.
         for (int i = 0; i < match.Facilities.Count; i++)
         {
             Facility facility = match.Facilities[i];
+            if (!match.Explored(facility.Position))
+            {
+                continue;
+            }
             FacilitySnapshot entry = new FacilitySnapshot();
             entry.Id = facility.Id;
             entry.X = Round(facility.Position.X);
@@ -160,15 +172,27 @@ public static class Snapshot
         return rules;
     }
 
-    // 수신자마다 다른 값만 만든다. includeWalls는 이 수신자가 지금 판의 벽을 아직 받지 못했을 때,
+    // 벽 배열을 아직 받지 못한 수신자의 판 번호다.
+    public const int NoWallsReceived = -1;
+    // 바뀐 칸이 칸 수의 1/8보다 많으면 바뀐 칸 대신 벽 배열 전체를 보낸다. 바뀐 칸 하나가 JSON으로 수 두 개(칸 번호와 값)라,
+    // 이쯤에서 base64로 적은 배열 전체와 길이가 비슷해진다.
+    private const int ChangesPerFullWalls = 8;
+
+    // 수신자마다 다른 값만 만든다. knownWalls는 이 수신자가 이미 받은 벽 배열의 판 번호(받은 적이 없으면 NoWallsReceived)다.
+    // 지금 판과 같으면 벽을 담지 않고, 받은 판이 있으면 그 뒤로 바뀐 칸만, 처음이거나 바뀐 칸이 많으면 배열 전체를 담는다.
     // includeStatic은 규칙과 맵을 아직 받지 못했을 때 켠다.
-    public static PersonalSnapshot CreatePersonal(Match match, Player recipient, bool includeWalls, bool includeStatic)
+    public static PersonalSnapshot CreatePersonal(Match match, Player recipient, int knownWalls, bool includeStatic)
     {
         PersonalSnapshot personal = new PersonalSnapshot();
         personal.You = recipient.Id;
+        // 보급은 분대가 그 칸을 본 것만 보낸다.
         for (int i = 0; i < match.Supplies.Count; i++)
         {
             Supply supply = match.Supplies[i];
+            if (!match.Explored(supply.Position))
+            {
+                continue;
+            }
             SupplySnapshot entry = new SupplySnapshot();
             entry.Id = supply.Id;
             entry.X = Round(supply.Position.X);
@@ -181,9 +205,19 @@ public static class Snapshot
             entry.Cooldown = Seconds(Math.Max(0, supply.ReadyTick(recipient) - match.Tick));
             personal.Supplies.Add(entry);
         }
-        if (includeWalls)
+        // 분대가 보지 못한 칸은 모름(3)으로 가린 배열이다.
+        int revision = match.WallsRevision;
+        if (knownWalls != revision)
         {
-            personal.Walls = match.Map.Tiles;
+            bool fewChanges = revision - knownWalls <= match.Map.Tiles.Length / ChangesPerFullWalls;
+            if (knownWalls >= 0 && knownWalls < revision && fewChanges)
+            {
+                personal.WallChanges = match.PublicChangesSince(knownWalls);
+            }
+            else
+            {
+                personal.Walls = match.PublicTiles();
+            }
         }
         if (includeStatic)
         {

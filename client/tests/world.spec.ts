@@ -7,7 +7,7 @@ import type { Control, Position, Snapshot } from '../src/types';
 interface TestWorld {
   update(snapshot: Snapshot): void;
   draw(dt: number): void;
-  canStand(position: Position, radius?: number): boolean;
+  deployCheck(position: Position, radius?: number): 'ok' | 'unseen' | 'blocked';
   control: Control;
   recordInput(seq: number, x: number, y: number, at?: number): void;
   holdLastInput(missed: number, at?: number): void;
@@ -69,7 +69,7 @@ function snapshot(): Snapshot {
   const walls = new Uint8Array(40 * 30);
   walls[10 * 40 + 10] = 1;
   return {
-    type: 'snapshot', version: 4, room: 'ROOM01', you: 'pilot', now: 10, elapsed: 5,
+    type: 'snapshot', version: 5, room: 'ROOM01', you: 'pilot', now: 10, elapsed: 5,
     phase: 'active', result: null,
     walls: Buffer.from(walls).toString('base64'), mapRevision: 0,
     extraction: { x: 1080, y: 1130, progress: 0, duration: 20, unlocked: false },
@@ -167,7 +167,7 @@ test('gauges and guard arcs start their own path instead of a line from an earli
     followupBreaksStructures: true }];
   state.players[0].actions = [{ id: 912, skill: 'parry', kind: 'block', slot: 2, tier: 1, phase: 'active', aim: 0,
     startedAt: 9.8, contactAt: 9.8, activeUntil: 10.35, followupUntil: 10.53, endsAt: 10.78, range: 54, halfWidth: 10 }];
-  state.extraction = { ...state.extraction, progress: 6, unlocked: true };
+  state.extraction = { ...state.extraction!, progress: 6, unlocked: true };
   const arcs = await page.evaluate(state => {
     type Step = { action: string; data: number[] };
     type Drawing = { context: { instructions: { data: { path?: { instructions: Step[] } } }[] } };
@@ -375,8 +375,69 @@ test('deploy placement uses the server player radius', async ({ page }) => {
   const result = await page.evaluate(state => {
     const world = window.testWorld;
     world.update(structuredClone(state));
-    // 벽 타일 (10, 10)의 왼쪽 면(x = 480)에서 14 떨어진 자리다. 서버 반지름 13이면 설 수 있다.
-    return world.canStand({ x: 466, y: 504 });
+    // 벽 타일 (10, 10)의 왼쪽 면(x = 480)에서 14 떨어진 자리다. 서버 반지름 13이면 설 수 있고, 15면 벽에 걸린다.
+    return [world.deployCheck({ x: 466, y: 504 }), world.deployCheck({ x: 466, y: 504 }, 15)];
   }, snapshot());
-  expect(result).toBe(true);
+  expect(result).toEqual(['ok', 'blocked']);
+});
+
+test('deploy placement needs a tile the squad has seen and counts only the walls it has seen', async ({ page }) => {
+  const state = snapshot();
+  const walls = Buffer.from(state.walls, 'base64');
+  // 벽 (10, 10)의 오른쪽 칸 (11, 10)과 그 오른쪽 칸들을 아직 보지 못한 칸(3)으로 둔다.
+  for (let x = 11; x < 40; x++) walls[10 * 40 + x] = 3;
+  state.walls = walls.toString('base64');
+  const result = await page.evaluate(state => {
+    const world = window.testWorld;
+    world.update(structuredClone(state));
+    return {
+      // 본 빈 땅이다.
+      open: world.deployCheck({ x: 466, y: 504 }),
+      // 본 벽 칸이다.
+      wall: world.deployCheck({ x: 504, y: 504 }),
+      // 보지 못한 칸이다. 그 칸이 실제로 빈 땅이어도 투입할 수 없다.
+      unseen: world.deployCheck({ x: 560, y: 504 }),
+      // 본 칸 (11, 9)이지만 몸이 아래의 보지 못한 칸 (11, 10)에 걸친다. 서버처럼 보지 못한 칸은 빈 땅으로 본다.
+      edge: world.deployCheck({ x: 560, y: 470 }),
+    };
+  }, state);
+  expect(result).toEqual({ open: 'ok', wall: 'blocked', unseen: 'unseen', edge: 'ok' });
+});
+
+test('newly seen tiles redraw only their own map chunk under the light, and an unseen extraction is not drawn', async ({ page }) => {
+  const state = snapshot();
+  const walls = Buffer.from(state.walls, 'base64');
+  walls.fill(3);
+  walls[10 * 40 + 10] = 1;
+  state.walls = walls.toString('base64');
+  state.extraction = null;
+  const result = await page.evaluate(state => {
+    type Chunk = { context: { instructions: object[] } };
+    type Layers = { root: { children: object[] }; fog: object; light: object; walls: object };
+    const world = window.testWorld as unknown as TestWorld & Layers & { fogChunks: Chunk[]; wallChunks: Chunk[]; draw(dt: number): void };
+    world.update(structuredClone(state)); world.draw(1 / 60);
+    // 보지 못한 칸의 덮개는 시야(밝은 면) 아래, 벽은 시야 위에 그린다.
+    const order = [world.fog, world.light, world.walls].map(layer => world.root.children.indexOf(layer));
+    const chunks = world.fogChunks.length;
+    const first = world.fogChunks.map(chunk => chunk.context.instructions[0]);
+    const extractionLabel = world.labelsById.has('extract');
+    // 맨 오른쪽 아래 칸 (39, 29)을 본다. 그 칸이 든 구역만 다시 그린다.
+    const seen = Uint8Array.from(atob(state.walls), c => c.charCodeAt(0));
+    seen[29 * 40 + 39] = 0;
+    state.walls = btoa(String.fromCharCode(...seen));
+    state.mapRevision = 1;
+    world.update(structuredClone(state)); world.draw(1 / 60);
+    const redrawn = world.fogChunks.map((chunk, index) => chunk.context.instructions[0] !== first[index]);
+    return { chunks, after: world.fogChunks.length, walls: world.wallChunks.length, redrawn: redrawn.filter(Boolean).length,
+      last: redrawn[redrawn.length - 1], extractionLabel, order };
+  }, state);
+  // 40×30칸을 8×8칸 구역으로 나누면 5×4 = 20개다.
+  expect(result.chunks).toBe(20);
+  expect(result.after).toBe(20);
+  expect(result.walls).toBe(20);
+  expect(result.order[0]).toBeLessThan(result.order[1]);
+  expect(result.order[1]).toBeLessThan(result.order[2]);
+  expect(result.redrawn).toBe(1);
+  expect(result.last).toBe(true);
+  expect(result.extractionLabel).toBe(false);
 });

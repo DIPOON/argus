@@ -1,7 +1,7 @@
 import './style.css';
 import { tickMilliseconds } from './movement';
 import { World } from './world';
-import { skillNames, type Guest, type Player, type Snapshot, type SnapshotWire, type Skill } from './types';
+import { applyWallChanges, skillNames, type Guest, type Player, type Snapshot, type SnapshotWire, type Skill } from './types';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const escape = (value: string) => value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
@@ -71,7 +71,7 @@ $('app').innerHTML = `
       <div id="canvas-host" class="canvas-host"></div>
       <div class="map-top"><span class="map-title"><i></i><span id="view-label">전술 지도 / 투입 위치 선택</span></span><div class="timers"><span>경과 <b id="elapsed">00:00</b></span></div></div>
       <div id="toast" class="toast" role="status" hidden></div>
-      <div id="deploy-panel" class="deploy-panel"><div><span class="eyebrow" id="deploy-kicker">READY TO DEPLOY</span><h3 id="deploy-title">투입할 위치를 선택하세요</h3><p id="deploy-description">지도의 빈 지면을 클릭하세요. 선택 전에는 계속 대기합니다.</p></div><div class="deploy-actions"><button id="camp" class="secondary">캠프 선택</button><button id="deploy" class="primary" disabled>위치 선택 필요</button></div></div>
+      <div id="deploy-panel" class="deploy-panel"><div><span class="eyebrow" id="deploy-kicker">READY TO DEPLOY</span><h3 id="deploy-title">투입할 위치를 선택하세요</h3><p id="deploy-description">분대가 본 곳의 빈 지면을 클릭하세요. 선택 전에는 계속 대기합니다.</p></div><div class="deploy-actions"><button id="camp" class="secondary">캠프 선택</button><button id="deploy" class="primary" disabled>위치 선택 필요</button></div></div>
       <div id="combat-hud" class="combat-hud" hidden>
         <div class="vitals"><div><span id="my-name">대원</span><b id="hp">6</b><small id="max-hp">/ 6 HP</small><div class="health-bar"><i id="health-fill"></i></div></div>
         <div><span>마나</span><b id="mana">0</b><small id="max-mana">/ 24</small><div class="mana-bar"><i id="mana-fill"></i></div></div></div>
@@ -234,7 +234,10 @@ async function openOperation() {
       if (event.button === 0 && me()?.state === 'waiting' && snapshot?.phase !== 'ended') {
         const point = world.screenToWorld(event.clientX, event.clientY);
         syncButtons(event.buttons, false, true);
-        if (!world.canStand(point)) { toast('벽을 피해 빈 지면을 선택하세요.'); return; }
+        // 서버처럼 분대가 본 칸의 빈 지면에만 투입한다.
+        const check = world.deployCheck(point);
+        if (check === 'unseen') { toast('아직 보지 못한 곳에는 투입할 수 없습니다.'); return; }
+        if (check === 'blocked') { toast('벽을 피해 빈 지면을 선택하세요.'); return; }
         world.landing = point; updateUi();
       } else { syncButtons(event.buttons, me()?.state === 'alive', true); }
     });
@@ -266,11 +269,14 @@ function connect() {
     }
     if (message.type === 'reportNoted') { toast('제보에 내용을 덧붙였습니다.', false); return; }
     if (message.type !== 'snapshot') return;
-    if (message.version !== 4) { leave(); $('lobby-error').textContent = '서버와 클라이언트 버전이 다릅니다. 새로고침 후 다시 접속하세요.'; return; }
+    if (message.version !== 5) { leave(); $('lobby-error').textContent = '서버와 클라이언트 버전이 다릅니다. 새로고침 후 다시 접속하세요.'; return; }
     // 벽은 바뀔 때만, 규칙과 맵은 접속 직후에만 온다. 빠진 값은 같은 방의 이전 스냅샷에서 이어 쓴다.
     const wire = message as SnapshotWire;
     const previous = snapshot?.room === wire.room ? snapshot : undefined;
-    const walls = wire.walls ?? previous?.walls, rules = wire.rules ?? previous?.rules, map = wire.map ?? previous?.map;
+    // 벽은 전체가 오거나, 받은 배열에서 바뀐 칸만 온다. 바뀐 칸은 같은 방의 이전 배열에 적용한다.
+    let walls = wire.walls ?? previous?.walls;
+    if (!wire.walls && wire.wallChanges && walls !== undefined) walls = applyWallChanges(walls, wire.wallChanges);
+    const rules = wire.rules ?? previous?.rules, map = wire.map ?? previous?.map;
     // 서버는 실제로 보낼 때까지 다시 담으므로 처음 받은 스냅샷에는 모두 있다. 그래도 빠졌으면 다음 것을 기다린다.
     if (walls === undefined || rules === undefined || map === undefined) return;
     const wasAlive = me()?.state === 'alive';
@@ -325,9 +331,13 @@ function updateUi() {
   $('elapsed').textContent = time(s.elapsed);
   $('primary-count').textContent = `${s.facilities.filter(f => f.hp <= 0).length}/3`;
   $('secondary-count').textContent = `${s.supplies.filter(f => f.objective && f.collected).length}/2`;
-  $('facility-list').innerHTML = s.facilities.map(f => `<span class="${f.hp <= 0 ? 'done' : ''}">${f.hp <= 0 ? '✓' : '◇'} 0${f.id}</span>`).join('');
-  $('extract-note').textContent = s.extraction.unlocked ? `구역 안에서 ${s.extraction.duration}초 확보 · ${s.extraction.progress.toFixed(1)}초` : '주목표 완료 후 활성화';
-  $('extract-progress').style.width = `${Math.min(100, 100 * s.extraction.progress / s.extraction.duration)}%`;
+  // 시설과 탈출 지점은 분대가 본 것만 온다. 아직 찾지 못한 시설은 자리만 표시한다.
+  $('facility-list').innerHTML = s.facilities.map(f => `<span class="${f.hp <= 0 ? 'done' : ''}">${f.hp <= 0 ? '✓' : '◇'} 0${f.id}</span>`).join('')
+    + '<span class="unknown">? 미발견</span>'.repeat(Math.max(0, 3 - s.facilities.length));
+  const ext = s.extraction;
+  $('extract-note').textContent = !ext ? '탈출 지점 미발견 · 지도를 탐색하세요'
+    : ext.unlocked ? `구역 안에서 ${ext.duration}초 확보 · ${ext.progress.toFixed(1)}초` : '주목표 완료 후 활성화';
+  $('extract-progress').style.width = ext ? `${Math.min(100, 100 * ext.progress / ext.duration)}%` : '0%';
   $('team-count').textContent = `${s.players.length} / 4`;
   $('roster').innerHTML = s.players.map((member, index) => `<div class="member ${member.id === s.you ? 'self' : ''}"><span class="member-number color-${index}">0${index + 1}</span><div><b>${escape(member.name)}${member.id === s.you ? ' <small>나</small>' : ''}</b><span>${!member.connected ? '연결 끊김' : member.state === 'alive' ? `${Math.ceil(member.hp)} HP` : member.state === 'deploying' ? `투입까지 ${member.deploy.toFixed(1)}초` : member.hasDeployed ? '증원 대기' : '투입 대기'}</span><span class="roster-loadout">마나 ${member.mana}/${member.maxMana} · 자유 ${skillNames[member.slots[3]]}</span></div><i class="${member.state === 'alive' ? 'alive-dot' : ''}"></i></div>`).join('');
   $('deploy-panel').hidden = alive || ended;
@@ -338,7 +348,7 @@ function updateUi() {
     const preparing = p.state === 'deploying';
     $('deploy-kicker').textContent = preparing ? 'DEPLOYMENT IN PROGRESS' : p.hasDeployed ? 'REINFORCEMENT' : 'READY TO DEPLOY';
     $('deploy-title').textContent = preparing ? `${p.deploy.toFixed(1)}초 후 투입합니다` : p.hasDeployed ? '증원할 위치를 선택하세요' : '투입할 위치를 선택하세요';
-    $('deploy-description').textContent = preparing ? '투입이 완료될 때까지 해당 위치의 시야는 열리지 않습니다.' : '빈 지면을 클릭하세요. 어두운 곳의 안전은 보장되지 않습니다.';
+    $('deploy-description').textContent = preparing ? '투입이 완료될 때까지 해당 위치의 시야는 열리지 않습니다.' : '분대가 본 곳의 빈 지면을 클릭하세요. 지금 보이지 않는 곳의 안전은 보장되지 않습니다.';
     $<HTMLButtonElement>('camp').disabled = preparing;
     $<HTMLButtonElement>('deploy').disabled = preparing || deployRequested || !world?.landing;
     $('deploy').textContent = preparing || deployRequested ? '투입 준비 중…' : world?.landing ? '5초 후 투입 ↗' : '위치 선택 필요';
