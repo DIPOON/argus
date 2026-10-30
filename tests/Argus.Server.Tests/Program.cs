@@ -251,4 +251,22 @@ internal static class TestTools
         enemy.Action = new EnemyAction(_id, new EnemySkill(kind, tier, partialDamage, arrivesIn, 85, 25), Angle.FromRadians(Math.PI), fixture.Match.Tick);
         return enemy;
     }
+
+    // 실제 적 정의로 만든 적이 그 정의의 기술 skill을 쓰는 중이다. 기술은 arrivesIn초 뒤에 닿는다(BeginAction).
+    public static Enemy Threat(Fixture fixture, EnemyDefinition definition, EnemySkill skill, double arrivesIn = 0.05)
+    {
+        Check(Array.IndexOf(definition.Skills, skill) >= 0, $"{definition.Id} 정의에 없는 기술입니다");
+        Enemy enemy = Target(fixture, definition);
+        BeginAction(fixture, enemy, skill, arrivesIn);
+        return enemy;
+    }
+
+    // enemy가 skill로 새 행동을 시작한다. 기술이 arrivesIn초 뒤에 닿도록 시작 틱을 예고 시간만큼 앞당긴다.
+    // 그래서 예고를 다 기다리지 않고도 실제 기술의 종류·티어·부분 대응 피해·사거리로 판정받는다. 선딜 배율은 1이다.
+    public static void BeginAction(Fixture fixture, Enemy enemy, EnemySkill skill, double arrivesIn = 0.05)
+    {
+        _id++;
+        long startTick = fixture.Match.Tick + Rules.ToTicks(arrivesIn) - Rules.ToTicks(skill.Windup);
+        enemy.Action = new EnemyAction(_id, skill, Angle.FromRadians(Math.PI), startTick);
+    }
 }

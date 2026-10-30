@@ -21,8 +21,9 @@ internal static class CombatTests
         tests.Add(new TestCase("An expired response cannot be saved up toward a later tier-two attack", ExpiredContribution));
         tests.Add(new TestCase("Prepared independent effects from one owner also count toward the total", IndependentActions));
         tests.Add(new TestCase("Partial counters cost the player one and deal the skill's partial damage, which can finish an elite", PartialVariants));
-        tests.Add(new TestCase("A breaker and a warden fall to two solo parries of their tier-two strike", PartialsFinishElites));
-        tests.Add(new TestCase("Tier-two draws deal two to players and one to the elite only once", EliteDraw));
+        tests.Add(new TestCase("Every elite falls to solo partial counters against each of its tier-two actions", PartialsFinishElites));
+        tests.Add(new TestCase("Grabs landing apart on one warden shield are separate partial judgments, each costing the warden one", StaggeredPartials));
+        tests.Add(new TestCase("Tier-two draws deal two to each drawing player and one per draw to the elite, with one draw effect per judgment", EliteDraw));
         tests.Add(new TestCase("Reduced HP leaves skill tiers unchanged; a weak skill can still be fully broken", WeakPhase));
         tests.Add(new TestCase("Wall cover prevents melee hits between otherwise clear endpoints", Cover));
         tests.Add(new TestCase("The wall ray finds exact corners, edges, starting walls and both directions without rounding", RayWallEdges));
@@ -327,29 +328,119 @@ internal static class CombatTests
 
     private static void PartialsFinishElites()
     {
-        // 엘리트의 2티어 타격을 혼자 받아치기로 두 번 막으면(부분 대응) 쓰러진다. 대원은 매번 피해 1을 받는다.
-        // 2026-10-28 전에는 부분 대응으로 쓰러지지 않았다. 분쇄자는 피해가 없었고, 철위병은 체력 1에서 멈췄다.
-        EnemyDefinition[] elites = new EnemyDefinition[] { EnemyDefinition.Breaker, EnemyDefinition.Warden };
-        for (int i = 0; i < elites.Length; i++)
+        // 엘리트의 2티어 행동마다, 혼자 맞는 대응을 맞히면(부분 대응) 대원과 엘리트가 함께 피해 1을 받는다.
+        // 그래서 체력만큼 부분 대응하면 엘리트가 쓰러진다. 2026-10-28 전에는 부분 대응으로 쓰러지지 않았다.
+        // 분쇄자는 피해가 없었고, 철위병은 체력 1에서 멈췄다.
+        // 받아치기(타격 Ⅱ)는 닿는 공격을 막을 때, 잡기(방어 Ⅱ)는 예고 중에 먼저 닿을 때 판정받으므로 행동마다 따로 본다.
+        int checkedSkills = 0;
+        for (int i = 0; i < EnemyDefinition.All.Count; i++)
         {
-            Fixture f = new Fixture();
-            Enemy elite = Target(f, elites[i]);
-            EnemySkill strike = elites[i].Skills[0];
-            Equal(strike.Tier, 2);
-            for (int round = 1; round <= 2; round++)
+            EnemyDefinition definition = EnemyDefinition.All[i];
+            for (int j = 0; j < definition.Skills.Length; j++)
             {
-                f.Player.Hp = f.Player.MaxHp;
-                elite.Action = new EnemyAction(990 + round, strike, Angle.FromRadians(Math.PI), f.Match.Tick);
-                // 예고가 끝나기 조금 전에 받아치기를 시작해, 타격이 닿을 때 방어가 유효하게 한다.
-                Advance(f.Match, strike.Windup - 0.2);
-                Prepare(f, f.Player, "parry");
-                Advance(f.Match, 0.4);
-                Near(f.Player.Hp, f.Player.MaxHp - 1);
-                Near(elite.Hp, 2 - round);
+                EnemySkill skill = definition.Skills[j];
+                if (skill.Tier != 2)
+                {
+                    continue;
+                }
+                checkedSkills++;
+                Fixture f = new Fixture();
+                string counter = CounterFor(f.Match.Rules, skill.Kind);
+                Enemy elite = Target(f, definition);
+                for (int round = 1; round <= definition.Health; round++)
+                {
+                    f.Player.Hp = f.Player.MaxHp;
+                    BeginAction(f, elite, skill, 0.2);
+                    Prepare(f, f.Player, counter);
+                    Advance(f.Match, 0.3);
+                    Near(f.Player.Hp, f.Player.MaxHp - 1);
+                    Near(elite.Hp, definition.Health - round);
+                }
+                Equal(f.Player.Kills, 1);
+                Check(!f.Match.Enemies.Contains(elite), $"{definition.Name} 처치 뒤에도 적 목록에 남아 있습니다({skill.Kind})");
             }
-            Equal(f.Player.Kills, 1);
-            Check(!f.Match.Enemies.Contains(elite), $"{elites[i].Name}이 쓰러지고도 남아 있습니다");
         }
+        Check(checkedSkills > 0, "2티어 행동이 있는 적 종류가 없습니다");
+    }
+
+    private static void StaggeredPartials()
+    {
+        // 철위병의 방어 Ⅱ는 예고 1.2초와 밀어치기 0.25초 동안 상성이 있다. 그동안 잡기가 따로 닿으면 판정도 따로 난다.
+        // 맞는 대응이 따로 닿을 때마다 부분 대응이고, 철위병도 판정마다 부분 대응 피해를 받는다(2026-10-31 결정).
+        EnemySkill shield = EnemyDefinition.Warden.Skills[1];
+        Equal(shield.Kind, "block");
+        Equal(shield.Tier, 2);
+
+        // 0.1초 차이로 잡는다. 앞 잡기가 닿을 때(0.12초) 뒤 잡기가 이미 시작해 있어 한 판정에 함께 들어간다.
+        // 맞는 대응이 둘이라 완전 파훼다. 아무도 다치지 않고 먼저 시작한 대원이 처치를 가져간다.
+        Fixture together = new Fixture();
+        Player close = Ally(together, "close");
+        Enemy first = Threat(together, EnemyDefinition.Warden, shield, shield.Windup);
+        Prepare(together, together.Player, "grab");
+        Advance(together.Match, 0.1);
+        Prepare(together, close, "grab");
+        Advance(together.Match, 0.1);
+        Near(first.Hp, 0);
+        Near(together.Player.Hp, together.Player.MaxHp);
+        Near(close.Hp, close.MaxHp);
+        Equal(together.Player.Kills, 1);
+        Equal(close.Kills, 0);
+
+        // 0.5초 차이로 잡는다. 앞 잡기가 혼자 판정받은 뒤 뒤 잡기가 따로 판정받아, 두 번 모두 부분 대응이다.
+        Fixture apart = new Fixture();
+        Player late = Ally(apart, "late");
+        Enemy second = Threat(apart, EnemyDefinition.Warden, shield, shield.Windup);
+        Prepare(apart, apart.Player, "grab");
+        Advance(apart.Match, 0.5);
+        Near(apart.Player.Hp, apart.Player.MaxHp - 1);
+        Near(second.Hp, 1);
+        Prepare(apart, late, "grab");
+        Advance(apart.Match, 0.2);
+        Near(late.Hp, late.MaxHp - 1);
+        Near(second.Hp, 0);
+        Equal(apart.Player.Kills, 0);
+        Equal(late.Kills, 1);
+
+        // 혼자 두 번 잡는다. 첫 잡기가 부분 대응으로 중단된 뒤 같은 예고 안에 다시 잡아, 대원은 두 번 다 피해 1을 받는다.
+        Fixture alone = new Fixture();
+        Enemy third = Threat(alone, EnemyDefinition.Warden, shield, shield.Windup);
+        Prepare(alone, alone.Player, "grab");
+        Advance(alone.Match, 0.5);
+        Near(alone.Player.Hp, alone.Player.MaxHp - 1);
+        Near(third.Hp, 1);
+        Prepare(alone, alone.Player, "grab");
+        Advance(alone.Match, 0.2);
+        Near(alone.Player.Hp, alone.Player.MaxHp - 2);
+        Near(third.Hp, 0);
+        Equal(alone.Player.Kills, 1);
+    }
+
+    // 남아 있는 효과 가운데 kind 종류의 수다. 판정 하나에 같은 효과가 겹쳐 생기지 않았는지 볼 때 쓴다.
+    private static int CountEffects(Match match, string kind)
+    {
+        int count = 0;
+        for (int i = 0; i < match.Effects.Count; i++)
+        {
+            if (match.Effects[i].Kind == kind)
+            {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    // 적 행동의 종류를 이기는 대원 기술의 id다.
+    private static string CounterFor(Rules rules, string attackKind)
+    {
+        string[] ids = new string[] { "strike", "parry", "grab" };
+        for (int i = 0; i < ids.Length; i++)
+        {
+            if (Affinity.Beats(rules.Skill(ids[i]).Kind, attackKind))
+            {
+                return ids[i];
+            }
+        }
+        throw new Exception($"이기는 기술이 없는 적 행동 종류입니다: {attackKind}");
     }
 
     private static void EliteDraw()
@@ -360,6 +451,21 @@ internal static class CombatTests
         Advance(f.Match, 0.6);
         Near(f.Player.Hp, 4);
         Near(enemy.Hp, 1);
+
+        // 두 대원이 한 판정에 함께 비기면 엘리트 피해는 비긴 대원 수만큼 쌓이고(임시 처리), 먼저 시작한 대원이 처치를 가져간다.
+        // 비김 효과는 판정 하나에 하나다. 효과는 적 자리에 그려지므로 대원마다 만들면 같은 모양이 겹쳐 그려진다.
+        Fixture pair = new Fixture();
+        Player partner = Ally(pair, "partner");
+        Enemy shared = Threat(pair, "strike", 2);
+        Prepare(pair, pair.Player, "strike");
+        Prepare(pair, partner, "strike");
+        Advance(pair.Match, 0.1);
+        Near(pair.Player.Hp, 4);
+        Near(partner.Hp, 4);
+        Near(shared.Hp, 0);
+        Equal(pair.Player.Kills, 1);
+        Equal(partner.Kills, 0);
+        Equal(CountEffects(pair.Match, "draw"), 1);
     }
 
     private static void WeakPhase()
@@ -671,32 +777,40 @@ internal static class CombatTests
 
     private static void DrawCredit()
     {
-        // 같은 2티어 공격에 한 명은 비기고 다른 한 명은 부분 대응했다. 부분 대응 피해가 없는 행동이라 비김 피해로 쓰러뜨린 대원이 처치를 가져간다.
-        Fixture f = new Fixture();
-        Player partner = Ally(f, "partner");
-        Enemy elite = Threat(f, "strike", 2);
-        elite.Hp = 1;
-        Prepare(f, f.Player, "strike");
-        Prepare(f, partner, "parry");
-        Advance(f.Match, 0.08);
-        Near(elite.Hp, 0);
-        Equal(f.Player.Kills, 1);
-        Equal(partner.Kills, 0);
-
-        // 부분 대응 피해가 있는 행동이면 그 피해를 먼저 준다. 그 피해로 쓰러지므로 부분 대응한 대원이 처치를 가져가고,
-        // 비김 피해는 더하지 않는다. 대원이 받는 피해는 그대로다(비긴 대원 2, 부분 대응한 대원 1).
-        Fixture g = new Fixture();
-        Player second = Ally(g, "partner");
-        Enemy finished = Threat(g, "strike", 2, 1);
-        finished.Hp = 1;
-        Prepare(g, g.Player, "strike");
-        Prepare(g, second, "parry");
-        Advance(g.Match, 0.08);
-        Near(finished.Hp, 0);
-        Equal(g.Player.Kills, 0);
-        Equal(second.Kills, 1);
-        Near(g.Player.Hp, g.Player.MaxHp - 2);
-        Near(second.Hp, second.MaxHp - 1);
+        // 같은 2티어 타격 한 번에 대원(f.Player)은 타격으로 비기고 동료(partner)는 받아치기로 부분 대응한다.
+        // 엘리트는 부분 대응 피해를 먼저 받고 비김 피해 1을 받는다. 처치는 쓰러뜨린 피해를 준 대원이 가져가고,
+        // 부분 대응 피해로 쓰러지면 비김 피해는 더하지 않는다. 대원이 받는 피해는 어느 경우든 같다(비긴 대원 2, 부분 대응한 동료 1).
+        // 판정 결과의 효과는 어느 경우든 부분 대응과 비김이 하나씩이다. 피해를 줄 때 같은 효과를 한 번 더 만들지 않는다.
+        // 경우마다 행동의 부분 대응 피해, 엘리트의 체력, 비김 피해가 마지막 피해인지다.
+        // 0: 부분 대응 피해가 없어 비김 피해로 1→0. 1: 부분 대응 피해로 1→0. 2: 부분 대응 피해로 2→1, 비김 피해로 1→0.
+        int[] partials = new int[] { 0, 1, 1 };
+        int[] startHps = new int[] { 1, 1, 2 };
+        bool[] drawFinishes = new bool[] { true, false, true };
+        for (int i = 0; i < partials.Length; i++)
+        {
+            Fixture f = new Fixture();
+            Player partner = Ally(f, "partner");
+            Enemy elite = Threat(f, "strike", 2, partials[i]);
+            elite.Hp = startHps[i];
+            Prepare(f, f.Player, "strike");
+            Prepare(f, partner, "parry");
+            Advance(f.Match, 0.08);
+            Near(elite.Hp, 0);
+            Near(f.Player.Hp, f.Player.MaxHp - 2);
+            Near(partner.Hp, partner.MaxHp - 1);
+            Equal(CountEffects(f.Match, "partial"), 1);
+            Equal(CountEffects(f.Match, "draw"), 1);
+            if (drawFinishes[i])
+            {
+                Equal(f.Player.Kills, 1);
+                Equal(partner.Kills, 0);
+            }
+            else
+            {
+                Equal(f.Player.Kills, 0);
+                Equal(partner.Kills, 1);
+            }
+        }
     }
 
     private static void GrabRetarget()
