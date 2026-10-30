@@ -630,6 +630,11 @@ input::placeholder {
   border-color:#526438
 }
 
+.facility-list .unknown {
+  color:#6f7a70;
+  border-style:dashed
+}
+
 .progress {
   height:3px;
   background:#293a32;

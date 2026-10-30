@@ -688,7 +688,7 @@ public sealed class RoomHost : BackgroundService
             room.Match.Connect(player);
             room.LastVisit = DateTime.UtcNow;
             byte[] snapshot = Snapshot.Create(room.Match, player, Json);
-            peer.Outgoing.Writer.TryWrite(new OutgoingMessage(snapshot, room.Match.Map.Revision, true));
+            peer.Outgoing.Writer.TryWrite(new OutgoingMessage(snapshot, room.Match.WallsRevision, true));
             return (room, player, peer);
         }
     }
@@ -945,7 +945,7 @@ public sealed class RoomHost : BackgroundService
         // (you, 보급 대기 시간, 아직 받지 못한 벽·규칙·맵)만 따로 직렬화해 앞에 이어 붙인다.
         SnapshotMessage shared = Snapshot.CreateShared(room.Match);
         byte[] sharedJson = Snapshot.SerializeShared(shared, Json);
-        int revision = room.Match.Map.Revision;
+        int revision = room.Match.WallsRevision;
         for (int i = 0; i < room.Match.Players.Count; i++)
         {
             Player player = room.Match.Players[i];
@@ -953,13 +953,13 @@ public sealed class RoomHost : BackgroundService
             {
                 continue;
             }
-            // 벽은 이 연결이 아직 받지 못한 판일 때만, 규칙과 맵은 아직 받지 못했을 때만 담는다.
-            bool includeWalls = peer.SentWallRevision != revision;
+            // 벽은 이 연결이 아직 받지 못한 판일 때만 담는다. 받은 판이 있으면 그 뒤로 바뀐 칸만 담는다.
+            // 규칙과 맵은 아직 받지 못했을 때만 담는다.
             bool includeStatic = !peer.SentStatic;
-            PersonalSnapshot personal = Snapshot.CreatePersonal(room.Match, player, includeWalls, includeStatic);
+            PersonalSnapshot personal = Snapshot.CreatePersonal(room.Match, player, peer.SentWallRevision, includeStatic);
             byte[] snapshot = Snapshot.Combine(sharedJson, personal, Json);
             int wallRevision = -1;
-            if (includeWalls)
+            if (personal.Walls != null || personal.WallChanges != null)
             {
                 wallRevision = revision;
             }

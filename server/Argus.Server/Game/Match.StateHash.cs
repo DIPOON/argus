@@ -21,6 +21,10 @@ public sealed partial class Match
         hasher.AddText(Phase);
         hasher.AddOptionalText(Result);
         hasher.AddLong(_extractionHalfTicks);
+        // 본 칸은 공개 벽 배열에서 모름이 아닌 칸이라 공개 벽 배열만 적는다. 판 번호(바뀐 수)는 같은 배열이라도 거쳐 온 길에 따라 다르다.
+        // 본 칸을 맞춘 벽 판 번호(_exploredMapRevision)는 틱이 끝날 때마다 벽 판 번호(Map이 적음)와 같아지므로 적지 않는다.
+        hasher.AddBytes(_publicTiles);
+        hasher.AddInt(WallsRevision);
         hasher.AddInt(Departures);
         hasher.AddLong(_nextSpawnTick);
         hasher.AddInt(_nextId);
@@ -119,6 +123,9 @@ public sealed partial class Match
         hasher.AddLong(player.LastInputTick);
         hasher.AddLong(player.LastSequence);
         hasher.AddPoint(player.Move);
+        hasher.AddPoint(player.ExploreOrigin);
+        hasher.AddBool(player.HasExploreOrigin);
+        hasher.AddLong(player.ExploreTick);
         hasher.AddBool(player.Connected);
         hasher.AddOptionalLong(player.DisconnectedTick);
         hasher.AddBool(player.AwaitingFirstConnection);

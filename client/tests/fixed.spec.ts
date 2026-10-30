@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import {
   ceilingDivide, divide, divideInt, floorDivide, fromDouble, length, lengthSquared, multiply, normalize, roundedSqrt,
 } from '../src/fixed';
-import { inputHoldTicks, stepPlayer, ticksPerSecond, type Body, type Terrain } from '../src/movement';
+import { deployable, inputHoldTicks, stepPlayer, ticksPerSecond, type Body, type Terrain } from '../src/movement';
+import { applyWallChanges } from '../src/types';
 
 // 서버(C#)가 계산해 적어 둔 대조 자료다. tests/Argus.Server.Tests의 ClientParityTests가 만들고, 서버 검사가 지금 계산과 같은지 본다.
 // 여기서는 클라이언트의 같은 계산이 Raw까지 같은 값을 내는지 본다. 화면이 필요 없어 브라우저 없이 돈다.
@@ -17,6 +18,8 @@ interface Vectors {
   multiply: number[][]; divide: number[][]; divideInt: number[][]; floorDivide: number[][]; ceilingDivide: number[][];
   sqrt: number[][]; fromDouble: number[][]; vectors: number[][]; throws: [string, number, number][];
   map: { cell: number; columns: number; rows: number; walls: string };
+  // 투입 요청의 답이다. walls는 같은 방의 스냅샷 벽 배열(본 칸만 실제 값)이고, answers는 격자의 자리마다 받아들이면 1, 거절하면 0이다.
+  deploy: { walls: string; radius: number; left: number; top: number; step: number; columns: number; rows: number; answers: string };
   scenarios: Scenario[];
 }
 
@@ -101,4 +104,32 @@ test('movement steps to the same raw position as the server, tick by tick', () =
   // 첫 차이만 보면 원인을 찾기 쉽다. 한 틱이 어긋나면 뒤의 틱도 따라 어긋난다.
   expect(found.slice(0, 5)).toEqual([]);
   expect(vectors.scenarios.length).toBeGreaterThan(5);
+});
+
+test('a deploy spot is accepted exactly where the server accepts it, counting only the walls the squad has seen', () => {
+  const { deploy } = vectors;
+  const terrain: Terrain = {
+    tiles: Uint8Array.from(Buffer.from(deploy.walls, 'base64')),
+    columns: vectors.map.columns, rows: vectors.map.rows, cell: vectors.map.cell,
+  };
+  const found: string[] = [];
+  for (let row = 0; row < deploy.rows; row++) {
+    for (let column = 0; column < deploy.columns; column++) {
+      const x = deploy.left + column * deploy.step, y = deploy.top + row * deploy.step;
+      const accepted = deployable(terrain, { x: fromDouble(x), y: fromDouble(y) }, deploy.radius) === 'ok';
+      if (accepted !== (deploy.answers[row * deploy.columns + column] === '1')) found.push(`(${x}, ${y}): ${accepted ? '받음' : '거절'}, 서버는 반대`);
+    }
+  }
+  expect(found.slice(0, 5)).toEqual([]);
+  expect(deploy.answers.length).toBe(deploy.rows * deploy.columns);
+  expect(deploy.answers).toContain('0');
+  expect(deploy.answers).toContain('1');
+});
+
+test('wall changes apply in order onto the walls received before', () => {
+  // [칸 번호, 값] 짝을 앞에서부터 적용한다. 같은 칸이 두 번 나오면(본 벽이 나중에 부서짐) 뒤의 값이 남는다.
+  const before = Buffer.from([0, 3, 3, 2]).toString('base64');
+  const after = applyWallChanges(before, [1, 1, 2, 0, 1, 0]);
+  expect([...Buffer.from(after, 'base64')]).toEqual([0, 0, 0, 2]);
+  expect(applyWallChanges(before, [])).toBe(before);
 });

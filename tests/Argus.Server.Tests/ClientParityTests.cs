@@ -85,6 +85,7 @@ internal static class ClientParityTests
         AppendRows(text, "vectors", VectorRows());
         AppendRows(text, "throws", ThrowRows());
         AppendMap(text);
+        AppendDeploy(text);
         AppendScenarios(text);
         text.Append("}\n");
         return text.ToString();
@@ -383,6 +384,61 @@ internal static class ClientParityTests
         text.Append(", \"columns\": ").Append(Number(map.Columns));
         text.Append(", \"rows\": ").Append(Number(map.Rows));
         text.Append(", \"walls\": \"").Append(Convert.ToBase64String(map.Tiles)).Append("\" },\n");
+    }
+
+    // 투입 요청의 답을 묻는 격자다. 캠프 시야의 가장자리와 본 벽 (10, 18), 안 본 벽 (10, 10)·(10, 11)·(11, 18)의 둘레를 덮는다.
+    private const int DeployLeft = 360;
+    private const int DeployTop = 440;
+    private const int DeployStep = 5;
+    private const int DeployColumns = 53;
+    private const int DeployRows = 101;
+
+    // 손으로 만든 맵의 방을 막 만든 상태(캠프 둘레만 본 칸)에서 격자의 자리마다 Match.Deploy가 받아들이는지(1) 거절하는지(0) 적는다.
+    // 클라이언트는 그 방의 스냅샷 벽 배열(본 칸만 실제 값이고 나머지는 모름)로 같은 답을 내야 한다.
+    private static void AppendDeploy(StringBuilder text)
+    {
+        Match match = new Match("PARITY", new Rules { MaxEnemies = 0 }, 73);
+        Player player = match.Join("p", "pilot")!;
+        StringBuilder answers = new StringBuilder();
+        int unseen = 0;
+        int overUnseenWall = 0;
+        for (int row = 0; row < DeployRows; row++)
+        {
+            for (int column = 0; column < DeployColumns; column++)
+            {
+                FixedVector spot = FixedVector.FromInt(DeployLeft + column * DeployStep, DeployTop + row * DeployStep);
+                bool accepted = match.Deploy(player, spot.X.ToDouble(), spot.Y.ToDouble());
+                bool fits = match.Map.CanStand(spot, Rules.PlayerRadius);
+                if (accepted)
+                {
+                    answers.Append('1');
+                    // 받아들이면 투입 중이 되므로 다음 자리를 묻기 전에 기다림으로 되돌린다.
+                    player.State = "waiting";
+                }
+                else
+                {
+                    answers.Append('0');
+                }
+                // 실제로는 빈 땅인데 보지 못해 거절한 자리와, 몸이 안 본 벽에 걸리는데 받아들인 자리를 센다.
+                if (!accepted && fits && !match.Explored(spot))
+                {
+                    unseen++;
+                }
+                if (accepted && !fits)
+                {
+                    overUnseenWall++;
+                }
+            }
+        }
+        Check(unseen > 0 && overUnseenWall > 0, $"격자가 본 칸의 경계를 덮지 못합니다(보지 못한 빈 땅 {unseen}, 안 본 벽에 걸린 자리 {overUnseenWall})");
+        text.Append("  \"deploy\": { \"walls\": \"").Append(Convert.ToBase64String(match.PublicTiles())).Append('"');
+        text.Append(", \"radius\": ").Append(Number(Rules.PlayerRadius.Raw));
+        text.Append(", \"left\": ").Append(Number(DeployLeft));
+        text.Append(", \"top\": ").Append(Number(DeployTop));
+        text.Append(", \"step\": ").Append(Number(DeployStep));
+        text.Append(", \"columns\": ").Append(Number(DeployColumns));
+        text.Append(", \"rows\": ").Append(Number(DeployRows));
+        text.Append(", \"answers\": \"").Append(answers.ToString()).Append("\" },\n");
     }
 
     // 실제 Match에 입력을 넣고 한 틱씩 진행한 위치다. 열린 땅의 여러 방향, 벽 모서리와 벽 면, 적, 맵 가장자리,

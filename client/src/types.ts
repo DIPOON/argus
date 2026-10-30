@@ -32,8 +32,11 @@ export interface Enemy extends Position {
 export interface Snapshot {
   type: 'snapshot'; version: number; room: string; you: string; now: number; elapsed: number;
   phase: 'staging' | 'active' | 'ended'; result: 'success' | 'failure' | null;
+  // 벽 배열(base64)이다. 칸마다 0 빈 땅, 1 부술 수 있는 벽, 2 부술 수 없는 벽, 3 분대가 아직 보지 못한 칸이다(protocol v5).
+  // 판 번호는 벽이 부서지거나 분대가 새 칸을 볼 때 바뀐다.
   walls: string; mapRevision: number;
-  extraction: Position & { progress: number; duration: number; unlocked: boolean };
+  // 탈출 지점은 분대가 그 칸을 보기 전까지 null이다. 시설과 보급도 본 칸에 있는 것만 온다(protocol v5).
+  extraction: (Position & { progress: number; duration: number; unlocked: boolean }) | null;
   map: { width: number; height: number; cell: number; columns: number; rows: number; campX: number; campY: number };
   rules: { deploy: number; speed: number; playerRadius: number; guardHalfAngle: number; parryFollowupSeconds: number; skills: SkillDefinition[] };
   players: Player[]; enemies: Enemy[];
@@ -44,6 +47,16 @@ export interface Snapshot {
   sight: number[][]; notices: { id: number; at: number; text: string }[];
 }
 // 서버가 보내는 그대로의 스냅샷. 벽은 바뀔 때만, 규칙과 맵은 접속 직후에만 담긴다(protocol v3부터).
-export type SnapshotWire = Omit<Snapshot, 'walls' | 'rules' | 'map'> & Partial<Pick<Snapshot, 'walls' | 'rules' | 'map'>>;
+// 벽은 전체(walls)가 오거나, 이미 받은 배열에서 바뀐 칸만(wallChanges: [칸 번호, 값, …], 앞에서부터 적용) 온다(protocol v5).
+export type SnapshotWire = Omit<Snapshot, 'walls' | 'rules' | 'map'> & Partial<Pick<Snapshot, 'walls' | 'rules' | 'map'>> & { wallChanges?: number[] };
+
+// base64 벽 배열에 바뀐 칸([칸 번호, 값, …])을 앞에서부터 적용한 새 base64 배열이다. 같은 칸이 두 번 나오면 뒤의 값이 남는다.
+export function applyWallChanges(walls: string, changes: readonly number[]): string {
+  const tiles = Uint8Array.from(atob(walls), c => c.charCodeAt(0));
+  for (let i = 0; i + 1 < changes.length; i += 2) tiles[changes[i]] = changes[i + 1];
+  let binary = '';
+  for (const tile of tiles) binary += String.fromCharCode(tile);
+  return btoa(binary);
+}
 export interface Guest { room: string; id: string; token: string }
 export interface Control { x: number; y: number; aim: number; slot: number }

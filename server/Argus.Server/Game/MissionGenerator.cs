@@ -15,10 +15,11 @@ namespace Argus.Server.Game;
 // 6. 캠프에서 모든 목표와 증원 타원 대부분에 걸어서 갈 수 있는지 확인한다. 안 되면 크기부터 다시 뽑아 처음부터 다시 만든다.
 public static class MissionGenerator
 {
-    public const int MinimumColumns = 34;
-    public const int MaximumColumns = 50;
-    public const int MinimumRows = 26;
-    public const int MaximumRows = 38;
+    // 맵 크기 범위(칸)다. 끝에서 끝까지 걸어서 가로 약 13~19초, 세로 약 10~14초다(이동 속도 180, 칸 48).
+    public const int MinimumColumns = 50;
+    public const int MaximumColumns = 70;
+    public const int MinimumRows = 38;
+    public const int MaximumRows = 52;
     public const int FacilityCount = 3;
     // 캠프와 탈출 지점을 변에서 몇 칸 안쪽에 둘지와, 둘레를 몇 칸까지 비울지다. 캠프 둘레는 투입하고 바로 움직일 수 있게 넓게 비운다.
     private const int CampInset = 5;
