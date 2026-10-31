@@ -166,9 +166,10 @@ public static class Snapshot
         rules.PlayerRadius = Round(Rules.PlayerRadius);
         rules.GuardHalfAngle = match.Rules.GuardHalfAngle;
         rules.ParryFollowupSeconds = match.Rules.ParryFollowupSeconds;
-        rules.Skills.Add(match.Rules.Strike);
-        rules.Skills.Add(match.Rules.Parry);
-        rules.Skills.Add(match.Rules.Grab);
+        for (int i = 0; i < Rules.AllSkills.Count; i++)
+        {
+            rules.Skills.Add(Rules.AllSkills[i]);
+        }
         return rules;
     }
 

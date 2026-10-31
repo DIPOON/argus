@@ -233,6 +233,16 @@ export class World {
     if (followup) { kind = 'none'; activeUntil = action.followupUntil; }
     if (now >= activeUntil) return;
     const color = affinityColors[kind];
+    const telegraph = now < action.contactAt;
+    // 둘레 기술은 조준 방향 없이 대원 둘레의 원에 닿는다. 방어는 모든 방향을 막으므로 고리 하나로 그린다.
+    if (definition?.around) {
+      if (definition.guardsFront && !followup) {
+        g.circle(p.x, p.y, 28).stroke({ color, width: 5 });
+        return;
+      }
+      g.circle(p.x, p.y, action.range).fill({ color, alpha: telegraph ? .08 : .28 }).stroke({ color, width: 1.5, alpha: .8 });
+      return;
+    }
     const aim = action.aim;
     const f = { x: Math.cos(aim), y: Math.sin(aim) };
     if (definition?.guardsFront && !followup) {
@@ -244,7 +254,6 @@ export class World {
     }
     const width = action.halfWidth;
     const end = { x: p.x + f.x * action.range, y: p.y + f.y * action.range };
-    const telegraph = now < action.contactAt;
     g.poly([
       p.x - f.y * width, p.y + f.x * width, end.x - f.y * width, end.y + f.x * width,
       end.x + f.y * width, end.y - f.x * width, p.x + f.y * width, p.y - f.x * width,

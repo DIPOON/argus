@@ -1209,11 +1209,14 @@ kbd {
 .skill-strike { color:#f28068 }
 .skill-block { color:#77cec2 }
 .skill-channel { color:#c0a1f5 }
-.basic-slots { display:grid; gap:10px; margin:24px 0 }
-.basic-slots>div { display:grid; grid-template-columns:25px 95px 1fr; align-items:center; gap:10px; border-left:2px solid currentColor; padding:10px 8px; background:#14201e }
-.basic-slots kbd { margin:0; text-align:center }
-.basic-slots b { font-size:12px; font-weight:600 }
-.basic-slots small { color:#a6b3aa; font-size:10px; line-height:1.5 }
+/* 종류 칸: 그 종류의 기술 가운데 하나를 고른다. 칸의 상성 색을 왼쪽 줄과 이름에 쓴다. */
+.kind-slot { grid-template-columns:repeat(2,minmax(0,1fr)); margin-top:14px; border-left:2px solid currentColor; padding-left:8px }
+.kind-slot legend strong { font-weight:600 }
+.kind-slot legend kbd { margin:0 7px 0 0 }
+.kind-slot label>span { padding:9px }
+.kind-slot.skill-strike legend strong { color:#f28068 }
+.kind-slot.skill-block legend strong { color:#77cec2 }
+.kind-slot.skill-channel legend strong { color:#c0a1f5 }
 .combat-intro { color:#a6b3aa; font-size:11px; line-height:1.9; margin:22px 0 }
 .combat-intro b { color:var(--lime) }
 .combat-legend span { font-weight:600 }

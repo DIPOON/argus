@@ -8,6 +8,8 @@
 
 `/health`의 `protocol`과 snapshot의 `version`은 5이다.
 
+v5 안에서 추가(2026-10-31): `rules.skills`에 조준하지 않는 둘레 기술 셋(`spin`·`ward`·`snatch`)과 기술별 동작 `around`가 늘었다. 앞의 세 장비 칸은 그 종류의 기술 가운데 하나, 자유 칸은 여섯 기술 가운데 하나를 받는다. 값과 기술이 추가되기만 해서 버전은 그대로 5다.
+
 v4 → v5(2026-10-28): 지도는 분대가 본 칸만 보낸다. `walls`에 분대가 아직 보지 못한 칸 `3`이 늘었고, 그런 칸의 실제 값은 보내지 않는다. `mapRevision`은 공개 벽 배열이 바뀐 수라, 분대가 새 칸을 보거나 본 벽이 부서질 때 는다. 이미 벽 배열을 받은 연결에는 그 뒤로 바뀐 칸만 `wallChanges`로 보낸다. `facilities`와 `supplies`는 본 칸에 있는 것만 담고, `extraction`은 그 칸을 보기 전까지 `null`이다. `deploy`는 본 칸에만 받는다(아래 입력 절).
 
 v3 → v4(2026-10-27): 전역 충격을 없애 `pulse`와 `nextPulse`를 뺐다. `supplies`에 보급 종류 `kind`(`camp`·`field`·`objective`)와 남은 횟수 `uses`(늘 정수, 다 쓴 상자는 `0`)가 늘었다. 시설을 부수면 그 자리에 보급(`field`)이 새로 생기고, `id`는 앞의 보급 다음 번호로 이어진다.
@@ -42,7 +44,7 @@ v1 → v2: 총기·탄창·재장전·보조 장비·패시브 필드를 제거�
 
 방은 모두 생성 작전이라 방마다 맵의 크기와 모양이 다르다(스냅샷의 `map`·`walls`로 받는다). 방을 만들 때 `"layout":"handmade"`를 주면 손으로 만든 40×30 맵의 방이 된다. 정해진 맵이 필요한 검사용이며, 서버 설정 `Argus:Missions:AllowHandmade`가 켜져 있지 않거나 다른 값이면 HTTP 403이다. 참가할 때는 쓰지 않는다.
 
-slots를 생략하면 `["strike","parry","grab","strike"]`. 길이는 정확히 4다. 앞의 세 슬롯은 현재 출시된 해당 계열 기본기로 고정하며 자유 슬롯은 strike / parry / grab 중 하나다. 잘못된 조합은 HTTP 400이다. 이름은 최대 16 UTF-16 문자, 방당 최대 4명, 진행 중 난입 가능, 종료된 방에는 새 참가 불가. 방은 서버 전체에 32개까지이며 가득 차면 방 생성이 HTTP 503이다. 한 주소가 동시에 가질 수 있는 방은 4개이고 넘으면 HTTP 429다. 같은 기계와 사설망에서 온 접속은 이 상한에서 뺀다. IPv6는 /64 대역을 한 주소로 센다. 오류 응답 본문은 `{"error":"…"}`다. 실패하면 장비가 잘못된 경우 400, 참가할 수 없는 방(없음·가득 참·종료)이면 409, 주소별 상한이면 429, 서버가 가득 차면 503이다.
+slots를 생략하면 `["strike","parry","grab","strike"]`. 길이는 정확히 4다. 앞의 세 슬롯은 차례로 타격(strike·spin), 방어(parry·ward), 잡기(grab·snatch) 종류의 기술 가운데 하나이고, 자유 슬롯은 여섯 기술 가운데 하나다. 잘못된 조합은 HTTP 400이다. 이름은 최대 16 UTF-16 문자, 방당 최대 4명, 진행 중 난입 가능, 종료된 방에는 새 참가 불가. 방은 서버 전체에 32개까지이며 가득 차면 방 생성이 HTTP 503이다. 한 주소가 동시에 가질 수 있는 방은 4개이고 넘으면 HTTP 429다. 같은 기계와 사설망에서 온 접속은 이 상한에서 뺀다. IPv6는 /64 대역을 한 주소로 센다. 오류 응답 본문은 `{"error":"…"}`다. 실패하면 장비가 잘못된 경우 400, 참가할 수 없는 방(없음·가득 참·종료)이면 409, 주소별 상한이면 429, 서버가 가득 차면 503이다.
 
 ```json
 {"room":"ABC234","id":"public-player-id","token":"private-recovery-token"}
@@ -114,7 +116,7 @@ slots를 생략하면 `["strike","parry","grab","strike"]`. 길이는 정확히 
 | extraction | x, y, progress, duration, unlocked. 분대가 그 칸을 보기 전에는 null |
 | notices | 최근 안내 최대 6개: id, at(나온 시각, 초), text. id는 방마다 1부터 늘어나는 순번이라 같은 틱에 같은 문구가 와도 다르다. 클라이언트는 id로 새 안내를 가린다 |
 
-`rules.skills`는 기본기별 `id, kind, mana, contactAfter, activeSeconds, duration, range, halfWidth, guardsFront, hasFollowup, singleTarget, breaksStructures, followupBreaksStructures`를 제공한다. kind는 strike / block / channel이다. 뒤의 다섯 값은 기술별 동작이다. `guardsFront`는 먼저 치지 않고 앞에서 들어오는 공격에만 반응함, `hasFollowup`은 유효 시간 뒤 상성 없는 반격, `singleTarget`은 가장 가까운 한 명만 판정, `breaksStructures`는 접촉 중에 시설과 벽을 부숨, `followupBreaksStructures`는 반격이 시설과 벽을 부숨을 뜻한다. 동작은 id가 아니라 이 값으로 정해진다. 이 수치를 클라이언트가 돌려보내도 서버 설정을 바꾸지 않는다.
+`rules.skills`는 기술별 `id, kind, mana, contactAfter, activeSeconds, duration, range, halfWidth, guardsFront, hasFollowup, singleTarget, breaksStructures, followupBreaksStructures, around`를 제공한다. 기술은 strike, parry, grab, spin, ward, snatch 여섯이다. kind는 strike / block / channel이다. 뒤의 여섯 값은 기술별 동작이다. `guardsFront`는 먼저 치지 않고 앞에서 들어오는 공격에만 반응함, `hasFollowup`은 유효 시간 뒤 상성 없는 반격, `singleTarget`은 가장 가까운 한 명만 판정, `breaksStructures`는 접촉 중에 시설과 벽을 부숨, `followupBreaksStructures`는 반격이 시설과 벽을 부숨, `around`는 조준하지 않는 둘레 기술(범위가 대원 둘레 반지름 `range`의 원이고 `halfWidth`는 쓰지 않음, `guardsFront`이면 모든 방향을 막음, 벽은 치지 않음)을 뜻한다. 동작은 id가 아니라 이 값으로 정해진다. 이 수치를 클라이언트가 돌려보내도 서버 설정을 바꾸지 않는다.
 
 대원:
 

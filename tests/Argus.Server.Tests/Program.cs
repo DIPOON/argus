@@ -216,9 +216,15 @@ internal static class TestTools
 
     public static PlayerAction Prepare(Fixture fixture, Player player, string skill, double age = 0)
     {
+        return Prepare(fixture, player, fixture.Match.Rules.Skill(skill), age);
+    }
+
+    // 기술 정의를 직접 받는다. id만 바꾼 정의처럼 검사가 만든 기술로도 쓸 수 있다.
+    public static PlayerAction Prepare(Fixture fixture, Player player, SkillDefinition skill, double age = 0)
+    {
         _id++;
         // age초 전에 시작한 기술이다. 틱으로 올려 센다.
-        PlayerAction action = new PlayerAction(_id, fixture.Match.Rules.Skill(skill), 1, fixture.Match.Tick - Rules.ToTicks(age));
+        PlayerAction action = new PlayerAction(_id, skill, 1, fixture.Match.Tick - Rules.ToTicks(age));
         player.Actions.Add(action);
         player.BusyUntilTick = action.EndsTick;
         return action;

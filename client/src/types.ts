@@ -1,7 +1,7 @@
 export type Position = { x: number; y: number };
-export type Skill = 'strike' | 'parry' | 'grab';
+export type Skill = 'strike' | 'parry' | 'grab' | 'spin' | 'ward' | 'snatch';
 export type Affinity = 'strike' | 'block' | 'channel' | 'none';
-export const skillNames: Record<Skill, string> = { strike: '근접 타격', parry: '받아치기', grab: '잡기' };
+export const skillNames: Record<Skill, string> = { strike: '근접 타격', parry: '받아치기', grab: '잡기', spin: '회전 베기', ward: '원형 방어', snatch: '낚아채기' };
 export const affinityNames: Record<Affinity, string> = { strike: '타격', block: '방어', channel: '잡기', none: '반격' };
 export interface SkillDefinition {
   id: Skill; kind: Affinity; mana: number; contactAfter: number; activeSeconds: number;
@@ -9,6 +9,8 @@ export interface SkillDefinition {
   // 기술별 동작. 그림도 id가 아니라 이 속성으로 정한다.
   guardsFront: boolean; hasFollowup: boolean; singleTarget: boolean; breaksStructures: boolean;
   followupBreaksStructures: boolean;
+  // 조준하지 않는 둘레 기술이다. 범위가 대원 둘레의 원(반지름 range)이고, 방어는 모든 방향을 막는다.
+  around: boolean;
 }
 export interface CombatAction {
   id: number; skill: string; kind: Affinity; slot: number; tier: number;
