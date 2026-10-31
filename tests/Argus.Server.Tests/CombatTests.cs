@@ -32,6 +32,7 @@ internal static class CombatTests
         tests.Add(new TestCase("Player-enemy and enemy-enemy bodies block movement while skills allow walking", Bodies));
         tests.Add(new TestCase("Catching up after a stall runs whole ticks, preserving short active windows and preventing body tunneling", LongStep));
         tests.Add(new TestCase("A new skill id with guard flags still guards and follows up like a parry", SkillFlags));
+        tests.Add(new TestCase("Skills around the player hit, guard and grab in every direction without aiming", AroundSkills));
         tests.Add(new TestCase("A flank outside an enemy action's area deals ordinary damage without its affinity", Flank));
         tests.Add(new TestCase("A player the shield shove reaches answers it with affinity even beside the shield", ShoveReach));
         tests.Add(new TestCase("A kill goes to the player whose draw or partial damage finished the elite", DrawCredit));
@@ -630,7 +631,7 @@ internal static class CombatTests
     {
         return new SkillDefinition(id, skill.Kind, skill.Mana, skill.ContactAfter, skill.ActiveSeconds,
             skill.Duration, skill.Range, skill.HalfWidth, skill.GuardsFront, skill.HasFollowup,
-            skill.SingleTarget, skill.BreaksStructures, skill.FollowupBreaksStructures);
+            skill.SingleTarget, skill.BreaksStructures, skill.FollowupBreaksStructures, skill.Around);
     }
 
     private static PlayerAction Use(Fixture f, SkillDefinition skill, int id)
@@ -699,13 +700,125 @@ internal static class CombatTests
         // 반격은 있지만 구조물은 부수지 않는 기술은 시설을 그대로 둔다.
         SkillDefinition deflect = new SkillDefinition("deflect", rules.Parry.Kind, rules.Parry.Mana, rules.Parry.ContactAfter,
             rules.Parry.ActiveSeconds, rules.Parry.Duration, rules.Parry.Range, rules.Parry.HalfWidth,
-            true, true, false, false, false);
+            true, true, false, false, false, false);
         Fixture deflecting = new Fixture();
         Facility kept = deflecting.Match.Facilities[0];
         deflecting.Player.Position = kept.Position - FixedVector.FromInt(40, 0);
         Use(deflecting, deflect, 30016);
         Advance(deflecting.Match, deflect.ActiveSeconds + 0.1);
         Near(kept.Hp, kept.MaxHp);
+    }
+
+    private static void AroundSkills()
+    {
+        // 둘레 기술은 조준하지 않는다. 판정이 id에 묶이지 않았는지 보려고 id만 바꾼 정의를 쓴다.
+        Rules rules = new Rules();
+        SkillDefinition whirl = Renamed(rules.Spin, "whirl");
+        SkillDefinition bulwark = Renamed(rules.Ward, "bulwark");
+        SkillDefinition lasso = Renamed(rules.Snatch, "lasso");
+
+        // 회전 베기: 둘레 네 방향의 무행동 적을 한 번에 모두 친다. 반지름(48)에 적의 몸(13)을 더한 거리 밖의 적은 맞지 않는다.
+        Fixture spun = new Fixture();
+        Enemy[] ring = new Enemy[4];
+        for (int i = 0; i < ring.Length; i++)
+        {
+            ring[i] = Target(spun);
+            ring[i].Position = spun.Player.Position + Angle.FromFraction(i, ring.Length).Direction() * 50;
+        }
+        Enemy beyond = Target(spun);
+        beyond.Position = spun.Player.Position + Angle.FromFraction(1, 8).Direction() * 70;
+        Prepare(spun, spun.Player, whirl);
+        Advance(spun.Match, 0.3);
+        for (int i = 0; i < ring.Length; i++)
+        {
+            Near(ring[i].Hp, 0);
+        }
+        Near(beyond.Hp, 1);
+
+        // 둘레의 원도 벽 너머에는 닿지 않는다. Cover와 같은 자리라 원 안이지만 두 몸 중심 사이의 사선이 벽 모서리에 가린다.
+        Fixture covered = new Fixture();
+        covered.Player.Position = FixedVector.FromInt(464, 498);
+        Enemy hidden = Target(covered);
+        hidden.Position = FixedVector.FromInt(495, 465);
+        Check(Distance(covered.Player.Position, hidden.Position) < 48 + 13, "적이 원 밖에 있습니다");
+        Check(!covered.Match.Map.LineOfSight(covered.Player.Position, hidden.Position));
+        Prepare(covered, covered.Player, whirl);
+        Advance(covered.Match, 0.3);
+        Near(hidden.Hp, 1);
+
+        // 등 뒤에서 오는 타격: 적은 대원의 오른쪽에서 대원 쪽으로 치고, 대원은 왼쪽을 본다.
+        // 받아치기는 앞(120°)만 막으므로 대응하지 못하고 맞는다. 원형 방어는 막아 이긴다.
+        Fixture facingAway = new Fixture();
+        Enemy unblocked = Threat(facingAway, "strike");
+        facingAway.Player.Aim = Angle.FromRadians(Math.PI);
+        Prepare(facingAway, facingAway.Player, rules.Parry);
+        Advance(facingAway.Match, 0.1);
+        Near(unblocked.Hp, 1);
+        Near(facingAway.Player.Hp, facingAway.Player.MaxHp - 1);
+
+        Fixture warded = new Fixture();
+        Enemy blocked = Threat(warded, "strike");
+        warded.Player.Aim = Angle.FromRadians(Math.PI);
+        Prepare(warded, warded.Player, bulwark);
+        Advance(warded.Match, 0.1);
+        Near(blocked.Hp, 0);
+        Near(warded.Player.Hp, warded.Player.MaxHp);
+
+        // 원형 방어에는 반격이 없다. 방어 창이 끝나도 앞의 무행동 적을 치지 않는다. 받아치기는 반격으로 친다(SkillFlags).
+        Fixture quiet = new Fixture();
+        Enemy idle = Target(quiet);
+        Prepare(quiet, quiet.Player, bulwark);
+        Advance(quiet.Match, bulwark.Duration + 0.1);
+        Near(idle.Hp, 1);
+
+        // 낚아채기는 둘레에서 가장 가까운 적을 잡는다. 등 뒤의 적이 더 가까우면 그 적이다. 앞만 보는 잡기는 앞의 적을 잡는다.
+        Fixture snatched = new Fixture();
+        Enemy behind = Target(snatched);
+        behind.Position = snatched.Player.Position + FixedVector.FromInt(-35, 0);
+        Enemy ahead = Target(snatched);
+        ahead.Position = snatched.Player.Position + FixedVector.FromInt(45, 0);
+        Prepare(snatched, snatched.Player, lasso);
+        Advance(snatched.Match, 0.2);
+        Near(behind.Hp, 0);
+        Near(ahead.Hp, 1);
+
+        Fixture grabbed = new Fixture();
+        Enemy rear = Target(grabbed);
+        rear.Position = grabbed.Player.Position + FixedVector.FromInt(-35, 0);
+        Enemy front = Target(grabbed);
+        front.Position = grabbed.Player.Position + FixedVector.FromInt(45, 0);
+        Prepare(grabbed, grabbed.Player, rules.Grab);
+        Advance(grabbed.Match, 0.2);
+        Near(rear.Hp, 1);
+        Near(front.Hp, 0);
+
+        // 회전 베기는 둘레의 시설을 부순다. 시설이 등 뒤에 있어도 된다. 조준 방향의 타격은 등 뒤의 시설에 닿지 않는다.
+        Fixture razing = new Fixture();
+        Facility razed = razing.Match.Facilities[0];
+        razing.Player.Position = razed.Position - FixedVector.FromInt(40, 0);
+        razing.Player.Aim = Angle.FromRadians(Math.PI);
+        Prepare(razing, razing.Player, whirl);
+        Advance(razing.Match, 0.3);
+        Near(razed.Hp, razed.MaxHp - 1);
+
+        Fixture missing = new Fixture();
+        Facility untouched = missing.Match.Facilities[0];
+        missing.Player.Position = untouched.Position - FixedVector.FromInt(40, 0);
+        missing.Player.Aim = Angle.FromRadians(Math.PI);
+        Prepare(missing, missing.Player, rules.Strike);
+        Advance(missing.Match, 0.3);
+        Near(untouched.Hp, untouched.MaxHp);
+
+        // 벽은 조준 방향으로만 친다. 부술 수 있는 벽(체력 3) 바로 옆에서 회전 베기를 세 번 해도 벽은 그대로다.
+        // 같은 자리에서 근접 타격으로 치면 부서진다(Structures, WallHitEffect).
+        Fixture walled = new Fixture();
+        walled.Player.Position = FixedVector.FromInt(680, 500);
+        for (int i = 0; i < 3; i++)
+        {
+            Prepare(walled, walled.Player, whirl);
+            Advance(walled.Match, whirl.Duration + 0.05);
+        }
+        Check(walled.Match.Map.Solid(15, 10), "회전 베기가 벽을 쳤습니다");
     }
 
     private static void Flank()

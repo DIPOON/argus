@@ -29,10 +29,14 @@ public sealed class SkillDefinition
     public bool BreaksStructures { get; }
     // 유효 시간 뒤의 반격이 시설과 파괴 가능한 벽을 부순다. HasFollowup인 기술에만 의미가 있다.
     public bool FollowupBreaksStructures { get; }
+    // 조준하지 않는 둘레 기술이다. 범위가 조준 방향의 사각형이 아니라 대원 둘레의 원이고, 사거리가 그 반지름이다(반폭은 쓰지 않는다).
+    // 방어(GuardsFront)는 앞만이 아니라 모든 방향에서 들어오는 공격을 막는다. 벽은 조준 방향으로만 치므로 둘레 기술은 벽을 치지 않는다.
+    public bool Around { get; }
 
     public SkillDefinition(string id, string kind, int mana, double contactAfter,
         double activeSeconds, double duration, double range, double halfWidth,
-        bool guardsFront, bool hasFollowup, bool singleTarget, bool breaksStructures, bool followupBreaksStructures)
+        bool guardsFront, bool hasFollowup, bool singleTarget, bool breaksStructures, bool followupBreaksStructures,
+        bool around)
     {
         Id = id;
         Kind = kind;
@@ -49,6 +53,7 @@ public sealed class SkillDefinition
         SingleTarget = singleTarget;
         BreaksStructures = breaksStructures;
         FollowupBreaksStructures = followupBreaksStructures;
+        Around = around;
     }
 }
 

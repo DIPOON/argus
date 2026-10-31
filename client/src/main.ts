@@ -7,6 +7,26 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getEleme
 const escape = (value: string) => value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 const time = (seconds: number) => `${Math.floor(Math.max(0, seconds) / 60).toString().padStart(2, '0')}:${Math.floor(Math.max(0, seconds) % 60).toString().padStart(2, '0')}`;
 const slotKeys = ['좌클릭 / 1', '우클릭 / 2', 'Space / 3', 'Q / 4'];
+// 장비 칸마다 고를 수 있는 기술이다. 앞의 세 칸은 그 종류의 기술 가운데 하나, 자유 칸은 아무 기술이나 고른다(서버의 Rules.ValidSlots).
+// 방에 들어가기 전이라 서버의 기술 정의(rules.skills)가 아직 없으므로 여기에 적어 둔다.
+const kindSlots: { kind: 'strike' | 'block' | 'channel'; title: string; beats: string; skills: Skill[] }[] = [
+  { kind: 'strike', title: '타격 칸', beats: '잡기를 파훼', skills: ['strike', 'spin'] },
+  { kind: 'block', title: '방어 칸', beats: '타격을 파훼', skills: ['parry', 'ward'] },
+  { kind: 'channel', title: '잡기 칸', beats: '방어를 파훼', skills: ['grab', 'snatch'] },
+];
+const freeSkills: Skill[] = ['strike', 'parry', 'grab', 'spin', 'ward', 'snatch'];
+const skillNotes: Record<Skill, string> = {
+  strike: '앞쪽 좁은 범위', parry: '앞쪽 방어 후 반격', grab: '앞쪽 한 명',
+  spin: '둘레 모두 · 조준 없음', ward: '모든 방향 · 반격 없음', snatch: '둘레에서 가장 가까운 한 명',
+};
+const skillChoice = (name: string, skill: Skill, checked: boolean) =>
+  `<label><input type="radio" name="${name}" value="${skill}" ${checked ? 'checked' : ''}/><span><b>${skillNames[skill]}</b><small>${skillNotes[skill]}</small></span></label>`;
+const chosenSkill = (name: string) => document.querySelector<HTMLInputElement>(`input[name="${name}"]:checked`)!.value;
+// 명단에 보이는 장비다. 종류 칸은 기본 기술과 다르게 고른 것만 적고, 자유 칸은 늘 적는다.
+const loadoutText = (slots: Skill[]) => [
+  ...slots.slice(0, 3).filter((skill, index) => skill !== kindSlots[index].skills[0]).map(skill => skillNames[skill]),
+  `자유 ${skillNames[slots[3]]}`,
+].join(' · ');
 
 // FIELD NOTES에 적은 피해 값(부분 대응 1·1, 비김 2·1)은 합의한 규칙(docs/combat.md)의 값이다.
 // 서버는 부분 대응 피해 값을 보내지 않으므로, 규칙을 바꾸면 이 문구도 함께 고친다.
@@ -36,17 +56,13 @@ $('app').innerHTML = `
       <div class="eyebrow">DEPLOYMENT PREP</div><h2>분대에 합류하세요</h2><p class="muted">혼자 시작해도, 작전 중 함께해도 됩니다.</p>
       <label class="field-label" for="callsign">호출명 <span>가입 없이 게스트로 참가</span></label>
       <input id="callsign" maxlength="16" autocomplete="nickname" placeholder="대원 이름" value="대원" />
-      <div class="basic-slots" aria-label="기본 기술 슬롯">
-        <div class="skill-strike"><kbd>1</kbd><b>근접 타격</b><small>잡기를 파훼</small></div>
-        <div class="skill-block"><kbd>2</kbd><b>받아치기</b><small>타격을 파훼 · 전방 방어 후 반격</small></div>
-        <div class="skill-channel"><kbd>3</kbd><b>잡기</b><small>방어를 파훼 · 단일 대상</small></div>
-      </div>
-      <fieldset class="equipment-options primary-weapons"><legend class="field-label">4번 자유 슬롯 <span>기본기 중 추가 선택</span></legend>
-        <label><input type="radio" name="free-slot" value="strike" checked/><span><b>근접 타격</b><small>Q 또는 4로 사용</small></span></label>
-        <label><input type="radio" name="free-slot" value="parry"/><span><b>받아치기</b><small>Q 또는 4로 사용</small></span></label>
-        <label><input type="radio" name="free-slot" value="grab"/><span><b>잡기</b><small>Q 또는 4로 사용</small></span></label>
+      ${kindSlots.map((slot, index) => `<fieldset class="equipment-options kind-slot skill-${slot.kind}"><legend class="field-label"><strong><kbd>${index + 1}</kbd>${slot.title}</strong><span>${slot.beats}</span></legend>
+        ${slot.skills.map((skill, choice) => skillChoice(`slot-${index + 1}`, skill, choice === 0)).join('')}
+      </fieldset>`).join('')}
+      <fieldset class="equipment-options primary-weapons"><legend class="field-label">4번 자유 칸 <span>아무 기술이나 하나 더 · Q 또는 4</span></legend>
+        ${freeSkills.map((skill, choice) => skillChoice('free-slot', skill, choice === 0)).join('')}
       </fieldset>
-      <p class="combat-intro">투입 마나 <b>0</b> · 보급 상자에서 충전 · 기술마다 마나 <b>1</b><br>자연 회복 없음. 빗나가도 마나를 소비합니다.<br>자유 슬롯에는 기본기를 중복 장착하며, 기본기는 한 번에 하나씩 사용합니다.</p>
+      <p class="combat-intro">투입 마나 <b>0</b> · 보급 상자에서 충전 · 기술마다 마나 <b>1</b><br>자연 회복 없음. 빗나가도 마나를 소비합니다.<br>둘레 기술은 조준 없이 둘레 모두에 닿습니다. 기술은 한 번에 하나씩 사용합니다.</p>
       <button id="create" class="primary">새 작전 시작 <span>↗</span></button>
       <div class="or"><span></span> 초대받았다면 <span></span></div>
       <div class="join-row"><input id="room-input" aria-label="방 코드" placeholder="6자리 방 코드" maxlength="6" autocomplete="off"/><button id="join" class="secondary">참가</button></div>
@@ -206,7 +222,7 @@ async function enter(code?: string) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: $<HTMLInputElement>('callsign').value || '대원',
-        slots: ['strike', 'parry', 'grab', document.querySelector<HTMLInputElement>('input[name="free-slot"]:checked')!.value],
+        slots: [chosenSkill('slot-1'), chosenSkill('slot-2'), chosenSkill('slot-3'), chosenSkill('free-slot')],
       }),
     });
     if (!response.ok) {
@@ -341,7 +357,7 @@ function updateUi() {
     : ext.unlocked ? `구역 안에서 ${ext.duration}초 확보 · ${ext.progress.toFixed(1)}초` : '주목표 완료 후 활성화';
   $('extract-progress').style.width = ext ? `${Math.min(100, 100 * ext.progress / ext.duration)}%` : '0%';
   $('team-count').textContent = `${s.players.length} / 4`;
-  $('roster').innerHTML = s.players.map((member, index) => `<div class="member ${member.id === s.you ? 'self' : ''}"><span class="member-number color-${index}">0${index + 1}</span><div><b>${escape(member.name)}${member.id === s.you ? ' <small>나</small>' : ''}</b><span>${!member.connected ? '연결 끊김' : member.state === 'alive' ? `${Math.ceil(member.hp)} HP` : member.state === 'deploying' ? `투입까지 ${member.deploy.toFixed(1)}초` : member.hasDeployed ? '증원 대기' : '투입 대기'}</span><span class="roster-loadout">마나 ${member.mana}/${member.maxMana} · 자유 ${skillNames[member.slots[3]]}</span></div><i class="${member.state === 'alive' ? 'alive-dot' : ''}"></i></div>`).join('');
+  $('roster').innerHTML = s.players.map((member, index) => `<div class="member ${member.id === s.you ? 'self' : ''}"><span class="member-number color-${index}">0${index + 1}</span><div><b>${escape(member.name)}${member.id === s.you ? ' <small>나</small>' : ''}</b><span>${!member.connected ? '연결 끊김' : member.state === 'alive' ? `${Math.ceil(member.hp)} HP` : member.state === 'deploying' ? `투입까지 ${member.deploy.toFixed(1)}초` : member.hasDeployed ? '증원 대기' : '투입 대기'}</span><span class="roster-loadout">마나 ${member.mana}/${member.maxMana} · ${loadoutText(member.slots)}</span></div><i class="${member.state === 'alive' ? 'alive-dot' : ''}"></i></div>`).join('');
   $('deploy-panel').hidden = alive || ended;
   $('combat-hud').hidden = !alive || ended;
   $('view-label').textContent = alive ? '분대 공유 시야 / SECTOR 07' : '전술 지도 / 투입 위치 선택';

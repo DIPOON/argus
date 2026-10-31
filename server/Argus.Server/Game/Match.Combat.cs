@@ -98,8 +98,29 @@ public sealed partial class Match
 
     private bool PlayerContact(Player player, PlayerAction action, Enemy enemy)
     {
-        return InReach(player.Position, player.AimDirection, action.Skill.RangeFixed, action.Skill.HalfWidthFixed,
-            enemy.Position, enemy.Definition.Radius);
+        return SkillReaches(player, action.Skill, enemy.Position, enemy.Definition.Radius);
+    }
+
+    // 대원의 기술이 target(반지름 radius인 몸)에 닿는지 본다. 둘레 기술은 대원 둘레의 원, 그 밖에는 조준 방향의 사각형이다.
+    private bool SkillReaches(Player player, SkillDefinition skill, FixedVector target, Fixed radius)
+    {
+        if (skill.Around)
+        {
+            return InCircle(player.Position, skill.RangeFixed, target, radius);
+        }
+        return InReach(player.Position, player.AimDirection, skill.RangeFixed, skill.HalfWidthFixed, target, radius);
+    }
+
+    // target의 몸이 origin 둘레 반지름 range의 원에 닿는지 본다. 거리는 제곱끼리 비교한다.
+    private bool InCircle(FixedVector origin, Fixed range, FixedVector target, Fixed radius)
+    {
+        Fixed reach = range + radius;
+        if (FixedVector.DistanceSquared(origin, target) > reach * reach)
+        {
+            return false;
+        }
+        // 조준 방향의 범위처럼, 몸의 중심이 벽 반대편이면 닿지 않는다.
+        return Map.LineOfSight(origin, target);
     }
 
     // forward는 조준 방향의 길이 1 벡터다(Player.AimDirection, EnemyAction.Direction). 판정마다 삼각함수를 다시 구하지 않는다.
@@ -137,8 +158,13 @@ public sealed partial class Match
         return along >= offset.Length() * _guardCosine;
     }
 
-    private bool GuardFaces(Player player, Enemy enemy)
+    private bool GuardFaces(Player player, PlayerAction action, Enemy enemy)
     {
+        // 둘레 기술의 방어는 모든 방향을 막는다.
+        if (action.Skill.Around)
+        {
+            return Map.LineOfSight(player.Position, enemy.Position);
+        }
         return Faces(player.Position, player.AimDirection, enemy.Position) && Map.LineOfSight(player.Position, enemy.Position);
     }
 
@@ -196,7 +222,7 @@ public sealed partial class Match
                 if (action.Skill.GuardsFront)
                 {
                     // 방어 창에 들어온 공격이 없으면 아무 판정도 일어나지 않는다.
-                    if (!incoming || !GuardFaces(player, enemy))
+                    if (!incoming || !GuardFaces(player, action, enemy))
                     {
                         continue;
                     }
@@ -453,12 +479,16 @@ public sealed partial class Match
                 {
                     Facility facility = Facilities[k];
                     if (facility.Hp > 0 && !action.HitFacilities.Contains(facility.Id) &&
-                        InReach(player.Position, player.AimDirection, action.Skill.RangeFixed, action.Skill.HalfWidthFixed,
-                            facility.Position, FacilityRadius))
+                        SkillReaches(player, action.Skill, facility.Position, FacilityRadius))
                     {
                         action.HitFacilities.Add(facility.Id);
                         DamageFacility(facility);
                     }
+                }
+                // 벽은 조준 방향의 광선으로 친다. 둘레 기술은 조준하지 않으므로 벽을 치지 않는다.
+                if (action.Skill.Around)
+                {
+                    continue;
                 }
                 FixedVector facing = player.AimDirection;
                 WallHit wall = Map.RayWall(player.Position, player.Position + facing * action.Skill.RangeFixed);

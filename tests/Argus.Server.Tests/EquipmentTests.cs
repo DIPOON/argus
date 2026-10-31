@@ -10,6 +10,7 @@ internal static class EquipmentTests
         tests.Add(new TestCase("Zero mana prevents abilities; whiffs consume mana once with no regeneration", Mana));
         tests.Add(new TestCase("Input spam cannot stack basic abilities or shorten their recovery", Spam));
         tests.Add(new TestCase("The freely chosen fourth slot casts its selected basic ability", FreeSlot));
+        tests.Add(new TestCase("Each kind slot takes any skill of its kind and the free slot takes any skill", KindSlots));
     }
 
     private static void Slots()
@@ -68,6 +69,39 @@ internal static class EquipmentTests
         Equal(f.Player.Actions.Count, 1);
         Equal(f.Player.Actions[0].Skill.Id, "strike");
         Equal(f.Player.Mana, 23);
+    }
+
+    private static void KindSlots()
+    {
+        // 앞의 세 칸은 차례로 타격·방어·잡기 종류의 기술 가운데 하나다. 자유 칸은 아무 기술이나 된다.
+        Check(Rules.ValidSlots(new string[] { "spin", "ward", "snatch", "strike" }));
+        Check(Rules.ValidSlots(new string[] { "strike", "ward", "grab", "snatch" }));
+        Check(Rules.ValidSlots(new string[] { "spin", "parry", "snatch", "spin" }));
+        // 종류가 다른 기술은 그 칸에 들 수 없다. 모르는 id와 빈 값도 받지 않는다.
+        Check(!Rules.ValidSlots(new string[] { "ward", "parry", "grab", "strike" }));
+        Check(!Rules.ValidSlots(new string[] { "strike", "spin", "grab", "strike" }));
+        Check(!Rules.ValidSlots(new string[] { "strike", "parry", "ward", "strike" }));
+        Check(!Rules.ValidSlots(new string[] { "strike", "parry", "grab", "whirl" }));
+        Check(!Rules.ValidSlots(new string[] { "strike", "parry", "grab", null! }));
+
+        // 칸마다 고른 기술이 나간다.
+        Match match = new Match("TEST01", new Rules { MaxEnemies = 0 }, 73);
+        Player player = match.Join("p", "pilot")!;
+        string[] slots = new string[] { "spin", "ward", "snatch", "parry" };
+        Check(match.SetLoadout(player, slots));
+        match.Deploy(player, match.Layout.Camp.X.ToDouble(), match.Layout.Camp.Y.ToDouble());
+        Advance(match, 5.1);
+        for (int slot = 1; slot <= 4; slot++)
+        {
+            player.Actions.Clear();
+            player.BusyUntilTick = 0;
+            player.Mana = 1;
+            match.Input(player, slot, 0, 0, 0, slot);
+            match.Step();
+            Equal(player.Actions[0].Skill.Id, slots[slot - 1]);
+            Equal(player.Actions[0].Slot, slot);
+            Equal(player.Mana, 0);
+        }
     }
 
     private static void FreeSlot()

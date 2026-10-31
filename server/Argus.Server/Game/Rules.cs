@@ -54,50 +54,101 @@ public sealed class Rules
     public int FacilitySupplyUses { get; init; } = 2;
     public double GuardHalfAngle { get; init; } = Math.PI / 3;
 
+    // 대원 기술이다. 기술은 규칙마다 바꾸지 않으므로 모든 규칙이 같은 정의를 쓴다.
+    // 그래서 참가 요청의 장비 검사(ValidSlots)도 규칙 없이 기술을 찾을 수 있다.
     // 근접 타격: 범위에 닿은 적을 한 번씩 치고 시설과 벽을 부순다.
-    public SkillDefinition Strike { get; } =
+    private static readonly SkillDefinition StrikeSkill =
         new SkillDefinition("strike", "strike", 1, 0.18, 0.42, 0.66, 54, 10,
             guardsFront: false, hasFollowup: false, singleTarget: false, breaksStructures: true,
-            followupBreaksStructures: false);
+            followupBreaksStructures: false, around: false);
     // 받아치기: 전방 방어 뒤 일반 반격. 반격은 시설과 벽도 부순다.
-    public SkillDefinition Parry { get; } =
+    private static readonly SkillDefinition ParrySkill =
         new SkillDefinition("parry", "block", 1, 0, 0.55, 0.98, 54, 10,
             guardsFront: true, hasFollowup: true, singleTarget: false, breaksStructures: false,
-            followupBreaksStructures: true);
+            followupBreaksStructures: true, around: false);
     // 잡기: 가장 가까운 한 명을 붙잡고 동작 내내 그 대상만 판정한다.
-    public SkillDefinition Grab { get; } =
+    private static readonly SkillDefinition GrabSkill =
         new SkillDefinition("grab", "channel", 1, 0.12, 0.65, 0.85, 48, 8,
             guardsFront: false, hasFollowup: false, singleTarget: true, breaksStructures: false,
-            followupBreaksStructures: false);
+            followupBreaksStructures: false, around: false);
+    // 아래 셋은 조준하지 않는 둘레 기술이다. 버튼만 눌러 쓸 수 있다. 시간과 마나는 위의 같은 종류 기술과 같다.
+    // 회전 베기: 둘레(반지름 48)에 닿은 적을 한 번씩 친다. 둘레의 시설도 부순다. 벽은 치지 않는다.
+    private static readonly SkillDefinition SpinSkill =
+        new SkillDefinition("spin", "strike", 1, 0.18, 0.42, 0.66, 48, 0,
+            guardsFront: false, hasFollowup: false, singleTarget: false, breaksStructures: true,
+            followupBreaksStructures: false, around: true);
+    // 원형 방어: 모든 방향에서 들어오는 공격을 막는다. 반격이 없으므로 사거리를 쓰지 않는다.
+    private static readonly SkillDefinition WardSkill =
+        new SkillDefinition("ward", "block", 1, 0, 0.55, 0.98, 0, 0,
+            guardsFront: true, hasFollowup: false, singleTarget: false, breaksStructures: false,
+            followupBreaksStructures: false, around: true);
+    // 낚아채기: 둘레(반지름 48)에서 가장 가까운 한 명을 붙잡고 동작 내내 그 대상만 판정한다.
+    private static readonly SkillDefinition SnatchSkill =
+        new SkillDefinition("snatch", "channel", 1, 0.12, 0.65, 0.85, 48, 0,
+            guardsFront: false, hasFollowup: false, singleTarget: true, breaksStructures: false,
+            followupBreaksStructures: false, around: true);
+
+    // 모든 대원 기술이다. 규칙을 보낼 때 이 순서로 보낸다. 새 기술을 만들면 여기에 넣는다.
+    // 정적 필드는 적힌 순서대로 만들어지므로 위의 정의들보다 뒤에 둔다.
+    public static readonly IReadOnlyList<SkillDefinition> AllSkills = Array.AsReadOnly(new SkillDefinition[]
+    {
+        StrikeSkill, ParrySkill, GrabSkill, SpinSkill, WardSkill, SnatchSkill
+    });
+
+    public SkillDefinition Strike { get; } = StrikeSkill;
+    public SkillDefinition Parry { get; } = ParrySkill;
+    public SkillDefinition Grab { get; } = GrabSkill;
+    public SkillDefinition Spin { get; } = SpinSkill;
+    public SkillDefinition Ward { get; } = WardSkill;
+    public SkillDefinition Snatch { get; } = SnatchSkill;
     public double ParryFollowupSeconds { get; init; } = 0.18;
+
+    // id로 대원 기술을 찾는다. 모르는 id면 null이다.
+    public static SkillDefinition? FindSkill(string? id)
+    {
+        for (int i = 0; i < AllSkills.Count; i++)
+        {
+            if (AllSkills[i].Id == id)
+            {
+                return AllSkills[i];
+            }
+        }
+        return null;
+    }
 
     public SkillDefinition Skill(string id)
     {
-        if (id == "strike")
+        SkillDefinition? skill = FindSkill(id);
+        if (skill == null)
         {
-            return Strike;
+            throw new ArgumentOutOfRangeException(nameof(id));
         }
-        if (id == "parry")
-        {
-            return Parry;
-        }
-        if (id == "grab")
-        {
-            return Grab;
-        }
-        throw new ArgumentOutOfRangeException(nameof(id));
+        return skill;
     }
 
+    // 장비 칸 넷 가운데 앞의 세 칸이 받는 기술 종류다. 차례로 타격·방어·잡기 칸이다.
+    private static readonly string[] SlotKinds = new string[] { "strike", "block", "channel" };
+
+    // 앞의 세 칸은 그 칸 종류의 기술 가운데 하나이고, 네 번째 자유 칸은 아무 기술이나 된다(2026-10-31 합의).
+    // 그래서 어떤 장비든 세 상성을 모두 하나씩은 든다.
     public static bool ValidSlots(string[]? slots)
     {
         if (slots == null || slots.Length != 4)
         {
             return false;
         }
-        if (slots[0] != "strike" || slots[1] != "parry" || slots[2] != "grab")
+        for (int i = 0; i < slots.Length; i++)
         {
-            return false;
+            SkillDefinition? skill = FindSkill(slots[i]);
+            if (skill == null)
+            {
+                return false;
+            }
+            if (i < SlotKinds.Length && skill.Kind != SlotKinds[i])
+            {
+                return false;
+            }
         }
-        return slots[3] == "strike" || slots[3] == "parry" || slots[3] == "grab";
+        return true;
     }
 }
