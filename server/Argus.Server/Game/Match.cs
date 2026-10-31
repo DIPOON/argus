@@ -708,7 +708,8 @@ public sealed partial class Match
         Note($"{player.Name} 사망 · 증원 위치를 선택하세요");
     }
 
-    private void DamageEnemy(Enemy enemy, double damage, Player owner, string effect = "hit")
+    // effect가 null이면 효과를 만들지 않는다. 판정 결과의 효과를 따로 낸 곳(비김)에서 쓴다.
+    private void DamageEnemy(Enemy enemy, double damage, Player owner, string? effect = "hit")
     {
         if (enemy.Hp <= 0)
         {
@@ -719,7 +720,10 @@ public sealed partial class Match
         {
             owner.Kills++;
         }
-        Effect(enemy.Position, effect, 0.65);
+        if (effect != null)
+        {
+            Effect(enemy.Position, effect, 0.65);
+        }
     }
 
     private void DamageFacility(Facility facility)

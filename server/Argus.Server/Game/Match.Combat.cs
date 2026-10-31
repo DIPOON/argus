@@ -266,9 +266,7 @@ public sealed partial class Match
 
         double enemyDamage = 0;
         // 비김 피해로 쓰러뜨리면 비긴 대원 중 가장 먼저 기술을 시작한 대원이 처치를 가져간다.
-        // 부분 대응은 체력을 1 아래로 내리지 않으므로 처치와 관계없다.
         Response? drawCredit = null;
-        bool partial = false;
         for (int i = 0; i < Players.Count; i++)
         {
             Player player = Players[i];
@@ -316,11 +314,14 @@ public sealed partial class Match
             }
             if (priority == 2)
             {
-                // 2티어에 하나만 맞춘 경우다. 이 구현의 기본 기술은 중단되고 적은 살아남는다.
-                partial = true;
+                // 2티어에 하나만 맞춘 경우다(부분 대응). 이 구현의 기본 기술은 중단되고 대원은 피해 1을 받는다.
+                // 적은 기술별 부분 대응 피해를 받고 그 피해로도 쓰러지며, 처치는 이 대원이 가져간다.
+                // 맞는 대응이 둘이면 위에서 완전 파훼로 끝나므로 한 판정에 이 경우는 많아야 한 명이다.
+                // 같은 적 행동에 맞는 대응이 따로 닿으면 판정마다 이 피해를 받는다.
+                // 비김 피해는 대원을 모두 본 뒤에 주므로 이 피해가 먼저다. 이 피해로 쓰러지면 비김 피해는 더하지 않는다.
                 CancelActions(player);
                 Hurt(player, 1);
-                Effect(enemy.Position, "partial", 0.65);
+                DamageEnemy(enemy, attack.Skill.PartialDamage, player, "partial");
             }
             else if (priority == 1)
             {
@@ -330,7 +331,6 @@ public sealed partial class Match
                     drawCredit = best;
                 }
                 Hurt(player, attack.Skill.Tier);
-                Effect(enemy.Position, "draw", 0.65);
             }
             else
             {
@@ -338,14 +338,12 @@ public sealed partial class Match
                 Hurt(player, attack.Skill.Tier);
             }
         }
-        if (partial)
+        // 비긴 대원이 여럿이어도 비김 효과는 판정마다 하나다. 효과는 적 자리에 그려지므로 대원마다 만들면 겹친다.
+        // 부분 대응 피해로 이미 쓰러졌어도 비김은 일어났으므로 효과는 만들고, 피해는 더하지 않는다(DamageEnemy).
+        if (drawCredit != null)
         {
-            // 부분 대응 효과는 기술별 설정이다. 이것만으로는 엘리트를 처치하지 않는다.
-            enemy.Hp = Math.Max(1, enemy.Hp - attack.Skill.PartialDamage);
-        }
-        if (enemyDamage > 0 && drawCredit != null)
-        {
-            DamageEnemy(enemy, enemyDamage, drawCredit.Player, "draw");
+            Effect(enemy.Position, "draw", 0.65);
+            DamageEnemy(enemy, enemyDamage, drawCredit.Player, null);
         }
     }
 
